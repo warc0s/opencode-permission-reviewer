@@ -16,7 +16,7 @@ jobs:
         # current version. A drift in either direction surfaces before main.
         bun: ["1.3.0", "1.3.5"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ matrix.bun }}
@@ -27,7 +27,7 @@ jobs:
     name: coverage
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
         with:
           # Coverage numbers are reported against the pinned current version.

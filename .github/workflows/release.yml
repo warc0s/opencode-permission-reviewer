@@ -86,7 +86,7 @@ jobs:
 
       # Install Node/npm for publishing. setup-node configures the npm
       # registry auth from NODE_AUTH_TOKEN via .npmrc automatically.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"

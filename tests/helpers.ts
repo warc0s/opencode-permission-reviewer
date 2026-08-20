@@ -54,6 +54,8 @@ export class MockClient implements OpenCodeClientLike {
   nextStructured: unknown = decision("allow")
   /** When set, `session.prompt` returns text parts instead of `info.structured`. */
   nextText: string | undefined
+  /** Per-call text responses for `session.prompt`; shifted in order, overrides `nextText`. */
+  nextTexts: string[] = []
   promptImpl?: (options: unknown) => Promise<{ data?: Record<string, unknown>; error?: unknown }>
   messagesImpl?: (options: unknown) => Promise<{ data?: unknown; error?: unknown }>
   messageData: unknown = [
@@ -102,6 +104,15 @@ export class MockClient implements OpenCodeClientLike {
         this.prompts.push(options)
         if (this.promptImpl) return this.promptImpl(options)
         if (this.promptError !== undefined) return { error: this.promptError }
+        if (this.nextTexts.length > 0) {
+          const text = this.nextTexts.shift()!
+          return {
+            data: {
+              info: { id: "msg_review", role: "assistant" },
+              parts: [{ type: "text", text }],
+            },
+          }
+        }
         if (this.nextText !== undefined) {
           return {
             data: {

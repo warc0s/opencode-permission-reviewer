@@ -24,6 +24,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * the response ambiguous; ambiguity returns `undefined` so the request
  * escalates to a human. This component authorizes tool execution: when the
  * model's output is ambiguous it must never guess which candidate was meant.
+ *
+ * Text-mode flakiness is absorbed by the coordinator's corrective retry, not by
+ * loosening this parser: a looser extractor could auto-approve a draft decision
+ * that the model later reversed in prose. See the maintainer's rationale in the
+ * commit that hardened this parser (reject ambiguous text-mode reviewer output).
  */
 export function extractJsonFromText(text: string): unknown {
   const trimmed = text.trim()

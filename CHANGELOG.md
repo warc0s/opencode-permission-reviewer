@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Text-mode reviews now re-prompt the reviewer once when the first response is
+  missing, invalid, or unparseable, mirroring the auto-retry that `json_schema`
+  mode already gets from OpenCode's `retryCount`. This absorbs the occasional
+  flaky response from weaker models (e.g. `opencode-go/deepseek-v4-flash`) that
+  previously escalated straight to "Manual review required". The retry is
+  parsed with the same strict, fail-closed extractor, so it can never approve
+  anything the first parse would not; a response that is still invalid after
+  the retry escalates as before.
+- Text-mode prompt now explicitly tells the reviewer not to echo the schema as
+  an example (a schema copy plus a decision object in one response is
+  ambiguous and escalates).
+
 ## [1.2.1] - 2026-08-18
 
 ### Changed

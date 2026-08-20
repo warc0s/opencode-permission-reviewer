@@ -661,6 +661,85 @@ describe("event boundary", () => {
     expect(harness.client.replies).toHaveLength(0)
   })
 
+  test("text mode retries once when the first response is unparseable, then parses the retry", async () => {
+    const harness = runtime(new MockClient(), { outputFormat: "text" })
+    ;(harness.client as MockClient).nextTexts = [
+      "Here is some prose that cannot be parsed.",
+      JSON.stringify(decision("allow")),
+    ]
+    const result = await harness.runtime.process(request())
+    expect(result.kind).toBe("allow")
+    expect(harness.client.replies).toHaveLength(1)
+    // Exactly two reviewer prompts: the original and one corrective retry.
+    expect(harness.client.prompts).toHaveLength(2)
+  })
+
+  test("text mode retry appends a corrective note in the same review session", async () => {
+    const harness = runtime(new MockClient(), { outputFormat: "text" })
+    ;(harness.client as MockClient).nextTexts = ["bad output", JSON.stringify(decision("allow"))]
+    await harness.runtime.process(request())
+    const prompts = harness.client.prompts as Array<{
+      path: { id: string }
+      body: { parts: Array<{ type: string; text: string }> }
+    }>
+    expect(prompts).toHaveLength(2)
+    const [first, retry] = prompts
+    // Both prompts target the same review session (first-writer-wins on the reply).
+    expect(retry!.path.id).toBe(first!.path.id)
+    expect(retry!.body.parts).toHaveLength(2)
+    expect(retry!.body.parts[1]!.text).toMatch(/could not be parsed/i)
+    expect(retry!.body.parts[1]!.text).toMatch(/exactly one JSON object/i)
+  })
+
+  test("text mode retries once and escalates when both responses are unparseable", async () => {
+    const harness = runtime(new MockClient(), { outputFormat: "text" })
+    ;(harness.client as MockClient).nextTexts = ["first bad", "second bad"]
+    const result = await harness.runtime.process(request())
+    expect(result.kind).toBe("escalate")
+    expect(result.reason).toMatch(/unparseable text output/i)
+    expect(harness.client.replies).toHaveLength(0)
+    expect(harness.client.prompts).toHaveLength(2)
+  })
+
+  test("text mode does not retry a valid decision", async () => {
+    const harness = runtime(new MockClient(), { outputFormat: "text" })
+    ;(harness.client as MockClient).nextTexts = [JSON.stringify(decision("allow"))]
+    const result = await harness.runtime.process(request())
+    expect(result.kind).toBe("allow")
+    expect(harness.client.prompts).toHaveLength(1)
+  })
+
+  test("structured mode is not retried by the plugin (OpenCode retries it)", async () => {
+    const harness = runtime()
+    ;(harness.client as MockClient).nextStructured = "not an object"
+    const result = await harness.runtime.process(request())
+    expect(result.kind).toBe("escalate")
+    expect(harness.client.prompts).toHaveLength(1)
+  })
+
+  test("text mode retry output still passes enforceDecision gates (critical risk escalates)", async () => {
+    const harness = runtime(new MockClient(), { outputFormat: "text" })
+    ;(harness.client as MockClient).nextTexts = [
+      "garbage first response",
+      JSON.stringify(decision("allow", { risk_level: "critical" })),
+    ]
+    const result = await harness.runtime.process(request())
+    // The retry parsed but enforceDecision must never auto-approve critical risk.
+    expect(result.kind).toBe("escalate")
+    expect(harness.client.replies).toHaveLength(0)
+    expect(harness.client.prompts).toHaveLength(2)
+  })
+
+  test("a reviewer transport failure does not trigger the retry", async () => {
+    const harness = runtime(new MockClient(), { outputFormat: "text" })
+    ;(harness.client as MockClient).promptImpl = async () => ({ error: "transport is down" })
+    const result = await harness.runtime.process(request())
+    expect(result.kind).toBe("escalate")
+    expect(harness.client.replies).toHaveLength(0)
+    // The retry is only for parse failures, not transport failures.
+    expect(harness.client.prompts).toHaveLength(1)
+  })
+
   test("default mode still sends the json_schema structured-output format", async () => {
     const harness = runtime()
     await harness.runtime.process(request())

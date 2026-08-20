@@ -141,7 +141,9 @@ export function buildReviewerPrompt(
       ? `\n
 # Output format
 Return exactly one JSON object conforming to this schema. Do not include Markdown
-code fences, prose, or commentary around it — only the JSON object.
+code fences, prose, or commentary around it — only the JSON object. The schema
+below is reference material: do not repeat it as an example and do not include
+a copy of it in your answer. Output the decision object only.
 
 \`\`\`json
 ${JSON.stringify(DECISION_SCHEMA, null, 2)}

@@ -33,6 +33,7 @@ import { createUiStatus, type ReviewUiStatus } from "../ui-protocol.ts"
 import type { SshAuditSummary } from "../ssh-evidence.ts"
 import { redactSecrets } from "../redact.ts"
 import type { RuntimeContext } from "../opencode/types.ts"
+import type { ClientResponse } from "../opencode/types.ts"
 import {
   extractStructured,
   extractText,
@@ -45,6 +46,18 @@ import { assembleEvidence, defaultEvidenceProviders } from "../context/evidence-
 import { applyEscalationDisposition, type EscalationCategory } from "../escalation.ts"
 
 type Logger = (message: string, details?: unknown) => void
+
+/**
+ * Corrective instruction appended to a text-mode parse-failure retry. Text mode
+ * has no host-side schema enforcement, so instead of loosening the strict
+ * fail-closed extractor (which could auto-approve a draft decision the model
+ * later reversed in prose) the coordinator re-prompts once with this note and
+ * parses the retry with the same extractor.
+ */
+const TEXT_MODE_RETRY_NOTE =
+  "Your previous response could not be parsed as a decision. Respond again with " +
+  "exactly one JSON object conforming to the schema and nothing else — no prose, " +
+  "no Markdown code fences, no commentary, and no copy of the schema."
 
 /** Stable hash of the canonical request so audit records for the same action
  *  correlate across runs. Patterns are sorted so event order does not matter.
@@ -558,6 +571,7 @@ export class ReviewCoordinator {
 
   private async runReviewer(envelope: ReviewEnvelope): Promise<ReviewExecutionResult> {
     const { providerID, modelID } = splitModel(this.config.model)
+    const model = { providerID, modelID }
     let reviewSessionID: string | undefined
 
     try {
@@ -590,40 +604,48 @@ export class ReviewCoordinator {
         this.config.outputFormat,
       )
 
-      const reviewerStart = performance.now()
-      const response = await withTimeout(
-        this.ctx.client.session.prompt({
-          path: { id: reviewSessionID },
-          query: { directory: this.ctx.directory },
-          body: {
-            model: { providerID, modelID },
-            variant: this.config.variant,
-            tools,
-            // The role, safety rules, and anti-prompt-injection guidance live
-            // in the system prompt so they carry system-level priority over the
-            // untrusted evidence passed in the part below.
-            system: REVIEWER_SYSTEM_PROMPT,
-            format:
-              this.config.outputFormat === "text"
-                ? { type: "text" }
-                : {
-                    type: "json_schema",
-                    schema: DECISION_SCHEMA,
-                    retryCount: 2,
-                  },
-            parts: [{ type: "text", text: prompt }],
-          },
-        }),
-        this.config.timeoutMs,
-      )
-      const reviewerMs = performance.now() - reviewerStart
-      const currentTimings = this.timingsByRequest.get(envelope.request.id) ?? {}
-      this.timingsByRequest.set(envelope.request.id, { ...currentTimings, reviewerMs })
-      const data = responseData(response, "session.prompt")
+      const first = await this.promptReviewer(reviewSessionID, model, tools, prompt)
+      let reviewerMs = first.ms
+      // Record the elapsed time as soon as the reviewer returns, so a response
+      // that turns out to be invalid (no data / transport error) still carries
+      // reviewerMs in the audit before responseData throws below.
+      this.recordReviewerMs(envelope, reviewerMs)
+      const data = responseData(first.response, "session.prompt")
       const parsed =
         this.config.outputFormat === "text"
           ? parseDecisionFromText(extractText(data) ?? "")
           : parseDecision(extractStructured(data))
+
+      // Text mode has no host-side schema enforcement or retry (unlike
+      // json_schema's `retryCount: 2`), so a single flaky response would
+      // escalate. Re-prompt once with a corrective note. The retry still goes
+      // through the same strict extractor and enforceDecision invariants, so it
+      // can never approve anything the first parse would not; it only reduces
+      // spurious escalations from weaker models. Structured mode is left alone
+      // because OpenCode already retries it.
+      if (!parsed && this.config.outputFormat === "text") {
+        const retry = await this.promptReviewer(
+          reviewSessionID,
+          model,
+          tools,
+          prompt,
+          TEXT_MODE_RETRY_NOTE,
+        )
+        reviewerMs += retry.ms
+        this.recordReviewerMs(envelope, reviewerMs)
+        const retryData = responseData(retry.response, "session.prompt")
+        const retryParsed = parseDecisionFromText(extractText(retryData) ?? "")
+        // The retry output is authoritative for the escalation decision: if it
+        // parsed, use it; otherwise fall through to the manual-review path.
+        if (retryParsed !== undefined) {
+          return {
+            ...enforceDecision(retryParsed, this.config),
+            reviewSessionID,
+            decisionSource: "llm-reviewer",
+          }
+        }
+      }
+
       if (!parsed) {
         return applyEscalationDisposition(
           {
@@ -669,6 +691,59 @@ export class ReviewCoordinator {
         }
       }
     }
+  }
+
+  /**
+   * Issue a single reviewer prompt in the review session and return the raw
+   * response plus its elapsed time. `responseData` is applied by the caller so
+   * the caller can record the elapsed time even when the response is invalid.
+   * The role/safety rules live in the system prompt so they carry system-level
+   * priority over the untrusted evidence; the per-request part (and an optional
+   * corrective retry note) is appended as user content.
+   */
+  private async promptReviewer(
+    reviewSessionID: string,
+    model: { providerID: string; modelID: string },
+    tools: Record<string, boolean>,
+    prompt: string,
+    retryNote?: string,
+  ): Promise<{ response: ClientResponse<Record<string, unknown>>; ms: number }> {
+    const start = performance.now()
+    const response = await withTimeout(
+      this.ctx.client.session.prompt({
+        path: { id: reviewSessionID },
+        query: { directory: this.ctx.directory },
+        body: {
+          model,
+          variant: this.config.variant,
+          tools,
+          system: REVIEWER_SYSTEM_PROMPT,
+          format:
+            this.config.outputFormat === "text"
+              ? { type: "text" }
+              : {
+                  type: "json_schema",
+                  schema: DECISION_SCHEMA,
+                  retryCount: 2,
+                },
+          parts:
+            retryNote === undefined
+              ? [{ type: "text", text: prompt }]
+              : [
+                  { type: "text", text: prompt },
+                  { type: "text", text: retryNote },
+                ],
+        },
+      }),
+      this.config.timeoutMs,
+    )
+    return { response, ms: performance.now() - start }
+  }
+
+  /** Fold the reviewer phase's elapsed time into the request's timing record. */
+  private recordReviewerMs(envelope: ReviewEnvelope, reviewerMs: number): void {
+    const currentTimings = this.timingsByRequest.get(envelope.request.id) ?? {}
+    this.timingsByRequest.set(envelope.request.id, { ...currentTimings, reviewerMs })
   }
 
   /**

@@ -10,7 +10,7 @@ const enrichmentOnly = process.argv.includes("--enrichment-only")
 const directory = new URL("./live-fixture", import.meta.url).pathname.replace(/\/$/, "")
 const client = createOpencodeClient({ baseUrl, directory })
 
-const driverModel = { providerID: "opencode", modelID: "deepseek-v4-flash-free" }
+const driverModel = { providerID: "opencode", modelID: "mimo-v2.5-free" }
 const isolatedPermissions = [
   { permission: "*", pattern: "*", action: "deny" as const },
   { permission: "approval_test_request", pattern: "*", action: "allow" as const },

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.3] - 2026-08-25
+
+### Changed
+
+- Bumped `@opencode-ai/plugin` to 1.18.21, `@opentui/core`/`@opentui/solid`
+  to 0.5.6, and `solid-js` to 1.9.15, with `bun.lock` synchronized
+  (dependency bumps only; no behavior change). The OpenTUI updates pull in
+  renderer fixes (stale mouse input, GNU Screen OSC 52 passthrough, Sixel
+  fallback on Kitty).
+- The live smoke harness now uses `opencode/mimo-v2.5-free` as its driver
+  model after `opencode/deepseek-v4-flash-free` was retired from the gateway.
+
 ## [1.2.2] - 2026-08-20
 
 ### Fixed

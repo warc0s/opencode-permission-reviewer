@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.4] - 2026-09-01
+
+### Changed
+
+- Bumped `@opencode-ai/plugin` to 1.18.25 and `@opentui/core`/`@opentui/solid`
+  to 0.5.9, with `bun.lock` synchronized (dependency bumps only; no behavior
+  change).
+
 ## [1.2.3] - 2026-08-25
 
 ### Changed

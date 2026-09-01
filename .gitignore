@@ -7,6 +7,9 @@ scripts/harden-opencode-v1.jq
 # local-only agent guardrails (private to this checkout, never publish)
 AGENTS.md
 
+# local reference docs (kept in the checkout, never published)
+docs/
+
 # local implementation plan (private to this checkout, never publish)
 opencode-permission-reviewer-v1.0.0-plan.md
 

@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import type { TuiPlugin, TuiPluginModule, TuiPluginApi } from "@opencode-ai/plugin/tui"
-import { createEffect, createSignal, onCleanup, Show } from "solid-js"
+import { createSignal, Show } from "solid-js"
 import { DEFAULT_CONFIG, resolveConfig } from "./config.ts"
 // Import the normalizer directly. Going through ./runtime.ts would evaluate the
 // whole server engine (coordinator, git/ssh evidence, node:child_process) inside
@@ -34,11 +34,104 @@ function notifyManual(api: TuiPluginApi, status: ReviewUiStatus): void {
   })
 }
 
+export const tui: TuiPlugin = async (api, options) => {
+  const config = resolveConfig(options)
+  const state = new ReviewUiState({
+    model: config.model,
+    variant: config.variant,
+    timeoutMs: config.timeoutMs,
+  })
+
+  // Signal bumps whenever the UI state changes. The slot factory below reads it
+  // directly in its body, which is what makes the host re-render the panel:
+  // a factory that only returns a component without reading any signal in its
+  // own scope renders exactly once at boot and never updates again.
+  const [revision, setRevision] = createSignal(0)
+  const [frame, setFrame] = createSignal(0)
+  const touch = () => setRevision((value) => value + 1)
+
+  const active = () => {
+    const sessionID = routeSessionID(api)
+    if (!sessionID) return
+    return state.activeFor(sessionID, (id) => parentSessionID(api, id))
+  }
+
+  let popMode: (() => void) | undefined
+  const syncMode = () => {
+    const status = active()
+    const wanted = status !== undefined && status.phase !== "manual"
+    if (wanted && popMode === undefined) {
+      try {
+        popMode = api.mode.push(REVIEW_MODE)
+      } catch {
+        // mode.push can throw if the host rejects unknown modes; keep the panel.
+      }
+    } else if (!wanted && popMode !== undefined) {
+      popMode()
+      popMode = undefined
+    }
+  }
+
+  api.event.on("permission.asked", (event) => {
+    const request = extractPermissionRequest(event)
+    if (!request) return
+    state.asked(request)
+    touch()
+  })
+  api.event.on("permission.replied", (event) => {
+    state.replied(event.properties.requestID)
+    touch()
+  })
+  api.event.on("tui.command.execute", (event) => {
+    const status = decodeUiStatus(event.properties.command)
+    if (!status) return
+    if (!state.apply(status)) return
+    if (status.phase === "manual") notifyManual(api, status)
+    touch()
+  })
+
+  // Drives the spinner and the watchdog/expiry transitions. The interval lives
+  // for the lifetime of the plugin activation; the scoped plugin API disposes
+  // the event listeners above, but timers have no scope hook to unwind.
+  setInterval(() => {
+    setFrame((value) => (value + 1) % SPINNER.length)
+    const expired = state.expire()
+    for (const status of expired) notifyManual(api, status)
+    const dismissed = state.dismissResults()
+    if (expired.length > 0 || dismissed.length > 0) touch()
+  }, 250)
+
+  api.slots.register({
+    order: 1_000,
+    slots: {
+      app() {
+        // Load-bearing direct read: it subscribes the slot's render pass to
+        // every state transition (touch), so the factory re-runs and renders
+        // the current status. The spinner frame is deliberately NOT read here
+        // (only inside the panel's text children) so 250ms ticks update those
+        // texts without re-running this factory.
+        revision()
+        const status = active()
+        syncMode()
+        return (
+          <Show when={status} keyed>
+            {(current) =>
+              current.phase === "manual" ? null : (
+                <ReviewPanel api={api} status={current} frame={frame} />
+              )
+            }
+          </Show>
+        )
+      },
+    },
+  })
+}
+
 function ReviewPanel(props: {
   api: TuiPluginApi
   status: ReviewUiStatus
-  frame: number
-  elapsedMs: number
+  /** Spinner signal, read inside text children so only those update per tick. */
+  frame: () => number
 }) {
   const theme = () => props.api.theme.current
   const appearance = () => {
@@ -54,11 +147,11 @@ function ReviewPanel(props: {
     }
     return {
       color: theme().info,
-      icon: SPINNER[props.frame % SPINNER.length] ?? "◐",
+      icon: SPINNER[props.frame() % SPINNER.length] ?? "◐",
       title: "Reviewing this permission",
     }
   }
-  const elapsed = () => `${(props.elapsedMs / 1_000).toFixed(1)}s`
+  const elapsed = () => `${((Date.now() - props.status.emittedAt) / 1_000).toFixed(1)}s`
 
   return (
     <box
@@ -127,99 +220,6 @@ function ReviewPanel(props: {
       </box>
     </box>
   )
-}
-
-function Overlay(props: { api: TuiPluginApi; state: ReviewUiState }) {
-  const [revision, setRevision] = createSignal(0)
-  const [frame, setFrame] = createSignal(0)
-
-  const touch = () => setRevision((value) => value + 1)
-  const active = () => {
-    revision()
-    const sessionID = routeSessionID(props.api)
-    if (!sessionID) return
-    return props.state.activeFor(sessionID, (id) => parentSessionID(props.api, id))
-  }
-  const elapsedMs = () => {
-    frame()
-    const status = active()
-    return status ? Math.max(0, Date.now() - status.emittedAt) : 0
-  }
-
-  const onStatus = (status: ReviewUiStatus) => {
-    if (!props.state.apply(status)) return
-    if (status.phase === "manual") notifyManual(props.api, status)
-    touch()
-  }
-
-  const offAsked = props.api.event.on("permission.asked", (event) => {
-    const request = extractPermissionRequest(event)
-    if (!request) return
-    props.state.asked(request)
-    touch()
-  })
-  const offReplied = props.api.event.on("permission.replied", (event) => {
-    props.state.replied(event.properties.requestID)
-    touch()
-  })
-  const offCommand = props.api.event.on("tui.command.execute", (event) => {
-    const status = decodeUiStatus(event.properties.command)
-    if (status) onStatus(status)
-  })
-
-  const ticker = setInterval(() => {
-    setFrame((value) => (value + 1) % SPINNER.length)
-    const expired = props.state.expire()
-    for (const status of expired) notifyManual(props.api, status)
-    const dismissed = props.state.dismissResults()
-    if (expired.length > 0 || dismissed.length > 0) touch()
-  }, 250)
-
-  createEffect(() => {
-    const status = active()
-    if (!status || status.phase === "manual") return
-    try {
-      const pop = props.api.mode.push(REVIEW_MODE)
-      onCleanup(pop)
-    } catch {
-      // mode.push can throw if the host rejects unknown modes; keep the panel.
-    }
-  })
-
-  onCleanup(() => {
-    offAsked()
-    offReplied()
-    offCommand()
-    clearInterval(ticker)
-  })
-
-  return (
-    <Show when={active()} keyed>
-      {(status) => (
-        <Show when={status.phase !== "manual"}>
-          <ReviewPanel api={props.api} status={status} frame={frame()} elapsedMs={elapsedMs()} />
-        </Show>
-      )}
-    </Show>
-  )
-}
-
-export const tui: TuiPlugin = async (api, options) => {
-  const config = resolveConfig(options)
-  const state = new ReviewUiState({
-    model: config.model,
-    variant: config.variant,
-    timeoutMs: config.timeoutMs,
-  })
-
-  api.slots.register({
-    order: 1_000,
-    slots: {
-      app() {
-        return <Overlay api={api} state={state} />
-      },
-    },
-  })
 }
 
 const module: TuiPluginModule = {

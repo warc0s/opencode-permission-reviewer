@@ -45,7 +45,7 @@ fails safe to manual review.
 ### Requirements
 
 - [Bun](https://bun.sh) ≥ 1.3.0 (CI runs 1.3.0 and 1.3.5)
-- [OpenCode](https://opencode.ai) ≥ 1.18.11 and **&lt; 2** (**tested with 1.18.15**)
+- [OpenCode](https://opencode.ai) ≥ 1.18.11 and **&lt; 2** (**tested with 1.18.25**)
 - `git` on `PATH` (only used for read-only Git-state enrichment; missing git
   degrades gracefully)
 - A model provider configured in OpenCode, exposing a model that follows JSON
@@ -206,33 +206,34 @@ either mode, so pick as strong a reviewer model as your budget allows.
 
 Every option is optional. Numeric/string options are clamped to safe bounds.
 
-| Option                 | Default                                                   | Bounds / type                       | Description                                                                         |
-| ---------------------- | --------------------------------------------------------- | ----------------------------------- | ----------------------------------------------------------------------------------- |
-| `model`                | `openai/gpt-5.6-luna`                                     | `provider/model`                    | Reviewer model (override with any provider/model)                                   |
-| `variant`              | `max`                                                     | non-empty string                    | Reasoning variant passed to OpenCode                                                |
-| `outputFormat`         | `json_schema`                                             | `json_schema` / `text`              | How the reviewer returns its decision (`text` for models without structured output) |
-| `timeoutMs`            | `120000`                                                  | `5000`–`600000`                     | Review timeout (match in both files)                                                |
-| `confidenceThreshold`  | `0.7`                                                     | `0.5`–`1`                           | Minimum confidence to auto-act; below it escalates                                  |
-| `maxContextChars`      | `32000`                                                   | `4000`–`200000`                     | Total transcript evidence budget                                                    |
-| `maxPartChars`         | `8000`                                                    | `500`–`50000`                       | Per-message-part budget                                                             |
-| `maxEnrichmentChars`   | `24000`                                                   | `1000`–`100000`                     | SSH / script / Git enrichment budget                                                |
-| `maxIntentChars`       | `8000`                                                    | `1000`–`50000`                      | User-intent history budget                                                          |
-| `transcriptMessages`   | `12`                                                      | `1`–`100`                           | Recent messages shown to the reviewer                                               |
-| `intentMessages`       | `8`                                                       | `1`–`50`                            | Genuine user intents kept                                                           |
-| `historyMessages`      | `200`                                                     | `20`–`500`                          | Messages fetched to recover intent                                                  |
-| `retainReviewSessions` | `false`                                                   | boolean                             | Keep reviewer child sessions (debug only; see below)                                |
-| `audit`                | `true`                                                    | boolean                             | Append one JSONL audit record per review                                            |
-| `auditPath`            | `~/.local/share/opencode/permission-reviewer-audit.jsonl` | path                                | Audit file location                                                                 |
-| `policy`               | built-in default                                          | string                              | Full local override of the tenant policy text                                       |
-| `debug`                | `false`                                                   | boolean                             | Verbose logs to stderr                                                              |
-| `enforcementMode`      | `observe`                                                 | `observe` / `enforce`               | `enforce` applies declarative policy routes; `observe` audits them only             |
-| `escalationMode`       | `manual`                                                  | `manual` / `deny`                   | How final escalations are disposed (`manual` = human; `deny` = fail-closed reject)  |
-| `maxSessionDepth`      | `8`                                                       | `1`–`32`                            | Parent-session lineage walk depth                                                   |
-| `maxParentSessions`    | `8`                                                       | `0`–`32`                            | Max parent sessions resolved for actor context                                      |
-| `actorProfiles`        | `{}`                                                      | name → profile map                  | Trusted agent name → profile (`read-only`, `validation`, `workspace`, …)            |
-| `riskPolicy`           | built-in conservative matrix                              | object                              | Override `allow` cells per risk level and failure modes (`onInvalidDecision`, …)    |
-| `repositoryTrust`      | `unknown`                                                 | `trusted` / `untrusted` / `unknown` | Repository trust level used by the policy engine                                    |
-| `policyRules`          | `[]`                                                      | array                               | Declarative rules (most-restrictive wins); project rules combine with trusted ones  |
+| Option                 | Default                                                   | Bounds / type                       | Description                                                                                   |
+| ---------------------- | --------------------------------------------------------- | ----------------------------------- | --------------------------------------------------------------------------------------------- |
+| `model`                | `openai/gpt-5.6-luna`                                     | `provider/model`                    | Reviewer model (override with any provider/model)                                             |
+| `variant`              | `max`                                                     | non-empty string                    | Reasoning variant passed to OpenCode                                                          |
+| `outputFormat`         | `json_schema`                                             | `json_schema` / `text`              | How the reviewer returns its decision (`text` for models without structured output)           |
+| `timeoutMs`            | `120000`                                                  | `5000`–`600000`                     | Review timeout (match in both files)                                                          |
+| `confidenceThreshold`  | `0.7`                                                     | `0.5`–`1`                           | Minimum confidence to auto-act; below it escalates                                            |
+| `maxContextChars`      | `32000`                                                   | `4000`–`200000`                     | Total transcript evidence budget                                                              |
+| `maxPartChars`         | `8000`                                                    | `500`–`50000`                       | Per-message-part budget                                                                       |
+| `maxEnrichmentChars`   | `24000`                                                   | `1000`–`100000`                     | SSH / script / Git enrichment budget                                                          |
+| `maxIntentChars`       | `8000`                                                    | `1000`–`50000`                      | User-intent history budget                                                                    |
+| `transcriptMessages`   | `12`                                                      | `1`–`100`                           | Recent messages shown to the reviewer                                                         |
+| `intentMessages`       | `8`                                                       | `1`–`50`                            | Genuine user intents kept                                                                     |
+| `historyMessages`      | `200`                                                     | `20`–`500`                          | Messages fetched to recover intent                                                            |
+| `retainReviewSessions` | `false`                                                   | boolean                             | Keep reviewer child sessions (debug only; see below)                                          |
+| `audit`                | `true`                                                    | boolean                             | Append one JSONL audit record per review                                                      |
+| `auditPath`            | `~/.local/share/opencode/permission-reviewer-audit.jsonl` | path                                | Audit file location                                                                           |
+| `policy`               | built-in default                                          | string                              | Full local override of the tenant policy text                                                 |
+| `debug`                | `false`                                                   | boolean                             | Verbose logs to stderr                                                                        |
+| `enforcementMode`      | `observe`                                                 | `observe` / `enforce`               | `enforce` applies declarative policy routes; `observe` audits them only                       |
+| `escalationMode`       | `manual`                                                  | `manual` / `deny`                   | How final escalations are disposed (`manual` = human; `deny` = fail-closed reject)            |
+| `maxSessionDepth`      | `8`                                                       | `1`–`32`                            | Parent-session lineage walk depth                                                             |
+| `maxParentSessions`    | `8`                                                       | `0`–`32`                            | Max parent sessions resolved for actor context                                                |
+| `actorProfiles`        | `{}`                                                      | name → profile map                  | Trusted agent name → profile (`read-only`, `validation`, `workspace`, …)                      |
+| `riskPolicy`           | built-in conservative matrix                              | object                              | Override `allow` cells per risk level and failure modes (`onInvalidDecision`, …)              |
+| `repositoryTrust`      | `unknown`                                                 | `trusted` / `untrusted` / `unknown` | Repository trust level used by the policy engine                                              |
+| `policyRules`          | `[]`                                                      | array                               | Declarative rules (most-restrictive wins); project rules combine with trusted ones            |
+| `askDecisions`         | `true`                                                    | boolean                             | Show the reviewer what the user answered in agent ask dialogs (scoped authorization evidence) |
 
 Config is layered: built-in defaults ← global
 `~/.config/opencode/permission-reviewer.jsonc` ← project
@@ -332,26 +333,6 @@ By default everything fails safe to **manual review**. With
 `escalationMode: "deny"`, uncertainty fails closed to a reject with reason
 instead — suitable for non-interactive agents.
 
-## Reference documentation
-
-The README is the overview. For depth, see the dedicated references in
-[`docs/`](./docs):
-
-- [Migration guide](./docs/migration-guide.md) — upgrading to the 1.0 line,
-  enabling enforcement, and rolling back.
-- [Threat model](./docs/threat-model.md) — attack surfaces, mitigations, and
-  what the plugin does and does not protect against.
-- [Policy reference](./docs/policy-reference.md) — declarative rules, the
-  condition schema, effects, and precedence.
-- [Capability model](./docs/capability-model.md) — the static analysis fields
-  that feed the policy engine and the reviewer.
-- [Actor resolution](./docs/actor-resolution.md) — how the requester's identity
-  and session lineage are recovered.
-- [Compatibility and support](./docs/compatibility.md) — version matrix and
-  support policy.
-- [Decision records](./docs/adr/README.md) — architectural choices and their
-  rationale.
-
 ## Evidence enrichment
 
 The reviewer never sees the raw filesystem — only bounded, sanitized evidence.
@@ -420,7 +401,7 @@ binary, blocked, or truncated evidence) remains a reviewer decision.
 
 | Component             | Supported      | Notes                                                        |
 | --------------------- | -------------- | ------------------------------------------------------------ |
-| OpenCode              | `>=1.18.11 <2` | Declared in `engines.opencode`; verified with **1.18.15**    |
+| OpenCode              | `>=1.18.11 <2` | Declared in `engines.opencode`; verified with **1.18.25**    |
 | `@opencode-ai/plugin` | `>=1.18.11 <2` | Peer dependency for the server transport                     |
 | Bun                   | `>=1.3.0`      | Declared in `engines.bun`; CI runs **1.3.0** and **1.3.5**   |
 | TUI overlay           | OpenCode V1    | Needs the host Solid/OpenTUI plugin pipeline (raw TSX entry) |

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto"
 import type {
   ActorContext,
+  AskDecision,
   CapabilityAssessment,
   DecisionSource,
   EvidenceCompleteness,
@@ -43,6 +44,7 @@ import {
 } from "../opencode/transport.ts"
 import type { EvidenceProvider } from "../evidence/provider.ts"
 import { assembleEvidence, defaultEvidenceProviders } from "../context/evidence-assembler.ts"
+import type { AskDecisionSource } from "../context/ask-decisions.ts"
 import { applyEscalationDisposition, type EscalationCategory } from "../escalation.ts"
 
 type Logger = (message: string, details?: unknown) => void
@@ -91,6 +93,9 @@ export class ReviewCoordinator {
   private readonly capabilityByRequest = new Map<string, CapabilityAssessment>()
   // Bridge for the policy trace (same lifecycle as the other bridges).
   private readonly policyTraceByRequest = new Map<string, PolicyTrace>()
+  // Bridge for the ask decisions surfaced to the reviewer prompt (same
+  // lifecycle: set in collectEnvelope, read in audit, cleared in process).
+  private readonly askDecisionsByRequest = new Map<string, AskDecision[]>()
   // Per-phase timings captured during the review (context/enrichment from the
   // assembler, reviewer/reply from the coordinator). audit() runs last and reads
   // the per-request map so deterministic paths simply omit a phase they skipped.
@@ -110,15 +115,19 @@ export class ReviewCoordinator {
   private readonly resolvedManually = new Set<string>()
   private readonly log: Logger
   private readonly providers: EvidenceProvider[]
+  /** Live ask-decision capture (enrichment-only; undefined when disabled). */
+  private readonly askDecisions: AskDecisionSource | undefined
 
   constructor(
     private readonly ctx: RuntimeContext,
     private readonly config: ReviewerConfig,
     logger?: Logger,
     providers?: EvidenceProvider[],
+    askDecisions?: AskDecisionSource,
   ) {
     this.log = logger ?? (() => {})
     this.providers = providers ?? defaultEvidenceProviders()
+    this.askDecisions = askDecisions
   }
 
   pendingCount(): number {
@@ -188,6 +197,7 @@ export class ReviewCoordinator {
       this.policyTraceByRequest.delete(request.id)
       this.timingsByRequest.delete(request.id)
       this.evidenceCompletenessByRequest.delete(request.id)
+      this.askDecisionsByRequest.delete(request.id)
     }
   }
 
@@ -431,6 +441,7 @@ export class ReviewCoordinator {
       directory: this.ctx.directory,
       worktree: this.ctx.worktree,
       config: this.config,
+      ...(this.askDecisions === undefined ? {} : { askDecisions: this.askDecisions }),
     })
     // Bridge the ssh audit summary from the envelope to the audit() call. The
     // envelope carries sshAudit for the reviewer prompt; audit() runs after the
@@ -444,6 +455,9 @@ export class ReviewCoordinator {
     if (envelope.timings !== undefined) this.timingsByRequest.set(request.id, envelope.timings)
     if (envelope.evidenceCompleteness !== undefined) {
       this.evidenceCompletenessByRequest.set(request.id, envelope.evidenceCompleteness)
+    }
+    if (envelope.askDecisions !== undefined && envelope.askDecisions.length > 0) {
+      this.askDecisionsByRequest.set(request.id, envelope.askDecisions)
     }
     return envelope
   }
@@ -461,6 +475,7 @@ export class ReviewCoordinator {
     const policyTrace = this.policyTraceByRequest.get(request.id)
     const timings = this.timingsByRequest.get(request.id)
     const evidence = this.evidenceCompletenessByRequest.get(request.id)
+    const askDecisions = this.askDecisionsByRequest.get(request.id)
     // Infer the source when a path did not set it explicitly (the process()
     // catch builds an escalate with no decision): a result still carrying a
     // reviewer decision is an LLM outcome; everything else without an explicit
@@ -559,6 +574,13 @@ export class ReviewCoordinator {
               finalRoute: policyTrace.finalRoute,
               mode: policyTrace.mode,
             },
+          }),
+      ...(askDecisions === undefined
+        ? {}
+        : {
+            askDecisions: askDecisions
+              .slice(-5)
+              .map((d) => ({ at: d.at, question: d.question, answer: d.answer })),
           }),
     }
     await this.ctx.writeAudit(record).catch((error) => {

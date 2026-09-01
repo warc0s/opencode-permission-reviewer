@@ -3,6 +3,7 @@ import { loadResolvedConfig } from "./config/loader.ts"
 import { ApprovalReviewerRuntime } from "./runtime.ts"
 import { extractPermissionRequest } from "./opencode/event-normalizer.ts"
 import { createV1Adapter } from "./opencode/v1-adapter.ts"
+import { AskDecisionRegistry } from "./context/ask-decisions.ts"
 import type { RuntimeContext } from "./opencode/types.ts"
 import { createAuditWriter } from "./audit.ts"
 
@@ -25,10 +26,16 @@ export const server: Plugin = async (input, options) => {
     ),
     ...(writeAudit === undefined ? {} : { writeAudit }),
   }
-  const runtime = new ApprovalReviewerRuntime(ctx, config, logger)
+  // Ask-decision capture runs only when enabled; the registry is the sole
+  // consumer of question events and never affects permission handling.
+  const askDecisions = config.askDecisions ? new AskDecisionRegistry(logger) : undefined
+  const runtime = new ApprovalReviewerRuntime(ctx, config, logger, undefined, askDecisions)
 
   return {
     event: async ({ event }) => {
+      // Observe synchronously first: reviews started by later events must see
+      // ask decisions captured by this one. The observer is total.
+      askDecisions?.observe(event)
       runtime.handlePermissionReply(event)
       const request = extractPermissionRequest(event)
       if (!request) return
@@ -63,4 +70,5 @@ export { createAuditWriter, DEFAULT_AUDIT_PATH } from "./audit.ts"
 export { enrichSshEvidence } from "./ssh-evidence.ts"
 export { enrichLocalScriptEvidence } from "./local-script-evidence.ts"
 export { enrichGitEvidence } from "./git-evidence.ts"
+export { AskDecisionRegistry, DISMISSED_ANSWER } from "./context/ask-decisions.ts"
 export type * from "./types.ts"

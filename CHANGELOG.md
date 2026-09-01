@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-09-01
+
+### Added
+
+- The reviewer now sees what the user answered in agent ask dialogs as scoped
+  authorization evidence (`USER_ASK_DECISIONS` prompt section plus an additive
+  `askDecisions` audit field; only the question and the selected option are
+  captured). Configure with `askDecisions` (default `true`).
+
+### Fixed
+
+- The TUI overlay never rendered for npm-installed plugins: the app-slot
+  factory rendered once at boot and never re-rendered, because it read no
+  signal directly in its own scope. The factory now renders from direct signal
+  reads, and `solid-js` is pinned to `@opentui/solid`'s exact peer so npm
+  installs keep a single Solid runtime. Regression-guarded by headless slot
+  contract tests and tarball-install checks.
+
 ## [1.2.4] - 2026-09-01
 
 ### Changed

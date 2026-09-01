@@ -76,7 +76,10 @@ function sanitizeText(value: unknown, max: number): string | undefined {
   if (typeof value !== "string") return undefined
   const text = value.trim()
   if (!text) return undefined
-  const redacted = redactSecrets(text)
+  // Collapse internal whitespace so a crafted question or answer can never
+  // inject line breaks into the one-line-per-decision evidence rendering.
+  const flat = text.replace(/\s+/g, " ")
+  const redacted = redactSecrets(flat)
   return redacted.length <= max ? redacted : redacted.slice(0, max)
 }
 

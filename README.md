@@ -45,7 +45,7 @@ fails safe to manual review.
 ### Requirements
 
 - [Bun](https://bun.sh) ≥ 1.3.0 (CI runs 1.3.0 and 1.3.5)
-- [OpenCode](https://opencode.ai) ≥ 1.18.11 and **&lt; 2** (**tested with 1.18.15**)
+- [OpenCode](https://opencode.ai) ≥ 1.18.11 and **&lt; 2** (**tested with 1.18.25**)
 - `git` on `PATH` (only used for read-only Git-state enrichment; missing git
   degrades gracefully)
 - A model provider configured in OpenCode, exposing a model that follows JSON
@@ -401,7 +401,7 @@ binary, blocked, or truncated evidence) remains a reviewer decision.
 
 | Component             | Supported      | Notes                                                        |
 | --------------------- | -------------- | ------------------------------------------------------------ |
-| OpenCode              | `>=1.18.11 <2` | Declared in `engines.opencode`; verified with **1.18.15**    |
+| OpenCode              | `>=1.18.11 <2` | Declared in `engines.opencode`; verified with **1.18.25**    |
 | `@opencode-ai/plugin` | `>=1.18.11 <2` | Peer dependency for the server transport                     |
 | Bun                   | `>=1.3.0`      | Declared in `engines.bun`; CI runs **1.3.0** and **1.3.5**   |
 | TUI overlay           | OpenCode V1    | Needs the host Solid/OpenTUI plugin pipeline (raw TSX entry) |

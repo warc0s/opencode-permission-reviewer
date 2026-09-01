@@ -154,6 +154,44 @@ describe("AskDecisionRegistry", () => {
     expect(registry.recentFor(["ses_main"])).toHaveLength(0)
   })
 
+  test("a late reply cannot pair with an expired ask even without new asks", () => {
+    let clock = 1_000_000
+    const registry = new AskDecisionRegistry(undefined, () => clock)
+    registry.observe(asked("que_1", "ses_main", ["Deploy?"]))
+    clock += 31 * 60 * 1000
+    // No intervening asked: the reply path itself must honor the TTL.
+    registry.observe(replied("que_1", [["Yes"]]))
+    registry.observe(rejected("que_1"))
+    expect(registry.recentFor(["ses_main"])).toHaveLength(0)
+    expect(registry.pendingCount()).toBe(0)
+  })
+
+  test("answers shorter or longer than the questions clamp to the asked set", () => {
+    const registry = new AskDecisionRegistry()
+    registry.observe(asked("que_short", "ses_main", ["A?", "B?", "C?"]))
+    registry.observe(replied("que_short", [["yes"]]))
+    expect(registry.recentFor(["ses_main"])[0]!.answer).toBe("yes | Unanswered | Unanswered")
+
+    registry.observe(asked("que_long", "ses_main", ["Only?"]))
+    registry.observe(replied("que_long", [["yes"], ["orphan"], ["orphan"]]))
+    expect(registry.recentFor(["ses_main"]).at(-1)!.answer).toBe("yes")
+  })
+
+  test("rejections work in the v2 spelling", () => {
+    const registry = new AskDecisionRegistry()
+    registry.observe(asked("que_1", "ses_main", ["Deploy?"], true))
+    registry.observe(rejected("que_1", true))
+    expect(registry.recentFor(["ses_main"])[0]!.answer).toBe(DISMISSED_ANSWER)
+  })
+
+  test("recentFor tolerates empty scopes and zero limits", () => {
+    const registry = new AskDecisionRegistry()
+    registry.observe(asked("que_1", "ses_main", ["Deploy?"]))
+    registry.observe(replied("que_1", [["Yes"]]))
+    expect(registry.recentFor([])).toEqual([])
+    expect(registry.recentFor(["ses_main"], 0)).toEqual([])
+  })
+
   test("pending capacity is bounded; overflowed asks are forgotten", () => {
     let clock = 1_000_000
     const registry = new AskDecisionRegistry(undefined, () => clock)

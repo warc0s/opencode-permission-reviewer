@@ -95,9 +95,10 @@ function parseAsked(properties: unknown): QuestionShape | undefined {
   return { id: properties.id, sessionID: properties.sessionID, questions }
 }
 
-/** Normalize a `question.(v2.)replied` payload; answers are string[][] (the
- *  selected labels per sub-question, in question order). */
-function parseReply(properties: unknown): { requestID: string; answers: string } | undefined {
+/** Normalize a `question.(v2.)replied` payload into per-question answers
+ *  (each an array of selected labels). Pairing/padding against the asked
+ *  questions happens where the pending entry is known. */
+function parseReply(properties: unknown): { requestID: string; answers: string[] } | undefined {
   if (!isObject(properties)) return
   if (typeof properties.requestID !== "string") return
   if (!Array.isArray(properties.answers)) return
@@ -112,7 +113,7 @@ function parseReply(properties: unknown): { requestID: string; answers: string }
     )
   }
   if (perQuestion.length === 0) return
-  return { requestID: properties.requestID, answers: perQuestion.join(" | ") }
+  return { requestID: properties.requestID, answers: perQuestion }
 }
 
 function parseReplyTarget(properties: unknown): ReplyShape | undefined {
@@ -162,7 +163,11 @@ export class AskDecisionRegistry implements AskDecisionSource {
         this.store(reply.requestID, pending.sessionID, {
           at: this.now(),
           question: pending.questions.join(" | "),
-          answer: reply.answers,
+          // Clamp to the asked questions: missing slots are unanswered, and
+          // extra slots in a malformed event are orphan noise.
+          answer: pending.questions
+            .map((_, index) => reply.answers[index] ?? UNANSWERED)
+            .join(" | "),
         })
         this.log("ask decision captured", {
           requestID: reply.requestID,
@@ -198,11 +203,12 @@ export class AskDecisionRegistry implements AskDecisionSource {
    * recent `limit`. Sibling and unrelated sessions are never visible.
    */
   recentFor(sessionIDs: string[], limit = 6): AskDecision[] {
-    if (sessionIDs.length === 0) return []
+    if (sessionIDs.length === 0 || limit <= 0) return []
     const scope = new Set(sessionIDs)
     const visible = [...this.resolved.values()]
       .filter((decision) => scope.has(decision.sessionID))
       .sort((a, b) => a.at - b.at)
+    // `slice(-limit)` would return everything for limit 0; guarded above.
     return visible.slice(-limit).map((decision) => ({
       at: decision.at,
       question: decision.question,
@@ -221,6 +227,9 @@ export class AskDecisionRegistry implements AskDecisionSource {
   }
 
   private takePending(requestID: string): PendingAsk | undefined {
+    // Replies and rejections must not pair with an expired ask, even when no
+    // new ask arrived to trigger the routine pruning.
+    this.pruneExpired()
     const pending = this.pending.get(requestID)
     if (pending !== undefined) this.pending.delete(requestID)
     return pending
@@ -238,14 +247,18 @@ export class AskDecisionRegistry implements AskDecisionSource {
   /** Enforce the pending cap and TTL. Map iteration order is insertion
    *  order, so `keys().next()` is the oldest entry. */
   private prunePending(): void {
-    const cutoff = this.now() - PENDING_TTL_MS
-    for (const [id, entry] of this.pending) {
-      if (entry.askedAt < cutoff) this.pending.delete(id)
-    }
+    this.pruneExpired()
     while (this.pending.size >= MAX_PENDING) {
       const oldest = this.pending.keys().next().value
       if (oldest === undefined) break
       this.pending.delete(oldest)
+    }
+  }
+
+  private pruneExpired(): void {
+    const cutoff = this.now() - PENDING_TTL_MS
+    for (const [id, entry] of this.pending) {
+      if (entry.askedAt < cutoff) this.pending.delete(id)
     }
   }
 }

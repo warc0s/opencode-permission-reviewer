@@ -333,26 +333,6 @@ By default everything fails safe to **manual review**. With
 `escalationMode: "deny"`, uncertainty fails closed to a reject with reason
 instead — suitable for non-interactive agents.
 
-## Reference documentation
-
-The README is the overview. For depth, see the dedicated references in
-[`docs/`](./docs):
-
-- [Migration guide](./docs/migration-guide.md) — upgrading to the 1.0 line,
-  enabling enforcement, and rolling back.
-- [Threat model](./docs/threat-model.md) — attack surfaces, mitigations, and
-  what the plugin does and does not protect against.
-- [Policy reference](./docs/policy-reference.md) — declarative rules, the
-  condition schema, effects, and precedence.
-- [Capability model](./docs/capability-model.md) — the static analysis fields
-  that feed the policy engine and the reviewer.
-- [Actor resolution](./docs/actor-resolution.md) — how the requester's identity
-  and session lineage are recovered.
-- [Compatibility and support](./docs/compatibility.md) — version matrix and
-  support policy.
-- [Decision records](./docs/adr/README.md) — architectural choices and their
-  rationale.
-
 ## Evidence enrichment
 
 The reviewer never sees the raw filesystem — only bounded, sanitized evidence.

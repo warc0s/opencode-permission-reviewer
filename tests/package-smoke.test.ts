@@ -60,7 +60,7 @@ async function readFromTarball(path: string, member: string): Promise<string> {
 }
 
 describe("npm pack ship set", () => {
-  test("the tarball contains the dist bundle and docs, nothing else", async () => {
+  test("the tarball contains the dist bundle and metadata, nothing else", async () => {
     const files = await listTarball(packOnce())
 
     for (const required of [
@@ -70,12 +70,6 @@ describe("npm pack ship set", () => {
       "LICENSE",
       "NOTICE",
       "SECURITY.md",
-      "docs/migration-guide.md",
-      "docs/threat-model.md",
-      "docs/policy-reference.md",
-      "docs/actor-resolution.md",
-      "docs/capability-model.md",
-      "docs/compatibility.md",
       "dist/index.js",
       "dist/index.d.ts",
       "dist/explain.js",

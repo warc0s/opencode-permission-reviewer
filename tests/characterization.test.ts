@@ -232,7 +232,7 @@ describe("characterization gaps (baseline prereq)", () => {
     expect(audits).toHaveLength(1)
     expect(audits[0]!.schemaVersion).toBe(2)
     expect(audits[0]!.decisionSchemaVersion).toBe(2)
-    expect(audits[0]!.promptVersion).toBe("2.1.0")
+    expect(audits[0]!.promptVersion).toBe("2.2.0")
     expect(audits[0]!.decisionSource).toBe("llm-reviewer")
     expect(audits[0]!.actionHash).toMatch(/^[0-9a-f]{64}$/)
     expect(audits[0]!.scopeAlignment).toBe("aligned")

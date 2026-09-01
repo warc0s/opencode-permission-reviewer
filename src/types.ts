@@ -156,6 +156,9 @@ export interface ReviewerConfig {
   /** Declarative policy rules (empty by default; observe mode audits the trace
    *  without enforcing). Project-sourced allow rules are rejected. */
   policyRules: PolicyRule[]
+  /** Capture user answers to agent ask dialogs (question tool) and surface
+   *  them to the reviewer as scoped authorization evidence. */
+  askDecisions: boolean
 }
 
 export interface ReviewEnvelope {
@@ -187,6 +190,10 @@ export interface ReviewEnvelope {
   parsedCommand?: ParsedCommand
   /** Operational purpose of the pending action (evidence, never authorization). */
   actionPurpose?: ActionPurpose
+  /** User answers to agent ask dialogs in this session or its ancestors,
+   *  captured live from question events. Observe-only: flows into the reviewer
+   *  prompt (USER_ASK_DECISIONS) and audit, never into enforcement. */
+  askDecisions?: AskDecision[]
 }
 
 /** Which layer produced the final decision for a request. Threaded into the
@@ -299,6 +306,9 @@ export interface ReviewAuditRecord {
     finalRoute: string
     mode: string
   }
+  /** Additive snapshot of the ask decisions surfaced to the reviewer prompt
+   *  (observe-only; capped to the most recent few). */
+  askDecisions?: Array<{ at: number; question: string; answer: string }>
 }
 
 export interface ApprovedAnnotation {
@@ -415,6 +425,18 @@ export interface IntentBlock {
   synthetic: boolean
   createdAt?: number
   provenance: Provenanced<"intent">
+}
+
+/** One user decision on an agent-initiated ask dialog (question tool). The
+ *  question text is agent-generated and untrusted; only the answer is a user
+ *  authorization signal, scoped to the subject and time of the ask. */
+export interface AskDecision {
+  /** Epoch ms when the reply (or dismissal) was observed. */
+  at: number
+  /** What the agent asked, already redacted and truncated. */
+  question: string
+  /** The option labels the user selected, or a dismissal marker. */
+  answer: string
 }
 
 /** Direct user intent kept separate from delegated task. */

@@ -221,6 +221,8 @@ Audit fields (additive, `schemaVersion` stays `2`):
   when no valid decision was produced).
 - `escalationDisposition` — `"manual"` or `"deny"` when an internal escalate was
   disposed; absent for explicit allow/deny.
+- `askDecisions` — snapshot of the user's answers to agent ask dialogs that were
+  surfaced to the reviewer prompt (observe-only; most recent few).
 
 ## Inspecting your policy
 

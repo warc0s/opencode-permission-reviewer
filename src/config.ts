@@ -47,6 +47,7 @@ export const DEFAULT_CONFIG: ReviewerConfig = {
   riskPolicy: DEFAULT_RISK_POLICY,
   repositoryTrust: "unknown",
   policyRules: [],
+  askDecisions: true,
 }
 
 function boundedInteger(value: unknown, fallback: number, min: number, max: number): number {
@@ -278,6 +279,8 @@ export function resolveConfig(options: Record<string, unknown> | undefined): Rev
     riskPolicy: resolveRiskPolicy(source.riskPolicy),
     repositoryTrust: resolveRepositoryTrust(source.repositoryTrust),
     policyRules: resolvePolicyRules(source.policyRules),
+    askDecisions:
+      typeof source.askDecisions === "boolean" ? source.askDecisions : DEFAULT_CONFIG.askDecisions,
   }
 }
 

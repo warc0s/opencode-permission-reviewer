@@ -1,6 +1,7 @@
 import type {
   ActionPurpose,
   ActorContext,
+  AskDecision,
   EvidenceCompleteness,
   IntentBlock,
   MessageWithParts,
@@ -150,6 +151,9 @@ export function buildIntentHistory(messages: MessageWithParts[], config: Reviewe
 
 export function buildEvidence(envelope: ReviewEnvelope, config: ReviewerConfig): string {
   const request: PermissionRequest = envelope.request
+  // Omitted entirely when empty: absence of ask decisions carries no signal
+  // for the reviewer (the transcript remains the fallback source).
+  const askDecisions = renderAskDecisions(envelope.askDecisions)
   const evidence = [
     renderPolicySummary(envelope.policyTrace, config.maxPartChars * 2),
     `WORKING_DIRECTORY\n${envelope.directory}`,
@@ -173,6 +177,7 @@ export function buildEvidence(envelope: ReviewEnvelope, config: ReviewerConfig):
       config.maxPartChars * 2,
     )}`,
     `USER_INTENT_HISTORY\n${envelope.intentHistory || "<no user intent history available />"}`,
+    ...(askDecisions === undefined ? [] : [`USER_ASK_DECISIONS\n${askDecisions}`]),
     `RECENT_TRANSCRIPT\n${envelope.transcript || "<no transcript available />"}`,
   ].join("\n\n")
   return truncate(
@@ -196,6 +201,23 @@ function renderActionPurpose(purpose: ActionPurpose | undefined, max: number): s
     },
     max,
   )}`
+}
+
+/** Compact rendering of ask decisions, one line each (UTC time, question,
+ *  answer). `undefined` when there is nothing to show so the whole section is
+ *  omitted rather than padded with a placeholder. */
+export function renderAskDecisions(decisions: AskDecision[] | undefined): string | undefined {
+  if (decisions === undefined || decisions.length === 0) return
+  const lines = []
+  for (const decision of decisions) {
+    const time = new Date(decision.at).toISOString().slice(11, 19)
+    lines.push(`[${time}Z] Q: ${decision.question} A: ${decision.answer}`)
+  }
+  // Keep the most recent lines when the block would exceed the budget.
+  const maxChars = 1_500
+  while (lines.length > 1 && lines.join("\n").length > maxChars) lines.shift()
+  const joined = lines.join("\n")
+  return joined.length <= maxChars ? joined : joined.slice(0, maxChars)
 }
 
 // --- policy summary section -------------------------------------------------

@@ -1,5 +1,6 @@
 import type { PermissionRequest, ReviewEnvelope, ReviewerConfig } from "../types.ts"
 import { buildIntentHistory, buildTranscript, normalizeMessages } from "../context.ts"
+import type { AskDecisionSource } from "./ask-decisions.ts"
 import type { OpenCodeClientLike } from "../opencode/types.ts"
 import { responseData } from "../opencode/transport.ts"
 import { resolveActorContext } from "./actor-resolver.ts"
@@ -17,6 +18,8 @@ export interface EvidenceAssemblyContext {
   directory: string
   worktree: string
   config: ReviewerConfig
+  /** Live ask-decision capture, when enabled. Enrichment-only. */
+  askDecisions?: AskDecisionSource
 }
 
 /**
@@ -92,6 +95,18 @@ export async function assembleEvidence(
   )?.preflightDenial
 
   const actionPurpose = resolveActionPurpose(request, actor.intent, messages)
+
+  // Ask decisions are visible only along the resolved ancestry: the
+  // requesting session plus sessions the lineage walker actually reached.
+  // Sibling and unrelated sessions are never in scope.
+  const askDecisions =
+    ctx.config.askDecisions && ctx.askDecisions !== undefined
+      ? ctx.askDecisions.recentFor([
+          request.sessionID,
+          ...(actor.lineage?.nodes.map((node) => node.sessionID) ?? []),
+        ])
+      : undefined
+
   const purposeOk = actionPurpose.source !== "unavailable"
   const completenessReasons = [...actor.completeness.reasons]
   if (!purposeOk) completenessReasons.push("action purpose unavailable")
@@ -120,6 +135,7 @@ export async function assembleEvidence(
     },
     ...(parsed === undefined ? {} : { parsedCommand: parsed }),
     ...(capability === undefined ? {} : { capability }),
+    ...(askDecisions === undefined || askDecisions.length === 0 ? {} : { askDecisions }),
   }
 }
 

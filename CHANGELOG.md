@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-09-03
+
+### Fixed
+
+- The elapsed-time counter in the TUI review panel froze at its mount value:
+  the elapsed text read no signal while evaluating, so the renderer evaluated
+  it once and never again (the spinner kept animating, masking it). The text
+  now reads the 250ms tick signal and advances for the lifetime of the panel,
+  and negative clock skew is clamped. Regression-guarded by a headless render
+  test that compiles the TUI with the same solid transform the host uses.
+
 ## [1.3.0] - 2026-09-01
 
 ### Added

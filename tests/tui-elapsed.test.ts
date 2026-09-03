@@ -1,16 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type { TuiPluginApi, TuiPluginMeta } from "@opencode-ai/plugin/tui"
-import { ensureSolidTransformPlugin } from "@opentui/solid/bun-plugin"
-
-// The host compiles TSX overlays with babel-preset-solid, registered as a Bun
-// runtime plugin. Register it before importing the TUI so this test exercises
-// the same compiled shape as a live opencode: JSX expressions become thunks,
-// and a text child re-renders only when it reads a signal while evaluating.
-ensureSolidTransformPlugin()
-
-const { tui } = await import("../src/tui.tsx")
-const { testRender } = await import("@opentui/solid")
-const { request } = await import("./helpers.ts")
+import { request } from "./helpers.ts"
+import { testRender, tui } from "./tui-loader.ts"
 
 type EventHandler = (event: never) => void
 
@@ -20,9 +11,10 @@ type EventHandler = (event: never) => void
  * The elapsed counter and the spinner are driven by a 250ms tick signal. A
  * text child that reads no signal while evaluating (e.g. an elapsed string
  * computed from Date.now() alone) is evaluated once at mount and freezes,
- * which is exactly the "seconds do not advance" regression this pins: the
- * panel is rendered through the real solid transform and renderer, the tick
- * interval is left running, and the elapsed value must grow between frames.
+ * which is exactly the "seconds do not advance" regression this pins. The
+ * solid transform comes from the shared tui-loader, so the panel here is
+ * compiled exactly as the host compiles it, and the tick interval is left
+ * running: the elapsed value must grow between captured frames.
  */
 describe("tui panel live elapsed counter", () => {
   test("elapsed seconds advance while the reviewing panel is visible", async () => {
@@ -67,7 +59,7 @@ describe("tui panel live elapsed counter", () => {
     await tui(api, {}, {
       id: "opencode-permission-reviewer",
       source: "npm",
-      spec: "opencode-permission-reviewer@1.3.0",
+      spec: "opencode-permission-reviewer@1.3.1",
       target: "/plugin/target",
       first_time: Date.now(),
       last_time: Date.now(),

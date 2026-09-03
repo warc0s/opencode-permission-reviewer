@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { TuiPluginApi, TuiPluginMeta } from "@opencode-ai/plugin/tui"
-import { tui } from "../src/tui.tsx"
+import { tui } from "./tui-loader.ts"
 import { createUiStatus, encodeUiStatus } from "../src/ui-protocol.ts"
 import { request } from "./helpers.ts"
 

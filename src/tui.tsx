@@ -151,7 +151,14 @@ function ReviewPanel(props: {
       title: "Reviewing this permission",
     }
   }
-  const elapsed = () => `${((Date.now() - props.status.emittedAt) / 1_000).toFixed(1)}s`
+  const elapsed = () => {
+    // Reading the tick signal inside the text child is what re-renders it every
+    // 250ms: Date.now() and status.emittedAt are plain values, so a text that
+    // reads no signal is evaluated once at mount and freezes.
+    props.frame()
+    const elapsedMs = Math.max(0, Date.now() - props.status.emittedAt)
+    return `${(elapsedMs / 1_000).toFixed(1)}s`
+  }
 
   return (
     <box

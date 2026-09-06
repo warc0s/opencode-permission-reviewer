@@ -134,6 +134,13 @@ export function loadResolvedConfig(
     }
   }
 
+  const invalidInlineRules = countInvalidPolicyRules(inlineOptions?.policyRules)
+  if (invalidInlineRules > 0) {
+    degraded.push(
+      `${invalidInlineRules} policy rule(s) from inline config were dropped by validation`,
+    )
+  }
+
   // The trusted baseline is seeded with builtin defaults (so clamping always
   // has a floor) and includes inline, which participates as a trusted source
   // the project layer is clamped against.

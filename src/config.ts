@@ -178,7 +178,8 @@ function resolvePolicyRules(value: unknown): PolicyRule[] {
  *  an admin rule that vanishes on a typo must block auto-approval, not just
  *  disappear. */
 export function countInvalidPolicyRules(value: unknown): number {
-  if (!Array.isArray(value)) return 0
+  if (value === undefined) return 0
+  if (!Array.isArray(value)) return 1
   return value.filter((raw) => parsePolicyRule(raw) === null).length
 }
 /** Validate a policy condition's sub-fields; return null if malformed (so a bad

@@ -123,7 +123,12 @@ async function fetchSession(
       client.session.get({ path: { id: sessionID }, query: { directory } }),
       METADATA_TIMEOUT_MS,
     )
-    return readSession(sessionID, responseData(response, "session.get"))
+    const raw = responseData(response, "session.get")
+    if (typeof raw !== "object" || raw === null) return undefined
+    const data = raw as Record<string, unknown>
+    if (data.id !== sessionID || (data.parentID !== undefined && typeof data.parentID !== "string"))
+      return undefined
+    return readSession(sessionID, data)
   } catch {
     return undefined
   }
@@ -157,6 +162,8 @@ async function walkLineage(
     mode: undefined,
     createdAt: undefined,
   }
+  const origin =
+    current === undefined ? "unknown" : current.parentID !== undefined ? "delegated" : "human-root"
   nodes.push(toNode(current ?? fallback))
   visited.add(sessionID)
 
@@ -165,7 +172,10 @@ async function walkLineage(
   while (cursor?.parentID) {
     if (depth >= config.maxSessionDepth || nodes.length - 1 >= config.maxParentSessions) {
       // Hit a configured bound; remaining ancestry is truncated, not missing.
-      return finalize(nodes, cursor.parentID, depth, cycleDetected, true, missingParents)
+      return {
+        ...finalize(nodes, cursor.parentID, depth, cycleDetected, true, missingParents),
+        origin,
+      }
     }
     if (visited.has(cursor.parentID)) {
       cycleDetected = true
@@ -182,7 +192,7 @@ async function walkLineage(
     depth += 1
     cursor = parent
   }
-  return finalize(nodes, undefined, depth, cycleDetected, false, missingParents)
+  return { ...finalize(nodes, undefined, depth, cycleDetected, false, missingParents), origin }
 }
 
 function toNode(s: SessionMetadata): SessionNode {
@@ -380,12 +390,18 @@ async function resolveIntent(
   // briefing and every `task_id` follow-up all come from the orchestrating
   // agent. They remain visible as local-session context labeled `assistant`
   // but can never surface as human authorization.
-  const currentDelegated = lineage.depth > 0
+  const currentDelegated = lineage.origin !== "human-root"
   const localSessionIntent = extractSessionUserBlocks(
     currentMessages,
     request.sessionID,
     currentDelegated,
   )
+  if (lineage.origin === "unknown") {
+    for (const block of localSessionIntent) {
+      block.actor = "unknown"
+      block.provenance = prov<"intent">("intent", "unavailable", "unknown")
+    }
+  }
   const directUserIntent: IntentBlock[] = currentDelegated ? [] : localSessionIntent
   const delegatedTask: IntentBlock[] = []
   const limit = Math.max(config.intentMessages, 4)
@@ -500,10 +516,10 @@ function assembleActorContext(
         )
       : UNKNOWN_STRING
 
-  const parent = lineage.nodes[1]
+  const parentID = lineage.nodes[0]?.parentID
   const parentSessionID =
-    parent !== undefined
-      ? prov<string | undefined>(parent.sessionID, "session-api", "confirmed")
+    parentID !== undefined
+      ? prov<string | undefined>(parentID, "session-api", "confirmed")
       : prov<string | undefined>(undefined, "unavailable", "unknown")
 
   const identityCompleteness: ActorContext["identityCompleteness"] =
@@ -603,6 +619,7 @@ export async function resolveActorContext(
 export function unknownResolution(request: PermissionRequest, error: unknown): ActorResolution {
   const message = error instanceof Error ? error.message : String(error)
   const lineage: SessionLineage = {
+    origin: "unknown",
     nodes: [{ sessionID: request.sessionID }],
     rootSessionID: request.sessionID,
     depth: 0,

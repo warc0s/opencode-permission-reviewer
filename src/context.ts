@@ -232,20 +232,26 @@ export function pendingPermissionSection(
 }
 
 export function buildEvidence(envelope: ReviewEnvelope, config: ReviewerConfig): string {
+  return buildEvidenceResult(envelope, config).text
+}
+
+export function buildEvidenceResult(
+  envelope: ReviewEnvelope,
+  config: ReviewerConfig,
+): { text: string; actionEvidenceComplete: boolean } {
   const request: PermissionRequest = envelope.request
   // Omitted entirely when empty: absence of ask decisions carries no signal
   // for the reviewer (the transcript remains the fallback source).
   const askDecisions = renderAskDecisions(envelope.askDecisions)
   const pending = pendingPermissionSection(request, config)
   const evidence = [
+    `PENDING_PERMISSION\n${pending.text}`,
     renderPolicySummary(envelope.policyTrace, config.maxPartChars * 2),
     `WORKING_DIRECTORY\n${envelope.directory}`,
     `WORKTREE\n${envelope.worktree}`,
-    // Actor/lineage/intent sections precede PENDING_PERMISSION so the reviewer
-    // judges the request knowing who is asking and why.
+    // Reserve the leading budget for the exact action before contextual sections.
     ...actorEvidenceSections(envelope, config),
     renderActionPurpose(envelope.actionPurpose, config.maxPartChars * 2),
-    `PENDING_PERMISSION\n${pending.text}`,
     envelope.enrichment || "ACTION_ENRICHMENT\n<none />",
     `REPOSITORY_CONTEXT\n${stableJson(
       { trust: config.repositoryTrust, directory: envelope.directory, worktree: envelope.worktree },
@@ -255,13 +261,18 @@ export function buildEvidence(envelope: ReviewEnvelope, config: ReviewerConfig):
     ...(askDecisions === undefined ? [] : [`USER_ASK_DECISIONS\n${askDecisions}`]),
     `RECENT_TRANSCRIPT\n${envelope.transcript || "<no transcript available />"}`,
   ].join("\n\n")
-  return truncate(
+  const text = truncate(
     evidence,
     config.maxContextChars +
       config.maxPartChars * 2 +
       config.maxEnrichmentChars +
       config.maxIntentChars,
   )
+  return {
+    text,
+    actionEvidenceComplete:
+      pending.actionEvidenceComplete && text.startsWith(`PENDING_PERMISSION\n${pending.text}\n\n`),
+  }
 }
 
 function renderActionPurpose(purpose: ActionPurpose | undefined, max: number): string {
@@ -335,6 +346,7 @@ function renderActor(actor: ActorContext, max: number): string {
 function renderLineage(lineage: SessionLineage, max: number): string {
   return stableJson(
     {
+      origin: lineage.origin ?? "unknown",
       depth: lineage.depth,
       rootSessionID: lineage.rootSessionID,
       cycleDetected: lineage.cycleDetected,

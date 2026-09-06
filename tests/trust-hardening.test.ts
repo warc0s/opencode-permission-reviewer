@@ -23,7 +23,7 @@ import { createAuditWriter, readAuditSummary } from "../src/audit.ts"
 import { resolveActorContext } from "../src/context/actor-resolver.ts"
 import type { MessageWithParts, PermissionRequest } from "../src/types.ts"
 import type { OpenCodeClientLike, ClientResponse } from "../src/opencode/types.ts"
-import { MockClient, request, runtime } from "./helpers.ts"
+import { decision, MockClient, request, runtime } from "./helpers.ts"
 
 const execFileAsync = promisify(execFile)
 
@@ -945,7 +945,7 @@ describe("trust hardening — reviewer session isolation", () => {
     expect(del.query?.directory).toBe(create.query?.directory)
   })
 
-  test("when the isolated directory is refused, the reviewer falls back to the project directory", async () => {
+  test("when the isolated directory is refused, no project reviewer or approval is created", async () => {
     const client = new MockClient()
     const isolated = `${import.meta.dir}/.tmp-reviewer-isolated`
     const originalCreate = client.session.create.bind(client)
@@ -959,14 +959,10 @@ describe("trust hardening — reviewer session isolation", () => {
     }
     const harness = runtime(client)
     const result = await harness.runtime.process(request())
-    expect(result.kind).toBe("allow")
-    expect(client.creates).toHaveLength(2)
-    const fallback = client.creates[1] as {
-      body?: { parentID?: string }
-      query?: { directory?: string }
-    }
-    expect(fallback.query?.directory).toBe("/workspace/project")
-    expect(fallback.body?.parentID).toBe("ses_main")
+    expect(result.kind).toBe("escalate")
+    expect(client.creates).toHaveLength(1)
+    expect(client.prompts).toHaveLength(0)
+    expect(client.replies).toHaveLength(0)
   })
 })
 
@@ -1042,5 +1038,103 @@ describe("trust hardening — ssh stdin file evidence resilience", () => {
     } finally {
       rmSync(directory, { recursive: true, force: true })
     }
+  })
+})
+
+describe("review regression boundaries", () => {
+  test("directory creation failure never prompts or approves", async () => {
+    const dir = tempDir("reviewer-isolation-failure-")
+    const file = join(dir, "file")
+    writeFileSync(file, "not a directory")
+    try {
+      const client = new MockClient()
+      const harness = runtime(client, {}, undefined, { reviewerDirectoryBase: join(file, "child") })
+      expect((await harness.runtime.process(request())).kind).toBe("escalate")
+      expect(client.creates).toHaveLength(0)
+      expect(client.prompts).toHaveLength(0)
+      expect(client.replies).toHaveLength(0)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  for (const layer of ["global", "inline"] as const) {
+    for (const policyRules of [
+      { effect: "deny" },
+      null,
+      [{ effect: "deny", when: { typo: true } }],
+    ]) {
+      test(`invalid trusted ${layer} rules block model allow: ${JSON.stringify(policyRules)}`, async () => {
+        const dir = tempDir("reviewer-rules-")
+        const path = join(dir, "config.json")
+        try {
+          writeFileSync(path, JSON.stringify(layer === "global" ? { policyRules } : {}))
+          setGlobalConfigPathForTests(path)
+          const config = loadResolvedConfig(layer === "inline" ? { policyRules } : {})
+          expect(config.configDegraded?.length).toBeGreaterThan(0)
+          const client = new MockClient()
+          expect((await runtime(client, config).runtime.process(request())).kind).toBe("escalate")
+          expect(client.replies).toHaveLength(0)
+        } finally {
+          setGlobalConfigPathForTests(undefined)
+          rmSync(dir, { recursive: true, force: true })
+        }
+      })
+    }
+  }
+
+  for (const kind of ["bounded", "missing-parent", "missing-metadata"] as const) {
+    test(`${kind} never presents child messages as human authorization`, async () => {
+      const client = new MockClient()
+      client.session.get = async () =>
+        kind === "missing-metadata"
+          ? { error: "unavailable" }
+          : { data: { id: "ses_main", parentID: "ses_missing" } }
+      const harness = runtime(client, { maxParentSessions: kind === "bounded" ? 0 : 4 })
+      await harness.runtime.process(request())
+      const prompt = client.prompts[0] as { body: { parts: Array<{ text: string }> } }
+      const text = prompt.body.parts[0]!.text
+      expect(text).not.toContain('"actor": "user"')
+      expect(text).not.toContain("USER_INTENT_HISTORY\nuser:")
+      const res = await resolveActorContext(
+        request(),
+        client.messageData as MessageWithParts[],
+        client,
+        "/repo",
+        { ...DEFAULT_CONFIG, maxParentSessions: 0 },
+      )
+      expect(res.lineage.origin).toBe(kind === "missing-metadata" ? "unknown" : "delegated")
+      expect(res.intent.directUserIntent).toHaveLength(0)
+      expect(res.intent.localSessionIntent[0]?.actor).toBe(
+        kind === "missing-metadata" ? "unknown" : "assistant",
+      )
+    })
+  }
+
+  test("large preceding intent cannot displace the pending action from the final provider prompt", async () => {
+    const client = new MockClient()
+    client.session.get = async () => ({ data: { id: "ses_main" } })
+    client.messageData = [1, 2, 3].map((id) => ({
+      info: { id: `msg_${id}`, role: "user" },
+      parts: [{ type: "text", text: "a".repeat(7900) }],
+    }))
+    const harness = runtime(client, {
+      maxPartChars: 8000,
+      maxContextChars: 4000,
+      maxEnrichmentChars: 1000,
+      maxIntentChars: 1000,
+    })
+    expect((await harness.runtime.process(request())).kind).toBe("allow")
+    const prompt = client.prompts[0] as { body: { parts: Array<{ text: string }> } }
+    expect(prompt.body.parts[0]!.text).toContain("PENDING_PERMISSION")
+    expect(prompt.body.parts[0]!.text).toContain('"command": "printf safe"')
+  })
+
+  test("text mode keeps every tool disabled", async () => {
+    const client = new MockClient()
+    client.nextText = JSON.stringify(decision("allow"))
+    await runtime(client, { outputFormat: "text" }).runtime.process(request())
+    const prompt = client.prompts[0] as { body: { tools: Record<string, boolean> } }
+    expect(Object.values(prompt.body.tools).every((value) => value === false)).toBe(true)
   })
 })

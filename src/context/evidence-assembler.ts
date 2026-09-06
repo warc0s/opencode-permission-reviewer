@@ -142,7 +142,7 @@ export async function assembleEvidence(
     timings: { contextMs, enrichmentMs },
     transcript: buildTranscript(messages, ctx.config),
     intentHistory: buildIntentHistory(messages, ctx.config, {
-      delegatedSession: (actor.lineage?.depth ?? 0) > 0,
+      delegatedSession: actor.lineage.origin !== "human-root",
     }),
     enrichment,
     sshAudit,

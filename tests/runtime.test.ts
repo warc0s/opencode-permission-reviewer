@@ -36,7 +36,11 @@ describe("runtime decisions", () => {
     }
     expect(prompt.body.model).toEqual({ providerID: "openai", modelID: "gpt-5.6-luna" })
     expect(prompt.body.variant).toBe("max")
-    expect(Object.values(prompt.body.tools).every((enabled) => enabled === false)).toBe(true)
+    expect(
+      Object.entries(prompt.body.tools)
+        .filter(([, enabled]) => enabled)
+        .map(([id]) => id),
+    ).toEqual(["StructuredOutput"])
 
     // Asymmetric feedback: approvals must not contaminate the primary agent context.
     const output: { output: string; metadata: unknown } = {

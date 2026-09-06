@@ -423,6 +423,7 @@ export interface SessionNode {
 
 /** The resolved session ancestry with failure modes made explicit. */
 export interface SessionLineage {
+  origin?: "human-root" | "delegated" | "unknown"
   nodes: SessionNode[]
   rootSessionID: string
   depth: number

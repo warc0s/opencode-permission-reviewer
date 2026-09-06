@@ -135,51 +135,73 @@ function boundedList(values: string[], max = 200): { values: string[]; omitted: 
  *  hooks, fsmonitor, and external diff is not enough because `git status` and
  *  `git diff` can invoke them on content comparison. Enumerate the configured
  *  keys (pure config reading, executes nothing) and override every one with a
- *  no-op so the evidence snapshot cannot run repo code. */
-async function filterNeutralizationArgs(directory: string): Promise<string[]> {
-  try {
-    const result = await execFileAsync("git", ["config", "--get-regexp", "^(filter|diff)\\."], {
-      cwd: directory,
-      timeout: 2_000,
-      maxBuffer: 64 * 1024,
-      encoding: "utf8",
-      env: gitInspectionEnv(),
-    })
-    const filterNames = new Set<string>()
-    const diffDrivers = new Set<string>()
-    for (const line of result.stdout.split("\n")) {
-      const key = line.split(/\s/, 1)[0]
-      if (key === undefined) continue
-      const filterMatch = /^filter\.([^.]+)\.(?:clean|smudge|process|required)$/.exec(key)
-      if (filterMatch) {
-        filterNames.add(filterMatch[1]!)
-        continue
-      }
-      const diffMatch = /^diff\.[^.]+\.textconv$/.exec(key)
-      if (diffMatch) diffDrivers.add(key)
-    }
-    const args: string[] = []
-    for (const name of [...filterNames].slice(0, 50)) {
-      args.push(
-        "-c",
-        `filter.${name}.clean=cat`,
-        "-c",
-        `filter.${name}.smudge=cat`,
-        "-c",
-        `filter.${name}.process=`,
-        "-c",
-        `filter.${name}.required=false`,
-      )
-    }
-    for (const key of [...diffDrivers].slice(0, 50)) {
-      args.push("-c", `${key}=`)
-    }
-    return args
-  } catch {
-    // No matching config keys (git exits 1) or git unavailable: nothing to
-    // neutralize.
-    return []
+ *  no-op so the evidence snapshot cannot run repo code.
+ *
+ *  The scan is shared per directory within a short TTL: concurrent snapshots
+ *  reuse one in-flight subprocess so burst evidence collection does not
+ *  multiply git processes, while the TTL bounds staleness if the repository
+ *  config changes mid-session. A failed scan is NOT cached and fails closed —
+ *  if the config cannot be inspected, the snapshot is withheld rather than
+ *  risk running repo code. */
+const FILTER_SCAN_TTL_MS = 30_000
+const filterScanByDirectory = new Map<string, { scan: Promise<string[]>; at: number }>()
+
+function filterNeutralizationArgs(directory: string): Promise<string[]> {
+  const existing = filterScanByDirectory.get(directory)
+  if (existing !== undefined && Date.now() - existing.at < FILTER_SCAN_TTL_MS) {
+    return existing.scan
   }
+  const scan = (async () => {
+    try {
+      const result = await execFileAsync("git", ["config", "--get-regexp", "^(filter|diff)\\."], {
+        cwd: directory,
+        timeout: 5_000,
+        maxBuffer: 64 * 1024,
+        encoding: "utf8",
+        env: gitInspectionEnv(),
+      })
+      const filterNames = new Set<string>()
+      const diffDrivers = new Set<string>()
+      for (const line of result.stdout.split("\n")) {
+        const key = line.split(/\s/, 1)[0]
+        if (key === undefined) continue
+        const filterMatch = /^filter\.([^.]+)\.(?:clean|smudge|process|required)$/.exec(key)
+        if (filterMatch) {
+          filterNames.add(filterMatch[1]!)
+          continue
+        }
+        const diffMatch = /^diff\.[^.]+\.textconv$/.exec(key)
+        if (diffMatch) diffDrivers.add(key)
+      }
+      const args: string[] = []
+      for (const name of [...filterNames].slice(0, 50)) {
+        args.push(
+          "-c",
+          `filter.${name}.clean=cat`,
+          "-c",
+          `filter.${name}.smudge=cat`,
+          "-c",
+          `filter.${name}.process=`,
+          "-c",
+          `filter.${name}.required=false`,
+        )
+      }
+      for (const key of [...diffDrivers].slice(0, 50)) {
+        args.push("-c", `${key}=`)
+      }
+      return args
+    } catch (error) {
+      const record = error as { code?: unknown }
+      // git config exits 1 when nothing matches: the common, benign case.
+      if (record.code === 1) return []
+      // Transient or environmental failure: do not cache, and surface it so
+      // the caller can fail closed instead of inspecting unverified.
+      filterScanByDirectory.delete(directory)
+      throw error instanceof Error ? error : new Error(String(error))
+    }
+  })()
+  filterScanByDirectory.set(directory, { scan, at: Date.now() })
+  return scan
 }
 
 function gitInspectionEnv(): NodeJS.ProcessEnv {
@@ -282,7 +304,21 @@ export async function enrichGitEvidence(
     }
   }
   const gitDirectory = planned.executionDirectory
-  const neutralization = await filterNeutralizationArgs(gitDirectory)
+  let neutralization: string[]
+  try {
+    neutralization = await filterNeutralizationArgs(gitDirectory)
+  } catch (error) {
+    // Fail closed: without a verified config we cannot prove the inspection
+    // would not run repository-configured filters, so no snapshot is taken.
+    const reason = `unable to verify git conversion filters before inspection (${error instanceof Error ? error.message : String(error)})`
+    return {
+      text: `GIT_STATE_ANALYSIS\n${JSON.stringify(
+        { status: "unavailable", reason: reason.slice(0, 1_000), planned },
+        null,
+        2,
+      ).slice(0, maxChars)}`,
+    }
+  }
 
   const [root, status] = await Promise.all([
     runGit(gitDirectory, ["rev-parse", "--show-toplevel"], neutralization),

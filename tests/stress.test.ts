@@ -209,21 +209,30 @@ describe("stress and adversarial robustness", () => {
       )
       for (let item = 0; item < results.length; item += 1) {
         const record = JSON.parse(results[item]!.text.replace(/^GIT_STATE_ANALYSIS\n/, "")) as {
-          branch: string
-          discardTargets: { values: string[] }
-          affectedTargetNumstat: string
+          status?: string
+          branch?: string
+          discardTargets?: { values: string[] }
+          planned?: { discardTargets: string[] }
+          affectedTargetNumstat?: string
+        }
+        if (record.status !== "available") {
+          // Under extreme contention a transient git timeout can withhold the
+          // whole snapshot (fail closed); the deterministic discard-target
+          // scoping must still be correct in the planned actions.
+          expect(record.planned?.discardTargets).toEqual([`target-${item}.txt`])
+          continue
         }
         expect(record.branch).toBe("stress")
         // The discard-target scoping is the safety property under test and is
         // derived from command parsing, so it is deterministic regardless of
         // concurrent git contention.
-        expect(record.discardTargets.values).toEqual([`target-${item}.txt`])
+        expect(record.discardTargets?.values).toEqual([`target-${item}.txt`])
         // The numstat counts come from a live `git diff --numstat` racing with
-        // 299 other git subprocesses on a shared CI runner; under contention a
-        // transient timeout can mark it unavailable. When git does return a
-        // diff, it must be scoped to this request's target and never cross into
-        // another snapshot's target.
-        const numstat = record.affectedTargetNumstat
+        // the other snapshots' git subprocesses on a shared CI runner; under
+        // contention a transient timeout can mark it unavailable. When git does
+        // return a diff, it must be scoped to this request's target and never
+        // cross into another snapshot's target.
+        const numstat = record.affectedTargetNumstat ?? "<unavailable>"
         if (!numstat.startsWith("<")) {
           expect(numstat).toContain(`target-${item}.txt`)
           for (let other = 0; other < 100; other += 1) {

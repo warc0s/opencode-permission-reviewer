@@ -132,17 +132,6 @@ function matches(
   return true
 }
 
-/** Deterministic hash of the rule set for audit reproducibility. The engine
- *  uses this for the policy trace; exposing it lets diagnostics print the exact
- *  same hash a review would produce. */
-export function hashRuleSet(rules: PolicyRule[]): string {
-  const canonical = rules
-    .map((r) => `${r.id}:${r.effect}:${JSON.stringify(r.when)}`)
-    .sort()
-    .join("|")
-  return createHash("sha256").update(canonical).digest("hex").slice(0, 16)
-}
-
 /** Hash of everything that deterministically shapes a policy outcome: the
  *  effective rules plus the decision-relevant config (confidence floor, risk
  *  matrix, repository trust). Two runs that would enforce different thresholds

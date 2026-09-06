@@ -305,19 +305,18 @@ are stored as **SHA-256**, never in clear text. Set `audit: false` to disable.
 
 ## What you'll see
 
-```
-┌──────────────────────────────────────────────────────────┐
-│ ✓ Review approved                          1.4s           │
-│ bash  $ rm -rf /tmp/scratch-cache                        │
-│ low risk · high authorization · 0.94 confidence           │
-│ Narrowly scoped temp cleanup; matches user intent.       │
-└──────────────────────────────────────────────────────────┘
+```text
+✓ Review approved · bash · rm -rf /tmp/scratch-cache
+Narrowly scoped temp cleanup; matches user intent.
 ```
 
-While reviewing, the panel covers OpenCode's native approval controls and
-switches the keymap out of approval mode. On a denial you get a red panel with
-the rationale. On a technical failure or escalation, the overlay is removed and
-OpenCode's native approval controls are exposed with a **manual review
+The optional TUI status strip reserves space below the session instead of
+covering the editor or native approval controls. It uses one line while
+reviewing and a second line for the result rationale; long text is truncated.
+The review keymap is active only while reviewing and is released as soon as
+the permission is resolved. OpenCode still hides its editor while a permission
+is pending. On a technical failure or escalation, the strip is removed and
+OpenCode's native approval controls remain available with a **manual review
 required** warning. Completed approvals/denials stay visible for 5 s, then
 close automatically. A broken TUI transport **never changes the safety
 decision**.

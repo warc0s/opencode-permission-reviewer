@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
 import type { TuiPluginApi, TuiPluginMeta } from "@opencode-ai/plugin/tui"
 import { tui } from "./tui-loader.ts"
 import { createUiStatus, encodeUiStatus } from "../src/ui-protocol.ts"
@@ -19,10 +19,15 @@ import { request } from "./helpers.ts"
  *   "No renderer found" throw as proof that a panel render was attempted
  *   (element creation needs a renderer; nothing is created when idle);
  * - event wiring updates the shared state machine (asked/replied/decisions);
- * - the review mode is pushed while a panel is active and popped when gone;
+ * - the review mode is released independently of result rendering;
  * - manual outcomes toast instead of occupying the panel slot;
  * - the factory source still reads the revision signal directly.
  */
+
+const disposers: Array<() => void> = []
+afterEach(() => {
+  for (const dispose of disposers.splice(0)) dispose()
+})
 
 type EventHandler = (event: never) => void
 
@@ -33,6 +38,7 @@ interface CapturedApi {
   /** By-reference mode bookkeeping: a bare number would be snapshotted. */
   mode: { pushes: string[]; pops: number }
   toasts: Array<{ title?: string }>
+  dispose: () => void
 }
 
 async function captureOverlay(): Promise<CapturedApi> {
@@ -41,7 +47,14 @@ async function captureOverlay(): Promise<CapturedApi> {
   const toasts: Array<{ title?: string }> = []
   let factory: (() => unknown) | undefined
 
+  let dispose = () => {}
   const api = {
+    lifecycle: {
+      onDispose: (fn: () => void) => {
+        dispose = fn
+        disposers.push(fn)
+      },
+    },
     route: {
       current: { name: "session", params: { sessionID: "ses_main" } },
       register: () => () => {},
@@ -78,8 +91,8 @@ async function captureOverlay(): Promise<CapturedApi> {
       },
     },
     slots: {
-      register: (plugin: { slots: { app?: () => unknown } }) => {
-        factory = plugin.slots.app
+      register: (plugin: { slots: { app_bottom?: () => unknown } }) => {
+        factory = plugin.slots.app_bottom
       },
     },
   } as unknown as TuiPluginApi
@@ -96,7 +109,7 @@ async function captureOverlay(): Promise<CapturedApi> {
     fingerprint: "test",
     state: "first",
   } satisfies TuiPluginMeta)
-  return { api, handlers, factory, mode, toasts }
+  return { api, handlers, factory, mode, toasts, dispose }
 }
 
 function fire(captured: CapturedApi, type: string, event: unknown): void {
@@ -133,7 +146,7 @@ function statusEvent(
 }
 
 describe("tui overlay slot contract", () => {
-  test("registers a single app slot and subscribes to the event trio", async () => {
+  test("registers a single app_bottom slot and subscribes to the event trio", async () => {
     const captured = await captureOverlay()
     expect(captured.factory).toBeFunction()
     expect([...captured.handlers.keys()].sort()).toEqual([
@@ -160,14 +173,14 @@ describe("tui overlay slot contract", () => {
     expect(captured.mode.pops).toBe(0)
   })
 
-  test("an approved decision keeps the panel and survives the reply", async () => {
+  test("an approved decision releases the mode before rendering and survives the reply", async () => {
     const captured = await captureOverlay()
     fire(captured, "permission.asked", { type: "permission.asked", properties: request() })
     fire(captured, "tui.command.execute", statusEvent("approved"))
     fire(captured, "permission.replied", { properties: { requestID: "per_1" } })
 
     expect(factoryAttempt(captured).rendered).toBe(true)
-    expect(captured.mode.pops).toBe(0)
+    expect(captured.mode.pops).toBe(1)
   })
 
   test("a reply to an unresolved review clears the panel and pops the mode", async () => {
@@ -190,10 +203,27 @@ describe("tui overlay slot contract", () => {
     expect(captured.toasts.map((t) => t.title)).toEqual(["Manual review required"])
     const attempt = factoryAttempt(captured)
     expect(attempt.threw).toBe(false)
-    // Manual never occupied the panel, so the mode was never pushed and there
-    // is nothing to pop.
-    expect(captured.mode.pushes).toHaveLength(0)
-    expect(captured.mode.pops).toBe(0)
+    expect(captured.mode.pushes).toEqual(["permission-reviewer"])
+    expect(captured.mode.pops).toBe(1)
+  })
+
+  test("a terminal result after the reply does not reacquire the mode", async () => {
+    const captured = await captureOverlay()
+    fire(captured, "permission.asked", { type: "permission.asked", properties: request() })
+    fire(captured, "permission.replied", { properties: { requestID: "per_1" } })
+    expect(captured.mode.pops).toBe(1)
+    fire(captured, "tui.command.execute", statusEvent("denied"))
+    expect(factoryAttempt(captured).rendered).toBe(true)
+    expect(captured.mode.pushes).toEqual(["permission-reviewer"])
+    expect(captured.mode.pops).toBe(1)
+  })
+
+  test("disposal releases the active mode only once", async () => {
+    const captured = await captureOverlay()
+    fire(captured, "permission.asked", { type: "permission.asked", properties: request() })
+    captured.dispose()
+    captured.dispose()
+    expect(captured.mode.pops).toBe(1)
   })
 
   test("factory body reads the revision signal directly (host re-render contract)", async () => {

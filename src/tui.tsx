@@ -48,7 +48,10 @@ export const tui: TuiPlugin = async (api, options) => {
   // own scope renders exactly once at boot and never updates again.
   const [revision, setRevision] = createSignal(0)
   const [frame, setFrame] = createSignal(0)
-  const touch = () => setRevision((value) => value + 1)
+  const touch = () => {
+    syncMode()
+    setRevision((value) => value + 1)
+  }
 
   const active = () => {
     const sessionID = routeSessionID(api)
@@ -59,7 +62,7 @@ export const tui: TuiPlugin = async (api, options) => {
   let popMode: (() => void) | undefined
   const syncMode = () => {
     const status = active()
-    const wanted = status !== undefined && status.phase !== "manual"
+    const wanted = status?.phase === "reviewing"
     if (wanted && popMode === undefined) {
       try {
         popMode = api.mode.push(REVIEW_MODE)
@@ -90,21 +93,25 @@ export const tui: TuiPlugin = async (api, options) => {
     touch()
   })
 
-  // Drives the spinner and the watchdog/expiry transitions. The interval lives
-  // for the lifetime of the plugin activation; the scoped plugin API disposes
-  // the event listeners above, but timers have no scope hook to unwind.
-  setInterval(() => {
-    setFrame((value) => (value + 1) % SPINNER.length)
+  // Keep watchdog and result expiry running even when the strip is hidden.
+  const ticker = setInterval(() => {
+    if (active()?.phase === "reviewing") setFrame((value) => (value + 1) % SPINNER.length)
     const expired = state.expire()
     for (const status of expired) notifyManual(api, status)
     const dismissed = state.dismissResults()
     if (expired.length > 0 || dismissed.length > 0) touch()
   }, 250)
 
+  api.lifecycle.onDispose(() => {
+    clearInterval(ticker)
+    popMode?.()
+    popMode = undefined
+  })
+
   api.slots.register({
     order: 1_000,
     slots: {
-      app() {
+      app_bottom() {
         // Load-bearing direct read: it subscribes the slot's render pass to
         // every state transition (touch), so the factory re-runs and renders
         // the current status. The spinner frame is deliberately NOT read here
@@ -160,71 +167,28 @@ function ReviewPanel(props: {
     return `${(elapsedMs / 1_000).toFixed(1)}s`
   }
 
+  const singleLine = (value: string) => value.replace(/[\r\n\t]+/g, " ")
+
   return (
     <box
-      position="absolute"
-      left={0}
-      right={0}
-      bottom={0}
-      height="auto"
-      maxHeight={12}
+      height={props.status.phase !== "reviewing" && props.status.reason ? 2 : 1}
+      flexShrink={0}
       overflow="hidden"
       backgroundColor={theme().backgroundPanel}
-      border={["left"]}
-      borderColor={appearance().color}
       flexDirection="column"
-      onMouseDown={(event) => {
-        event.preventDefault()
-        event.stopPropagation()
-      }}
-      onMouseUp={(event) => {
-        event.preventDefault()
-        event.stopPropagation()
-      }}
+      paddingLeft={1}
+      paddingRight={1}
     >
-      <box
-        flexDirection="column"
-        gap={1}
-        paddingTop={1}
-        paddingBottom={1}
-        paddingLeft={2}
-        paddingRight={3}
-      >
-        <box flexDirection="row" gap={1}>
-          <text fg={appearance().color}>{appearance().icon}</text>
-          <text fg={theme().text}>{appearance().title}</text>
-          <box flexGrow={1} />
-          <text fg={theme().textMuted}>{elapsed()}</text>
-        </box>
-
-        <box flexDirection="row" gap={1} paddingLeft={2}>
-          <text fg={theme().textMuted}>{props.status.permission}</text>
-          <text fg={theme().text} wrapMode="word">
-            {props.status.action}
-          </text>
-          <Show when={props.status.actorName}>
-            <text fg={theme().textMuted}>· actor {props.status.actorName}</text>
-          </Show>
-        </box>
-
-        <Show when={props.status.phase === "reviewing"}>
-          <box paddingLeft={2} flexDirection="row" gap={1}>
-            <text fg={theme().textMuted}>
-              {props.status.model} · reasoning {props.status.variant}
-            </text>
-            <box flexGrow={1} />
-            <text fg={theme().textMuted}>No action needed</text>
-          </box>
-        </Show>
-
-        <Show when={props.status.phase !== "reviewing" && props.status.reason}>
-          <box paddingLeft={2}>
-            <text fg={theme().textMuted} wrapMode="word">
-              {props.status.reason}
-            </text>
-          </box>
-        </Show>
-      </box>
+      <text fg={appearance().color} wrapMode="none" truncate>
+        {appearance().icon} {appearance().title} · {props.status.permission} ·{" "}
+        {singleLine(props.status.action)}
+        {props.status.phase === "reviewing" ? ` · ${elapsed()}` : ""}
+      </text>
+      <Show when={props.status.phase !== "reviewing" && props.status.reason}>
+        <text fg={theme().textMuted} wrapMode="none" truncate>
+          {singleLine(props.status.reason ?? "")}
+        </text>
+      </Show>
     </box>
   )
 }

@@ -1,7 +1,12 @@
-import { describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
 import type { TuiPluginApi, TuiPluginMeta } from "@opencode-ai/plugin/tui"
 import { request } from "./helpers.ts"
 import { testRender, tui } from "./tui-loader.ts"
+
+const disposers: Array<() => void> = []
+afterEach(() => {
+  for (const dispose of disposers.splice(0)) dispose()
+})
 
 type EventHandler = (event: never) => void
 
@@ -22,6 +27,7 @@ describe("tui panel live elapsed counter", () => {
     let factory: (() => unknown) | undefined
 
     const api = {
+      lifecycle: { onDispose: (fn: () => void) => disposers.push(fn) },
       route: {
         current: { name: "session", params: { sessionID: "ses_main" } },
         register: () => () => {},
@@ -50,8 +56,8 @@ describe("tui panel live elapsed counter", () => {
       state: { session: { get: () => undefined } },
       mode: { current: () => "normal", push: () => () => {} },
       slots: {
-        register: (plugin: { slots: { app?: () => unknown } }) => {
-          factory = plugin.slots.app
+        register: (plugin: { slots: { app_bottom?: () => unknown } }) => {
+          factory = plugin.slots.app_bottom
         },
       },
     } as unknown as TuiPluginApi
@@ -74,8 +80,15 @@ describe("tui panel live elapsed counter", () => {
       handler({ type: "permission.asked", properties: request() } as never)
     }
 
-    const setup = await testRender(() => factory!() as Element, { width: 80, height: 20 })
+    const setup = await testRender(() => factory!() as Element, { width: 80, height: 24 })
+    disposers.push(() => setup.renderer.destroy())
     await setup.flush()
+    expect(
+      setup
+        .captureCharFrame()
+        .split("\n")
+        .filter((line) => line.trim()),
+    ).toHaveLength(1)
 
     const readElapsed = (): number => {
       const frame = setup.captureCharFrame()

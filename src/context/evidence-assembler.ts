@@ -1,5 +1,10 @@
 import type { PermissionRequest, ReviewEnvelope, ReviewerConfig } from "../types.ts"
-import { buildIntentHistory, buildTranscript, normalizeMessages } from "../context.ts"
+import {
+  buildIntentHistory,
+  buildTranscript,
+  normalizeMessages,
+  pendingPermissionSection,
+} from "../context.ts"
 import type { AskDecisionSource } from "./ask-decisions.ts"
 import type { OpenCodeClientLike } from "../opencode/types.ts"
 import { responseData, withTimeout } from "../opencode/transport.ts"
@@ -76,15 +81,22 @@ export async function assembleEvidence(
   const contextMs = performance.now() - contextStart
 
   const enrichmentStart = performance.now()
-  const fragments = await Promise.all(
-    providers.map((provider) =>
-      provider.collect({
-        request,
-        directory: ctx.directory,
-        worktree: ctx.worktree,
-        maxChars: ctx.config.maxEnrichmentChars,
-      }),
+  // The provider phase has per-call bounds (git timeouts, bounded reads) but
+  // no global one of its own; a provider that hangs despite them (e.g. a
+  // blocking filesystem edge case) must not leave the review pending forever.
+  // On timeout the whole assembly fails into the fail-safe escalation path.
+  const fragments = await withTimeout(
+    Promise.all(
+      providers.map((provider) =>
+        provider.collect({
+          request,
+          directory: ctx.directory,
+          worktree: ctx.worktree,
+          maxChars: ctx.config.maxEnrichmentChars,
+        }),
+      ),
     ),
+    Math.min(ctx.config.timeoutMs, 20_000),
   )
   const enrichmentMs = performance.now() - enrichmentStart
 
@@ -116,13 +128,22 @@ export async function assembleEvidence(
   const completenessReasons = [...actor.completeness.reasons]
   if (!purposeOk) completenessReasons.push("action purpose unavailable")
 
+  // Whether the action under review reached the rendered evidence in full
+  // (no elided command middle, no truncated PENDING_PERMISSION section). The
+  // coordinator blocks automatic approval when this is false.
+  const { actionEvidenceComplete } = pendingPermissionSection(request, ctx.config)
+  if (!actionEvidenceComplete)
+    completenessReasons.push("pending action was elided or truncated in the evidence")
+
   return {
     request,
     directory: ctx.directory,
     worktree: ctx.worktree,
     timings: { contextMs, enrichmentMs },
     transcript: buildTranscript(messages, ctx.config),
-    intentHistory: buildIntentHistory(messages, ctx.config),
+    intentHistory: buildIntentHistory(messages, ctx.config, {
+      delegatedSession: (actor.lineage?.depth ?? 0) > 0,
+    }),
     enrichment,
     sshAudit,
     ...(preflightDenial === undefined ? {} : { preflightDenial }),
@@ -130,6 +151,7 @@ export async function assembleEvidence(
     lineage: actor.lineage,
     intent: actor.intent,
     actionPurpose,
+    actionEvidenceComplete,
     evidenceCompleteness: {
       ...actor.completeness,
       purpose: purposeOk,

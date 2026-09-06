@@ -1,6 +1,7 @@
 import type {
   ActorProfile,
   EscalationMode,
+  PolicyCondition,
   PolicyRule,
   RiskPolicy,
   RepositoryTrust,
@@ -128,29 +129,57 @@ function resolveRepositoryTrust(value: unknown): RepositoryTrust {
 const VALID_EFFECTS = new Set(["review", "manual", "deny", "allow"])
 const VALID_SOURCES = new Set(["builtin", "global", "project", "inline"])
 
-/** Parse declarative policy rules. Malformed entries are dropped. */
-function resolvePolicyRules(value: unknown): PolicyRule[] {
-  if (!Array.isArray(value)) return []
-  const out: PolicyRule[] = []
-  for (const raw of value) {
-    if (typeof raw !== "object" || raw === null) continue
-    const r = raw as Record<string, unknown>
-    if (typeof r.id !== "string" || r.id.length === 0) continue
-    if (typeof r.source !== "string" || !VALID_SOURCES.has(r.source)) continue
-    if (typeof r.effect !== "string" || !VALID_EFFECTS.has(r.effect)) continue
-    if (typeof r.reason !== "string" || r.reason.length === 0) continue
-    if (typeof r.when !== "object" || r.when === null) continue
+/** Parse one declarative policy rule. Malformed entries return null so the
+ *  caller decides whether dropping them is safe (untrusted layer) or must
+ *  degrade the config (trusted layer — a dropped restriction may be the whole
+ *  point of the rule). A missing `when` is a valid universal rule. */
+function parsePolicyRule(raw: unknown): PolicyRule | null {
+  if (typeof raw !== "object" || raw === null) return null
+  const r = raw as Record<string, unknown>
+  if (typeof r.id !== "string" || r.id.length === 0) return null
+  if (typeof r.source !== "string" || !VALID_SOURCES.has(r.source)) return null
+  if (typeof r.effect !== "string" || !VALID_EFFECTS.has(r.effect)) return null
+  if (typeof r.reason !== "string" || r.reason.length === 0) return null
+  if (r.when !== undefined) {
+    if (typeof r.when !== "object" || r.when === null) return null
     const when = validateCondition(r.when as Record<string, unknown>)
-    if (when === null) continue
-    out.push({
+    if (when === null) return null
+    return {
       id: r.id,
       source: r.source as PolicyRule["source"],
       when,
       effect: r.effect as PolicyRule["effect"],
       reason: r.reason,
-    })
+    }
+  }
+  // No `when` at all: a universal rule. `{ always: true }` is the explicit
+  // spelling of the same thing for admins who prefer it.
+  return {
+    id: r.id,
+    source: r.source as PolicyRule["source"],
+    effect: r.effect as PolicyRule["effect"],
+    reason: r.reason,
+  }
+}
+
+/** Parse declarative policy rules. Malformed entries are dropped. */
+function resolvePolicyRules(value: unknown): PolicyRule[] {
+  if (!Array.isArray(value)) return []
+  const out: PolicyRule[] = []
+  for (const raw of value) {
+    const rule = parsePolicyRule(raw)
+    if (rule !== null) out.push(rule)
   }
   return out
+}
+
+/** How many entries a policyRules array would silently drop under
+ *  `resolvePolicyRules`. Trusted layers use this to refuse silent degradation:
+ *  an admin rule that vanishes on a typo must block auto-approval, not just
+ *  disappear. */
+export function countInvalidPolicyRules(value: unknown): number {
+  if (!Array.isArray(value)) return 0
+  return value.filter((raw) => parsePolicyRule(raw) === null).length
 }
 /** Validate a policy condition's sub-fields; return null if malformed (so a bad
  *  rule is dropped rather than crashing the engine at match time). */
@@ -170,13 +199,18 @@ const CONDITION_FLAG_KEYS = [
   "persistence",
 ] as const
 
-function validateCondition(value: Record<string, unknown>): PolicyRule["when"] | null {
+function validateCondition(value: Record<string, unknown>): PolicyCondition | null {
   // An unknown key (usually a typo) must drop the rule: silently discarding it
   // could strip the rule's only condition and turn a narrow rule into a
   // universal match.
-  const knownKeys = new Set<string>([...CONDITION_LIST_KEYS, ...CONDITION_FLAG_KEYS])
+  const knownKeys = new Set<string>(["always", ...CONDITION_LIST_KEYS, ...CONDITION_FLAG_KEYS])
   for (const key of Object.keys(value)) {
     if (!knownKeys.has(key)) return null
+  }
+  // `always` is the explicit catch-all spelling; it makes sense only alone.
+  if (value.always !== undefined) {
+    if (value.always !== true || Object.keys(value).length !== 1) return null
+    return { always: true }
   }
   const out: Record<string, unknown> = {}
   if (value.actionClass !== undefined) {
@@ -201,10 +235,11 @@ function validateCondition(value: Record<string, unknown>): PolicyRule["when"] |
       out[flag] = value[flag]
     }
   }
-  // A condition that validated to nothing would match every request; a
-  // catch-all must be expressed by omitting `when` entirely.
+  // A condition that validated to nothing would match every request while
+  // LOOKING conditioned; catch-alls must be spelled unambiguously (omit `when`
+  // entirely, or `{ always: true }`).
   if (Object.keys(out).length === 0) return null
-  return out as PolicyRule["when"]
+  return out as PolicyCondition
 }
 
 function isStringArray(value: unknown): value is string[] {
@@ -298,6 +333,9 @@ export function resolveConfig(options: Record<string, unknown> | undefined): Rev
     policyRules: resolvePolicyRules(source.policyRules),
     askDecisions:
       typeof source.askDecisions === "boolean" ? source.askDecisions : DEFAULT_CONFIG.askDecisions,
+    ...(isStringArray(source.configDegraded) && source.configDegraded.length > 0
+      ? { configDegraded: source.configDegraded }
+      : {}),
   }
 }
 

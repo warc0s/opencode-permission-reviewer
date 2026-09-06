@@ -171,7 +171,17 @@ function keepMostRecentBlocks(blocks: string[], maxChars: number): string {
   return selected.reverse().join("\n\n")
 }
 
-export function buildIntentHistory(messages: MessageWithParts[], config: ReviewerConfig): string {
+/** Render the USER_INTENT_HISTORY section. In a delegated session there is no
+ *  human-authored user text at all (every user-role message is the parent
+ *  agent's briefing or a `task_id` follow-up), so the section is emptied
+ *  rather than risking agent instructions being read as human intent — they
+ *  already appear, correctly labeled, in LOCAL_SESSION_CONTEXT. */
+export function buildIntentHistory(
+  messages: MessageWithParts[],
+  config: ReviewerConfig,
+  options?: { delegatedSession?: boolean },
+): string {
+  if (options?.delegatedSession === true) return ""
   const seen = new Set<string>()
   const summaries = messages.flatMap((message) => {
     const summary = userIntentSummary(message, config)
@@ -190,10 +200,35 @@ export function buildIntentHistory(messages: MessageWithParts[], config: Reviewe
 function boundedPendingMetadata(
   metadata: Record<string, unknown>,
   max: number,
-): Record<string, unknown> {
+): { metadata: Record<string, unknown>; elided: boolean } {
   const command = metadata.command
-  if (typeof command !== "string" || command.length <= max) return metadata
-  return { ...metadata, command: elideMiddle(command, max) }
+  if (typeof command !== "string" || command.length <= max) {
+    return { metadata, elided: false }
+  }
+  return { metadata: { ...metadata, command: elideMiddle(command, max) }, elided: true }
+}
+
+/** Render the PENDING_PERMISSION section and report whether the action under
+ *  review reached the prompt IN FULL. An elided command middle or a section
+ *  that itself hit the serialization budget means the reviewer judged an
+ *  action it could not see completely — callers must treat that as blocking
+ *  for automatic approval, whatever confidence the model reports. */
+export function pendingPermissionSection(
+  request: PermissionRequest,
+  config: ReviewerConfig,
+): { text: string; actionEvidenceComplete: boolean } {
+  const { metadata, elided } = boundedPendingMetadata(request.metadata, config.maxPartChars)
+  const text = stableJson(
+    {
+      permission: request.permission,
+      patterns: request.patterns,
+      metadata,
+      tool: request.tool,
+    },
+    config.maxPartChars * 2,
+  )
+  const truncated = text.includes('<truncated characters="')
+  return { text, actionEvidenceComplete: !elided && !truncated }
 }
 
 export function buildEvidence(envelope: ReviewEnvelope, config: ReviewerConfig): string {
@@ -201,6 +236,7 @@ export function buildEvidence(envelope: ReviewEnvelope, config: ReviewerConfig):
   // Omitted entirely when empty: absence of ask decisions carries no signal
   // for the reviewer (the transcript remains the fallback source).
   const askDecisions = renderAskDecisions(envelope.askDecisions)
+  const pending = pendingPermissionSection(request, config)
   const evidence = [
     renderPolicySummary(envelope.policyTrace, config.maxPartChars * 2),
     `WORKING_DIRECTORY\n${envelope.directory}`,
@@ -209,15 +245,7 @@ export function buildEvidence(envelope: ReviewEnvelope, config: ReviewerConfig):
     // judges the request knowing who is asking and why.
     ...actorEvidenceSections(envelope, config),
     renderActionPurpose(envelope.actionPurpose, config.maxPartChars * 2),
-    `PENDING_PERMISSION\n${stableJson(
-      {
-        permission: request.permission,
-        patterns: request.patterns,
-        metadata: boundedPendingMetadata(request.metadata, config.maxPartChars),
-        tool: request.tool,
-      },
-      config.maxPartChars * 2,
-    )}`,
+    `PENDING_PERMISSION\n${pending.text}`,
     envelope.enrichment || "ACTION_ENRICHMENT\n<none />",
     `REPOSITORY_CONTEXT\n${stableJson(
       { trust: config.repositoryTrust, directory: envelope.directory, worktree: envelope.worktree },

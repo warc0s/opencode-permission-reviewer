@@ -1,5 +1,5 @@
 import { homedir } from "node:os"
-import { resolve } from "node:path"
+import { normalize, resolve } from "node:path"
 import type {
   CapabilityActionClass,
   CapabilityAssessment,
@@ -349,6 +349,77 @@ const SHELL_KEYWORDS = new Set(["{", "}", "(", ")", "then", "else", "do", "elif"
 
 // --- helpers ----------------------------------------------------------------
 
+/** Mutating forms of executables that are otherwise treated as read-only.
+ *  "This executable usually only reads" must never become "this invocation
+ *  only reads": find/sort/yq all have flags that delete, write, or execute. */
+interface ReadOnlyToolMutation {
+  deletion?: boolean
+  executesCode?: boolean
+  /** Paths written or (for -delete) destroyed, classified like any write. */
+  writeTargets: string[]
+}
+
+/** Placeholder target when a mutating form names no operand: conservatively
+ *  treated as a workspace write (the current directory). */
+const directoryFallback = "."
+
+function readOnlyToolMutation(cmd: ShellToken[], base: string): ReadOnlyToolMutation | undefined {
+  if (base === "find") {
+    // Leading non-flag operands are the search roots (what -delete destroys).
+    let index = 1
+    const roots: string[] = []
+    while (
+      index < cmd.length &&
+      !cmd[index]!.value.startsWith("-") &&
+      cmd[index]!.value !== "!" &&
+      cmd[index]!.value !== "("
+    ) {
+      roots.push(cmd[index]!.value)
+      index += 1
+    }
+    const result: ReadOnlyToolMutation = { writeTargets: [] }
+    for (; index < cmd.length; index += 1) {
+      const value = cmd[index]!.value
+      if (value === "-delete") {
+        result.deletion = true
+        result.writeTargets.push(...roots)
+      } else if (value.startsWith("-exec") || value.startsWith("-ok")) {
+        // -exec / -execdir / -ok / -okdir run an arbitrary command per match.
+        result.executesCode = true
+      } else if (value === "-fls" || value.startsWith("-fprint")) {
+        const target = cmd[index + 1]?.value
+        if (target !== undefined && !target.startsWith("-")) result.writeTargets.push(target)
+      }
+    }
+    return result.deletion || result.executesCode || result.writeTargets.length > 0
+      ? result
+      : undefined
+  }
+  if (base === "sort") {
+    const result: ReadOnlyToolMutation = { writeTargets: [] }
+    for (let index = 1; index < cmd.length; index += 1) {
+      const value = cmd[index]!.value
+      if (value === "-o" || value === "--output") {
+        const target = cmd[index + 1]?.value
+        if (target !== undefined && !target.startsWith("-")) result.writeTargets.push(target)
+      } else if (value.startsWith("--output=")) {
+        result.writeTargets.push(value.slice("--output=".length))
+      }
+    }
+    return result.writeTargets.length > 0 ? result : undefined
+  }
+  if (base === "yq") {
+    // In-place edit: the file operand(s) after the expression are rewritten.
+    if (!cmd.some((token) => token.value === "-i" || token.value === "--inplace")) return undefined
+    const targets = cmd
+      .slice(1)
+      .map((token) => token.value)
+      .filter((value) => !value.startsWith("-"))
+    return targets.length > 0 ? { writeTargets: targets } : { writeTargets: [directoryFallback] }
+  }
+  return undefined
+}
+
 /** Command substitution (`$(...)` or backticks) makes analysis opaque. */
 function hasCommandSubstitution(command: string): boolean {
   return /\$\(|`/.test(command)
@@ -399,8 +470,11 @@ function hasWriteRedirect(redirections: Redirection[]): boolean {
 
 /** Classify a path target as temporary, workspace, or external. Relative
  *  targets (including `..` segments and `~/` homes) are resolved against the
- *  working directory first, so `../../outside` cannot masquerade as a
- *  workspace path. */
+ *  working directory first, and ABSOLUTE targets are lexically normalized, so
+ *  neither `../../outside` nor `/worktree/../etc` can masquerade as a
+ *  workspace path through a prefix it only appears to have. Lexical
+ *  normalization cannot resolve symlinked directory components — the class
+ *  always describes the stated path, not a filesystem-verified destination. */
 function classifyPath(
   target: string,
   directory: string,
@@ -411,11 +485,13 @@ function classifyPath(
   let temp = false
   let external = false
   let workspace = false
-  let absolute = target
+  let absolute: string
   if (target === "~" || target.startsWith("~/")) {
     absolute = resolve(homedir(), target.slice(target === "~" ? 1 : 2))
   } else if (!target.startsWith("/") && !/^[A-Za-z]:[\\/]/.test(target)) {
     absolute = resolve(directory, target)
+  } else {
+    absolute = normalize(target)
   }
   if (
     absolute.startsWith("/tmp/") ||
@@ -556,12 +632,30 @@ export function analyzeCapability(
   for (const cmd of parsed.effective) {
     if (cmd.length === 0) continue
     const base = shellBasename(cmd[0]!.value)
+    // A "usually read-only" executable in a mutating form (find -delete,
+    // sort -o, yq -i) is a mutation: surface its effects here and disqualify
+    // the read-only classification below.
+    const roMutation = readOnlyToolMutation(cmd, base)
+    if (roMutation !== undefined) {
+      if (roMutation.deletion === true) deletion = true
+      if (roMutation.executesCode === true) {
+        executesCode = true
+        childProcesses = true
+      }
+      for (const target of roMutation.writeTargets) {
+        const cls = classifyPath(target, directory, worktree)
+        if (cls.temporary) temporaryWrite = true
+        if (cls.workspace) workspaceWrite = true
+        if (cls.external) externalWrite = true
+      }
+    }
     // Track whether the executable itself is a known no-effect tool. Commands
     // that match one of the effect families below override this in class
     // resolution; for everything else, an unrecognized executable keeps the
     // class "unknown" instead of defaulting to read-only.
     if (
       (READ_ONLY_TOOLS.has(base) || NO_EFFECT_BUILTINS.has(base)) &&
+      roMutation === undefined &&
       !INTERPRETERS.has(base) &&
       !PACKAGE_MANAGERS.has(base) &&
       !NETWORK_CLIENTS.has(base) &&

@@ -91,13 +91,16 @@ export function filterProjectAllowRules(rules: PolicyRule[]): PolicyRule[] {
   return rules.filter((r) => !(r.source === "project" && r.effect === "allow"))
 }
 
-/** Whether every field of a condition matches the observed facts. */
+/** Whether every field of a condition matches the observed facts. A missing
+ *  condition (or `{ always: true }`) is a universal rule: it matches any
+ *  request, which is why the loader only accepts that shape explicitly. */
 function matches(
-  cond: PolicyCondition,
+  cond: PolicyCondition | undefined,
   cap: CapabilityAssessment | undefined,
   actor: ActorContext | undefined,
   config: ReviewerConfig,
 ): boolean {
+  if (cond === undefined || cond.always === true) return true
   if (cond.actionClass !== undefined) {
     if (!Array.isArray(cond.actionClass) || cap === undefined) return false
     if (!cond.actionClass.includes(cap.actionClass.value)) return false
@@ -134,18 +137,24 @@ function matches(
 
 /** Hash of everything that deterministically shapes a policy outcome: the
  *  effective rules plus the decision-relevant config (confidence floor, risk
- *  matrix, repository trust). Two runs that would enforce different thresholds
- *  must not share the same "effective policy" identity. */
+ *  matrix and failure knobs, repository trust, enforcement/escalation modes,
+ *  config degradation). Two runs that would enforce different thresholds or
+ *  failure dispositions must not share the same "effective policy" identity. */
 export function hashEffectivePolicy(rules: PolicyRule[], config: ReviewerConfig): string {
   const rulesCanonical = rules
-    .map((r) => `${r.id}:${r.effect}:${JSON.stringify(r.when)}`)
+    .map((r) => `${r.id}:${r.effect}:${JSON.stringify(r.when ?? null)}`)
     .sort()
     .join("|")
   const decisionConfig = JSON.stringify({
     confidenceThreshold: config.confidenceThreshold,
     minimumConfidence: config.riskPolicy.minimumConfidence,
     riskPolicyAllow: config.riskPolicy.allow,
+    onInvalidDecision: config.riskPolicy.onInvalidDecision,
+    onReviewerFailure: config.riskPolicy.onReviewerFailure,
     repositoryTrust: config.repositoryTrust,
+    enforcementMode: config.enforcementMode,
+    escalationMode: config.escalationMode,
+    configDegraded: config.configDegraded?.length ?? 0,
   })
   return createHash("sha256")
     .update(`${rulesCanonical}#${decisionConfig}`)

@@ -137,20 +137,48 @@ function boundedList(values: string[], max = 200): { values: string[]; omitted: 
  *  keys (pure config reading, executes nothing) and override every one with a
  *  no-op so the evidence snapshot cannot run repo code.
  *
- *  The scan is shared per directory within a short TTL: concurrent snapshots
- *  reuse one in-flight subprocess so burst evidence collection does not
- *  multiply git processes, while the TTL bounds staleness if the repository
- *  config changes mid-session. A failed scan is NOT cached and fails closed —
- *  if the config cannot be inspected, the snapshot is withheld rather than
- *  risk running repo code. */
-const FILTER_SCAN_TTL_MS = 30_000
-const filterScanByDirectory = new Map<string, { scan: Promise<string[]>; at: number }>()
+ *  Only the in-flight subprocess is shared per directory: concurrent snapshots
+ *  reuse one scan so burst evidence collection does not multiply git
+ *  processes, but the result is never reused across time — a repository whose
+ *  config changed since the last verified scan must be re-verified, not
+ *  inspected on stale assurance. A failed or over-limit scan fails closed: if
+ *  the whole relevant config cannot be proven neutralized, the snapshot is
+ *  withheld rather than risk running repo code. */
+const MAX_NEUTRALIZED_FILTERS = 50
+const MAX_NEUTRALIZED_DIFF_DRIVERS = 50
+const inFlightFilterScans = new Map<string, Promise<string[]>>()
+
+/** Filter/driver names may themselves contain dots (`filter.a.b.clean`), so
+ *  keys are matched structurally (strip the section and the trailing property)
+ *  instead of with a dot-free capture group. */
+function collectConversionKeys(stdout: string): {
+  filterNames: Set<string>
+  diffDrivers: Set<string>
+} {
+  const filterNames = new Set<string>()
+  const diffDrivers = new Set<string>()
+  const filterProps = [".clean", ".smudge", ".process", ".required"]
+  for (const line of stdout.split("\n")) {
+    const key = line.split(/\s/, 1)[0]
+    if (key === undefined) continue
+    if (key.startsWith("filter.")) {
+      const prop = filterProps.find((suffix) => key.endsWith(suffix))
+      if (prop === undefined) continue
+      const name = key.slice("filter.".length, key.length - prop.length)
+      if (name.length > 0) filterNames.add(name)
+      continue
+    }
+    if (key.startsWith("diff.") && key.endsWith(".textconv")) {
+      const driver = key.slice("diff.".length, key.length - ".textconv".length)
+      if (driver.length > 0) diffDrivers.add(driver)
+    }
+  }
+  return { filterNames, diffDrivers }
+}
 
 function filterNeutralizationArgs(directory: string): Promise<string[]> {
-  const existing = filterScanByDirectory.get(directory)
-  if (existing !== undefined && Date.now() - existing.at < FILTER_SCAN_TTL_MS) {
-    return existing.scan
-  }
+  const existing = inFlightFilterScans.get(directory)
+  if (existing !== undefined) return existing
   const scan = (async () => {
     try {
       const result = await execFileAsync("git", ["config", "--get-regexp", "^(filter|diff)\\."], {
@@ -160,21 +188,21 @@ function filterNeutralizationArgs(directory: string): Promise<string[]> {
         encoding: "utf8",
         env: gitInspectionEnv(),
       })
-      const filterNames = new Set<string>()
-      const diffDrivers = new Set<string>()
-      for (const line of result.stdout.split("\n")) {
-        const key = line.split(/\s/, 1)[0]
-        if (key === undefined) continue
-        const filterMatch = /^filter\.([^.]+)\.(?:clean|smudge|process|required)$/.exec(key)
-        if (filterMatch) {
-          filterNames.add(filterMatch[1]!)
-          continue
-        }
-        const diffMatch = /^diff\.[^.]+\.textconv$/.exec(key)
-        if (diffMatch) diffDrivers.add(key)
+      const { filterNames, diffDrivers } = collectConversionKeys(result.stdout)
+      if (filterNames.size > MAX_NEUTRALIZED_FILTERS) {
+        // A resource limit must never degrade into "inspect while leaving the
+        // remainder active": refuse the inspection instead.
+        throw new Error(
+          `repository configures ${filterNames.size} conversion filters (limit ${MAX_NEUTRALIZED_FILTERS}); refusing to inspect`,
+        )
+      }
+      if (diffDrivers.size > MAX_NEUTRALIZED_DIFF_DRIVERS) {
+        throw new Error(
+          `repository configures ${diffDrivers.size} diff textconv drivers (limit ${MAX_NEUTRALIZED_DIFF_DRIVERS}); refusing to inspect`,
+        )
       }
       const args: string[] = []
-      for (const name of [...filterNames].slice(0, 50)) {
+      for (const name of filterNames) {
         args.push(
           "-c",
           `filter.${name}.clean=cat`,
@@ -186,21 +214,22 @@ function filterNeutralizationArgs(directory: string): Promise<string[]> {
           `filter.${name}.required=false`,
         )
       }
-      for (const key of [...diffDrivers].slice(0, 50)) {
-        args.push("-c", `${key}=`)
+      for (const driver of diffDrivers) {
+        args.push("-c", `diff.${driver}.textconv=`)
       }
       return args
     } catch (error) {
       const record = error as { code?: unknown }
       // git config exits 1 when nothing matches: the common, benign case.
       if (record.code === 1) return []
-      // Transient or environmental failure: do not cache, and surface it so
-      // the caller can fail closed instead of inspecting unverified.
-      filterScanByDirectory.delete(directory)
+      // Surface scan failures so the caller fails closed instead of
+      // inspecting unverified.
       throw error instanceof Error ? error : new Error(String(error))
+    } finally {
+      inFlightFilterScans.delete(directory)
     }
   })()
-  filterScanByDirectory.set(directory, { scan, at: Date.now() })
+  inFlightFilterScans.set(directory, scan)
   return scan
 }
 

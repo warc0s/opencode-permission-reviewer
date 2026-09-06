@@ -279,7 +279,9 @@ function userTextOf(message: MessageWithParts): string | undefined {
  *  Task-tool parts carry the spawned child session id in
  *  `state.metadata.sessionId`; when present, only the delegation that created
  *  THIS session is recorded, so sibling subagent briefs are not attributed to
- *  the request under review. */
+ *  the request under review. The task text is read from `part.prompt` /
+ *  `part.description` and, for the normal tool-part shape, from the persisted
+ *  call arguments in `state.input`. */
 function extractDelegatedTasks(
   messages: MessageWithParts[],
   sessionID: string,
@@ -291,19 +293,30 @@ function extractDelegatedTasks(
       const isSubtask = part.type === "subtask"
       const isTaskTool = part.type === "tool" && part.tool === "task"
       if (!isSubtask && !isTaskTool) continue
+      let input: Record<string, unknown> | undefined
       if (isTaskTool) {
         const state = part.state as Record<string, unknown> | undefined
         const metadata = state?.metadata as Record<string, unknown> | undefined
         if (typeof metadata?.sessionId === "string" && metadata.sessionId !== childSessionID) {
           continue
         }
+        input =
+          typeof state?.input === "object" && state?.input !== null
+            ? (state.input as Record<string, unknown>)
+            : undefined
       }
+      const fromInput =
+        typeof input?.prompt === "string"
+          ? input.prompt
+          : typeof input?.description === "string"
+            ? input.description
+            : undefined
       const text =
         typeof part.prompt === "string"
           ? part.prompt
           : typeof part.description === "string"
             ? part.description
-            : undefined
+            : fromInput
       if (!text || !text.trim()) continue
       blocks.push({
         sessionID,
@@ -324,33 +337,31 @@ function extractDelegatedTasks(
   return blocks
 }
 
-function extractDirectIntent(
+/** Extract the user-role text blocks of one session with a single source rule:
+ *  in a DELEGATED session (one created by a parent agent's task tool) every
+ *  user-role message is agent-authored — the initial briefing AND any later
+ *  `task_id` follow-ups — so they are labeled `assistant` and can never be
+ *  presented as human authorization. In a top-level session they are human
+ *  input. Message-window position is irrelevant to origin, which is why this
+ *  does not "skip the first message". */
+function extractSessionUserBlocks(
   messages: MessageWithParts[],
   sessionID: string,
-  options?: { skipFirstUserMessage?: boolean },
+  delegated: boolean,
 ): IntentBlock[] {
   const blocks: IntentBlock[] = []
-  let skippedFirst = false
   for (const message of messages) {
     const text = userTextOf(message)
     if (!text) continue
-    // In a delegated (child) session the FIRST user message is the parent
-    // agent's briefing, not a human instruction; it is attribution noise for
-    // "did the user authorize this" and is already recovered as a delegated
-    // task from the parent session.
-    if (options?.skipFirstUserMessage === true && !skippedFirst) {
-      skippedFirst = true
-      continue
-    }
     const createdAt = messageCreatedAt(message)
     blocks.push({
       sessionID,
       messageID: typeof message.info.id === "string" ? message.info.id : "",
-      actor: "user",
+      actor: delegated ? "assistant" : "user",
       text,
       synthetic: false,
       ...(createdAt === undefined ? {} : { createdAt }),
-      provenance: prov<"intent">("intent", "parent-session", "high"),
+      provenance: prov<"intent">("intent", delegated ? "parent-session" : "session-api", "high"),
     })
   }
   return blocks
@@ -364,24 +375,37 @@ async function resolveIntent(
   directory: string,
   config: ReviewerConfig,
 ): Promise<IntentContext> {
-  // Local (current session) direct intent. In a delegated session the first
-  // user message is the parent agent's briefing, not human input.
-  const localSessionIntent = extractDirectIntent(currentMessages, request.sessionID, {
-    skipFirstUserMessage: lineage.depth > 0,
-  })
+  // One source rule for every intent section: a session created by a parent
+  // agent (delegated) has NO human-authored user messages — the initial
+  // briefing and every `task_id` follow-up all come from the orchestrating
+  // agent. They remain visible as local-session context labeled `assistant`
+  // but can never surface as human authorization.
+  const currentDelegated = lineage.depth > 0
+  const localSessionIntent = extractSessionUserBlocks(
+    currentMessages,
+    request.sessionID,
+    currentDelegated,
+  )
+  const directUserIntent: IntentBlock[] = currentDelegated ? [] : localSessionIntent
+  const delegatedTask: IntentBlock[] = []
   const limit = Math.max(config.intentMessages, 4)
 
-  const directUserIntent: IntentBlock[] = [...localSessionIntent]
-  const delegatedTask: IntentBlock[] = []
-
-  // Immediate parent: delegation that created/instructed this session.
+  // Immediate parent: delegation that created/instructed this session. The
+  // parent's own user messages are human intent only when the parent is
+  // itself a top-level session (no grandparent).
   const parent = lineage.nodes[1]
   if (parent) {
     const parentMessages = await fetchMessagesBounded(client, parent.sessionID, directory, limit)
     delegatedTask.push(
       ...extractDelegatedTasks(parentMessages, parent.sessionID, request.sessionID),
     )
-    directUserIntent.push(...extractDirectIntent(parentMessages, parent.sessionID))
+    directUserIntent.push(
+      ...extractSessionUserBlocks(
+        parentMessages,
+        parent.sessionID,
+        parent.parentID !== undefined,
+      ).filter((block) => block.actor === "user"),
+    )
   }
 
   // Root session (if distinct from parent AND from the current session whose
@@ -389,7 +413,11 @@ async function resolveIntent(
   const root = lineage.nodes[lineage.nodes.length - 1]
   if (root && root !== parent && root.sessionID !== request.sessionID) {
     const rootMessages = await fetchMessagesBounded(client, root.sessionID, directory, limit)
-    directUserIntent.push(...extractDirectIntent(rootMessages, root.sessionID))
+    directUserIntent.push(
+      ...extractSessionUserBlocks(rootMessages, root.sessionID, root.parentID !== undefined).filter(
+        (block) => block.actor === "user",
+      ),
+    )
   }
 
   // Pick by creation time, not by array position: the intent arrays are
@@ -405,13 +433,19 @@ async function resolveIntent(
       : directUserIntent[directUserIntent.length - 1]
 
   const reasons: string[] = []
-  if (delegatedTask.length === 0) reasons.push("no delegation subtask located in parent session")
+  if (delegatedTask.length === 0 && lineage.depth > 0)
+    reasons.push("no delegation subtask located in parent session")
   if (lineage.missingParents.length > 0)
     reasons.push(`missing parents: ${lineage.missingParents.join(", ")}`)
-  if (directUserIntent.length === 0) reasons.push("no direct user intent recovered")
+  if (directUserIntent.length === 0)
+    reasons.push(
+      currentDelegated
+        ? "delegated session: no human-authored user messages exist in this session chain window"
+        : "no direct user intent recovered",
+    )
 
   const completeness: IntentContext["completeness"] =
-    directUserIntent.length > 0 && delegatedTask.length > 0
+    directUserIntent.length > 0 && (delegatedTask.length > 0 || !currentDelegated)
       ? "complete"
       : directUserIntent.length > 0 || localSessionIntent.length > 0
         ? "partial"

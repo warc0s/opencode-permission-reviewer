@@ -1,12 +1,13 @@
 import { createHash } from "node:crypto"
 import { constants as fsConstants } from "node:fs"
-import { open, realpath } from "node:fs/promises"
+import { open, realpath, readlink } from "node:fs/promises"
 import { basename, isAbsolute, resolve, sep } from "node:path"
 import type { PermissionRequest } from "./types.ts"
 import { sourceCommand } from "./evidence/source-command.ts"
 
 const O_RDONLY = typeof fsConstants.O_RDONLY === "number" ? fsConstants.O_RDONLY : 0
 const O_NOFOLLOW = typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0
+const O_NONBLOCK = typeof fsConstants.O_NONBLOCK === "number" ? fsConstants.O_NONBLOCK : 0
 
 interface Token {
   value: string
@@ -320,6 +321,19 @@ function within(path: string, root: string): boolean {
   return path === root || path.startsWith(`${root}${sep}`)
 }
 
+/** Best-effort Linux-only resolution of an open descriptor back to its real
+ *  path (`/proc/self/fd/<n>`). Returns undefined where /proc is unavailable
+ *  (non-Linux platforms, hardened containers): the caller then keeps the
+ *  pre-open checks as the only line of defense, which is the documented
+ *  limitation rather than a silent pass. */
+async function descriptorRealPath(fd: number): Promise<string | undefined> {
+  try {
+    return await readlink(`/proc/self/fd/${fd}`)
+  } catch {
+    return undefined
+  }
+}
+
 async function includeFileOnce(
   source: string,
   directory: string,
@@ -360,9 +374,12 @@ async function includeFileOnce(
     // Open first, then verify through the open descriptor (fstat): the checks
     // above judged a path, and the descriptor is the only thing guaranteed to
     // match what we actually read. O_NOFOLLOW (where available) rejects a
-    // last-component symlink swapped in between realpath and open.
+    // last-component symlink swapped in between realpath and open. O_NONBLOCK
+    // keeps the open from BLOCKING on a FIFO with no writer — without it the
+    // review would hang before fstat ever got the chance to reject the
+    // non-regular file; on regular files the flag is a no-op.
     const limit = Math.max(1, maxChars)
-    const handle = await open(actual, O_RDONLY | O_NOFOLLOW)
+    const handle = await open(actual, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
     try {
       const info = await handle.stat()
       if (!info.isFile()) {
@@ -371,6 +388,31 @@ async function includeFileOnce(
           path: resolved,
           status: "unavailable",
           reason: "not a regular file",
+        }
+      }
+      // O_NOFOLLOW only guards the LAST path component. On Linux, resolve the
+      // open descriptor back to its real path and re-run the containment and
+      // sensitivity checks against what is actually being read: an
+      // intermediate directory swapped for a symlink between the realpath
+      // check and the open is then caught instead of silently reading outside
+      // the approved roots.
+      const fdPath = await descriptorRealPath(handle.fd)
+      if (fdPath !== undefined) {
+        if (![directoryRoot, worktreeRoot, temporaryRoot].some((root) => within(fdPath, root))) {
+          return {
+            source: "file",
+            path: resolved,
+            status: "blocked",
+            reason: `open descriptor resolves outside approved enrichment roots (${fdPath})`,
+          }
+        }
+        if (SENSITIVE_PATH.test(fdPath)) {
+          return {
+            source: "file",
+            path: resolved,
+            status: "blocked",
+            reason: "sensitive resolved path",
+          }
         }
       }
       const buffer = Buffer.alloc(Math.min(info.size, limit + 1))

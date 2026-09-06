@@ -16,7 +16,9 @@ describe("characterization gaps (baseline prereq)", () => {
     const result = await harness.runtime.process(request())
     expect(result.kind).toBe("escalate")
     expect(result.reason).toContain("session.create failed")
-    expect(client.creates).toHaveLength(1)
+    // Two attempts: the isolated reviewer directory first, then the fallback
+    // to the project directory. Both fail → escalate, no reviewer call.
+    expect(client.creates).toHaveLength(2)
     expect(client.prompts).toHaveLength(0)
     expect(client.replies).toHaveLength(0)
     expect(client.deletes).toHaveLength(0)

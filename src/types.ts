@@ -69,8 +69,11 @@ export interface RiskPolicy {
 export type RepositoryTrust = "trusted" | "untrusted" | "unknown"
 
 /** A declarative policy condition: matches capability/actor facts. Every field
- *  is optional; the rule matches when ALL specified fields match. */
+ *  is optional; the rule matches when ALL specified fields match. A missing
+ *  `when` (or `{ always: true }`) makes the rule universal. */
 export interface PolicyCondition {
+  /** Explicit catch-all: valid only as the sole key. */
+  always?: true
   actionClass?: CapabilityActionClass[]
   actorProfile?: ActorProfile[]
   writesWorkspace?: boolean
@@ -88,11 +91,13 @@ export interface PolicyCondition {
   repositoryTrust?: RepositoryTrust[]
 }
 
-/** A declarative rule that routes a request based on capability+actor facts. */
+/** A declarative rule that routes a request based on capability+actor facts.
+ *  `when` is optional: omitting it (or `{ always: true }`) matches every
+ *  request. An explicitly empty `when: {}` is rejected at load. */
 export interface PolicyRule {
   id: string
   source: "builtin" | "global" | "project" | "inline"
-  when: PolicyCondition
+  when?: PolicyCondition
   effect: "review" | "manual" | "deny" | "allow"
   reason: string
 }
@@ -159,6 +164,11 @@ export interface ReviewerConfig {
   /** Capture user answers to agent ask dialogs (question tool) and surface
    *  them to the reviewer as scoped authorization evidence. */
   askDecisions: boolean
+  /** Non-empty when a TRUSTED config source (global file, inline options)
+   *  existed but could not be fully honored (malformed file, unreadable file,
+   *  or rules dropped by validation). Degraded configs block automatic
+   *  approval: restrictions may have been lost, so requests escalate instead. */
+  configDegraded?: string[]
 }
 
 export interface ReviewEnvelope {
@@ -186,6 +196,11 @@ export interface ReviewEnvelope {
   /** Per-phase timing captured during evidence assembly (context/enrichment).
    *  The reviewer and reply phases are timed in the coordinator. */
   timings?: { contextMs?: number; enrichmentMs?: number }
+  /** False when a material part of the action under review (e.g. an elided
+   *  command segment) never reached the rendered evidence. Blocking: the
+   *  coordinator must not auto-approve an action the reviewer could not see
+   *  in full, whatever confidence the model reports. */
+  actionEvidenceComplete?: boolean
   /** The parsed command reused across evidence providers. */
   parsedCommand?: ParsedCommand
   /** Operational purpose of the pending action (evidence, never authorization). */

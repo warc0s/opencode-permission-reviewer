@@ -16,14 +16,14 @@ import { analyzeCapability } from "../src/capability/bash-analyzer.ts"
 import { parseCommand } from "../src/capability/command-parser.ts"
 import { emergencyBrakeReason } from "../src/emergency-brake.ts"
 import { enforceDecision } from "../src/decision.ts"
-import { enrichSshEvidence } from "../src/ssh-evidence.ts"
+import { enrichSshEvidence, includeEvidenceFile } from "../src/ssh-evidence.ts"
 import { enrichGitEvidence } from "../src/git-evidence.ts"
 import { buildEvidence, buildTranscript } from "../src/context.ts"
 import { createAuditWriter, readAuditSummary } from "../src/audit.ts"
 import { resolveActorContext } from "../src/context/actor-resolver.ts"
 import type { MessageWithParts, PermissionRequest } from "../src/types.ts"
 import type { OpenCodeClientLike, ClientResponse } from "../src/opencode/types.ts"
-import { request } from "./helpers.ts"
+import { MockClient, request, runtime } from "./helpers.ts"
 
 const execFileAsync = promisify(execFile)
 
@@ -593,27 +593,58 @@ describe("trust hardening — actor intent provenance", () => {
     expect(briefs).not.toContain("sibling brief")
   })
 
-  test("the first user message of a delegated session is not human intent", async () => {
+  test("no user-role message of a delegated session is human intent (briefing or follow-up)", async () => {
+    // A subagent session's user-role messages are ALL agent-authored: the
+    // initial briefing plus any later instruction the parent sends through
+    // the task tool. None of them may surface as human authorization.
     const messages = [
       {
-        info: { id: "m1", role: "user" },
+        info: { id: "m1", role: "user", time: { created: 100 } },
         parts: [{ type: "text", text: "parent agent briefing" }],
       },
-      { info: { id: "m2", role: "user" }, parts: [{ type: "text", text: "human interjection" }] },
+      {
+        info: { id: "m2", role: "user", time: { created: 200 } },
+        parts: [{ type: "text", text: "follow-up instruction via task_id" }],
+      },
     ] as MessageWithParts[]
     const res = await resolveActorContext(
       request({ sessionID: "ses_child" }) as PermissionRequest,
       messages,
       actorClient({
         ses_child: { meta: { id: "ses_child", parentID: "ses_parent" } },
-        ses_parent: { meta: { id: "ses_parent" } },
+        ses_parent: {
+          meta: { id: "ses_parent" },
+          messages: [
+            {
+              info: { id: "task", role: "assistant" },
+              parts: [
+                {
+                  type: "tool",
+                  tool: "task",
+                  state: {
+                    metadata: { sessionId: "ses_child" },
+                    input: { prompt: "do the thing" },
+                  },
+                },
+              ],
+            } as never,
+          ],
+        },
       }),
       "/repo",
       cfg,
     )
+    // The agent-authored texts stay visible as local-session context...
     const texts = res.intent.localSessionIntent.map((b) => b.text)
-    expect(texts).not.toContain("parent agent briefing")
-    expect(texts).toContain("human interjection")
+    expect(texts).toContain("parent agent briefing")
+    expect(texts).toContain("follow-up instruction via task_id")
+    // ...labeled as assistant, never promoted to human authorization.
+    for (const block of res.intent.localSessionIntent) {
+      expect(block.actor).toBe("assistant")
+    }
+    expect(res.intent.directUserIntent).toEqual([])
+    // The delegation itself is recovered from the parent's task-tool input.
+    expect(res.intent.delegatedTask.map((b) => b.text)).toEqual(["do the thing"])
   })
 
   test("latestExplicitAuthorization picks by timestamp, not array position", async () => {
@@ -626,7 +657,7 @@ describe("trust hardening — actor intent provenance", () => {
         },
         {
           info: { id: "local1", role: "user", time: { created: 2_000 } },
-          parts: [{ type: "text", text: "NEWEST local instruction" }],
+          parts: [{ type: "text", text: "NEWEST agent follow-up" }],
         },
       ] as MessageWithParts[],
       actorClient({
@@ -636,7 +667,7 @@ describe("trust hardening — actor intent provenance", () => {
           messages: [
             {
               info: { id: "rootold", role: "user", time: { created: 1_000 } },
-              parts: [{ type: "text", text: "OLDER parent instruction" }],
+              parts: [{ type: "text", text: "OLDER human instruction" }],
             },
           ],
         },
@@ -644,6 +675,372 @@ describe("trust hardening — actor intent provenance", () => {
       "/repo",
       cfg,
     )
-    expect(res.intent.latestExplicitAuthorization?.text).toBe("NEWEST local instruction")
+    // The delegated session's newest message is agent-authored; the latest
+    // HUMAN authorization is the older parent-session instruction.
+    expect(res.intent.latestExplicitAuthorization?.text).toBe("OLDER human instruction")
+  })
+})
+
+// --- git filter neutralization: dotted names, limits, no cross-time cache --------------
+
+describe("trust hardening — git conversion-filter neutralization edge cases", () => {
+  async function initRepoWithFilter(
+    directory: string,
+    key: string,
+    value: string,
+    marker: string,
+  ): Promise<void> {
+    const run = (args: string[]) => execFileAsync("git", args, { cwd: directory })
+    await run(["init", "-b", "staging"])
+    await run(["config", "user.email", "reviewer@example.invalid"])
+    await run(["config", "user.name", "Reviewer Test"])
+    await run(["config", key, value])
+    writeFileSync(join(directory, ".gitattributes"), "* filter=pwn\n")
+    writeFileSync(join(directory, "data.txt"), "AAAA\n")
+    await run(["add", "data.txt"])
+    await run(["commit", "-m", "fixture"])
+    writeFileSync(join(directory, "data.txt"), "BBBB\n")
+    rmSync(marker, { force: true })
+  }
+
+  test("a filter name containing dots is neutralized too", async () => {
+    const directory = tempDir("reviewer-gitfilter-dotted-")
+    try {
+      const marker = join(directory, "filter-ran-marker")
+      await initRepoWithFilter(directory, "filter.audit.demo.clean", `touch ${marker}; cat`, marker)
+      const result = await enrichGitEvidence(
+        bashRequest("git add data.txt && git commit -m bounded"),
+        directory,
+        24_000,
+      )
+      expect(result.text).toContain("GIT_STATE_ANALYSIS")
+      expect(existsSync(marker)).toBe(false)
+    } finally {
+      rmSync(directory, { recursive: true })
+    }
+  }, 20_000)
+
+  test("more conversion filters than the neutralization limit refuses the inspection", async () => {
+    const directory = tempDir("reviewer-gitfilter-many-")
+    try {
+      const run = (args: string[]) => execFileAsync("git", args, { cwd: directory })
+      await run(["init", "-b", "staging"])
+      await run(["config", "user.email", "reviewer@example.invalid"])
+      await run(["config", "user.name", "Reviewer Test"])
+      for (let i = 0; i < 55; i += 1) {
+        await run(["config", `filter.filler${i}.clean`, "cat"])
+      }
+      writeFileSync(join(directory, "data.txt"), "BBBB\n")
+      const result = await enrichGitEvidence(
+        bashRequest("git add data.txt && git commit -m bounded"),
+        directory,
+        24_000,
+      )
+      // Fail closed: over-limit config cannot be proven neutralized, so no
+      // snapshot is taken and the reason says so.
+      expect(result.text).toContain("unavailable")
+      expect(result.text).toContain("refusing to inspect")
+    } finally {
+      rmSync(directory, { recursive: true })
+    }
+  }, 20_000)
+
+  test("a filter configured AFTER a previous inspection is not trusted from any earlier scan", async () => {
+    const directory = tempDir("reviewer-gitfilter-fresh-")
+    try {
+      const marker = join(directory, "filter-ran-marker")
+      await initRepoWithFilter(directory, "filter.pwn.clean", "touch never; cat", marker)
+      // First inspection with a benign filter; then the repo swaps in an
+      // executing filter. There is no TTL cache to lean on, so the second
+      // inspection must re-scan and neutralize the new filter.
+      await enrichGitEvidence(
+        bashRequest("git add data.txt && git commit -m one"),
+        directory,
+        24_000,
+      )
+      await execFileAsync("git", ["config", "filter.pwn.clean", `touch ${marker}; cat`], {
+        cwd: directory,
+      })
+      rmSync(marker, { force: true })
+      const result = await enrichGitEvidence(
+        bashRequest("git add data.txt && git commit -m two"),
+        directory,
+        24_000,
+      )
+      expect(result.text).toContain("GIT_STATE_ANALYSIS")
+      expect(existsSync(marker)).toBe(false)
+    } finally {
+      rmSync(directory, { recursive: true })
+    }
+  }, 30_000)
+})
+
+// --- universal rules and degraded trusted config ----------------------------------------
+
+describe("trust hardening — universal rules and fail-closed trusted config", () => {
+  test("omitting when (or always:true) makes a rule universal and it matches everything", () => {
+    const omitted = resolveConfig({
+      policyRules: [{ id: "catch-all", source: "global", effect: "deny", reason: "everything" }],
+    })
+    expect(omitted.policyRules).toHaveLength(1)
+    expect(omitted.policyRules[0]!.when).toBeUndefined()
+    const trace = evaluatePolicy(undefined, undefined, omitted, omitted.policyRules)
+    expect(trace.finalRoute).toBe("deny")
+
+    const explicit = resolveConfig({
+      policyRules: [
+        {
+          id: "catch-all-2",
+          source: "global",
+          effect: "manual",
+          reason: "everything",
+          when: { always: true },
+        },
+      ],
+    })
+    expect(explicit.policyRules).toHaveLength(1)
+    expect(evaluatePolicy(undefined, undefined, explicit, explicit.policyRules).finalRoute).toBe(
+      "manual",
+    )
+
+    // `always` combined with other keys is contradictory and rejected.
+    const mixed = resolveConfig({
+      policyRules: [
+        {
+          id: "mixed",
+          source: "global",
+          effect: "deny",
+          reason: "mixed",
+          when: { always: true, deletion: true },
+        },
+      ],
+    })
+    expect(mixed.policyRules).toHaveLength(0)
+  })
+
+  test("a malformed global config degrades the config and blocks automatic approval", async () => {
+    const globalPath = join(tempDir("reviewer-globalcfg-"), "permission-reviewer.jsonc")
+    try {
+      mkdirSync(join(globalPath, ".."), { recursive: true })
+      writeFileSync(globalPath, "{ confidenceThreshold: ") // unterminated
+      setGlobalConfigPathForTests(globalPath)
+      const config = loadResolvedConfig({ confidenceThreshold: 0.9 })
+      expect(config.configDegraded).toBeDefined()
+      expect(config.configDegraded!.join(" ")).toContain("malformed")
+
+      // An LLM allow under a degraded config must not auto-approve.
+      const client = new MockClient()
+      const harness = runtime(client, config)
+      const result = await harness.runtime.process(request())
+      expect(result.kind).toBe("escalate")
+      expect(result.reason).toContain("degraded")
+      expect(client.replies).toHaveLength(0)
+    } finally {
+      setGlobalConfigPathForTests(undefined)
+      rmSync(join(globalPath, ".."), { recursive: true })
+    }
+  })
+
+  test("invalid trusted policy rules degrade the config instead of silently vanishing", () => {
+    const globalPath = join(tempDir("reviewer-globalrules-"), "permission-reviewer.jsonc")
+    try {
+      mkdirSync(join(globalPath, ".."), { recursive: true })
+      writeFileSync(
+        globalPath,
+        JSON.stringify({
+          policyRules: [
+            {
+              id: "typo",
+              source: "global",
+              effect: "deny",
+              reason: "typo",
+              when: { netwrk: true },
+            },
+          ],
+        }),
+      )
+      setGlobalConfigPathForTests(globalPath)
+      const config = loadResolvedConfig({})
+      expect(config.configDegraded).toBeDefined()
+      expect(config.configDegraded!.join(" ")).toContain("dropped by validation")
+      // The dropped deny rule did not survive as a rule…
+      expect(config.policyRules).toHaveLength(0)
+      // …and the degradation enters the effective-policy identity.
+      setGlobalConfigPathForTests(undefined)
+      const clean = loadResolvedConfig({})
+      expect(evaluatePolicy(undefined, undefined, config, []).effectivePolicyHash).not.toBe(
+        evaluatePolicy(undefined, undefined, clean, []).effectivePolicyHash,
+      )
+    } finally {
+      setGlobalConfigPathForTests(undefined)
+      rmSync(join(globalPath, ".."), { recursive: true })
+    }
+  })
+
+  test("an unreadable global config (not missing) degrades the config", () => {
+    // A directory at the config path: exists, but cannot be read as a file.
+    const dir = tempDir("reviewer-globaldir-")
+    try {
+      setGlobalConfigPathForTests(dir)
+      const config = loadResolvedConfig({})
+      expect(config.configDegraded).toBeDefined()
+      expect(config.configDegraded!.join(" ")).toContain("could not be read")
+    } finally {
+      setGlobalConfigPathForTests(undefined)
+      rmSync(dir, { recursive: true })
+    }
+  })
+})
+
+// --- elided action evidence blocks approval ---------------------------------------------
+
+describe("trust hardening — elided action evidence blocks automatic approval", () => {
+  test("an LLM allow for a command whose middle was elided escalates instead", async () => {
+    const client = new MockClient()
+    const harness = runtime(client)
+    const longCommand = `printf '${"x".repeat(9_000)}' ; rm -rf /tmp/scratch ; echo ${"y".repeat(9_000)}`
+    const result = await harness.runtime.process(
+      request({ metadata: { command: longCommand }, patterns: [longCommand] }),
+    )
+    expect(result.kind).toBe("escalate")
+    expect(result.reason).toContain("elided or truncated")
+    expect(client.replies).toHaveLength(0)
+    expect(client.uiStatuses.map((s) => s.phase)).toEqual(["reviewing", "manual"])
+  })
+})
+
+// --- reviewer isolation -------------------------------------------------------------------
+
+describe("trust hardening — reviewer session isolation", () => {
+  test("the reviewer session runs in an isolated directory with a wildcard tool deny", async () => {
+    const client = new MockClient()
+    const harness = runtime(client)
+    const result = await harness.runtime.process(request())
+    expect(result.kind).toBe("allow")
+
+    expect(client.creates).toHaveLength(1)
+    const create = client.creates[0] as {
+      body?: { parentID?: string }
+      query?: { directory?: string }
+    }
+    // Isolated directory (not the project directory), no cross-instance parent.
+    expect(create.query?.directory).toContain("tmp-reviewer-isolated")
+    expect(create.query?.directory).not.toBe("/workspace/project")
+    expect(create.body?.parentID).toBeUndefined()
+
+    // Every prompt carries the same isolated directory and a wildcard deny
+    // covering named tools AND anything else (MCP included).
+    expect(client.prompts.length).toBeGreaterThan(0)
+    for (const prompt of client.prompts as Array<{
+      query?: { directory?: string }
+      body?: { tools?: Record<string, boolean> }
+    }>) {
+      expect(prompt.query?.directory).toBe(create.query?.directory)
+      expect(prompt.body?.tools?.["*"]).toBe(false)
+      for (const id of ["bash", "read", "write", "webfetch", "task"]) {
+        expect(prompt.body?.tools?.[id]).toBe(false)
+      }
+    }
+    const del = client.deletes[0] as { query?: { directory?: string } }
+    expect(del.query?.directory).toBe(create.query?.directory)
+  })
+
+  test("when the isolated directory is refused, the reviewer falls back to the project directory", async () => {
+    const client = new MockClient()
+    const isolated = `${import.meta.dir}/.tmp-reviewer-isolated`
+    const originalCreate = client.session.create.bind(client)
+    client.session.create = async (options: unknown) => {
+      const query = (options as { query?: { directory?: string } }).query
+      if (query?.directory === isolated) {
+        client.creates.push(options)
+        return { error: { message: "unknown directory" } }
+      }
+      return originalCreate(options)
+    }
+    const harness = runtime(client)
+    const result = await harness.runtime.process(request())
+    expect(result.kind).toBe("allow")
+    expect(client.creates).toHaveLength(2)
+    const fallback = client.creates[1] as {
+      body?: { parentID?: string }
+      query?: { directory?: string }
+    }
+    expect(fallback.query?.directory).toBe("/workspace/project")
+    expect(fallback.body?.parentID).toBe("ses_main")
+  })
+})
+
+// --- analyzer: mutating forms of read-only tools and absolute normalization --------------
+
+describe("trust hardening — read-only tools in mutating forms", () => {
+  test("find -delete is a deletion, not read-only", () => {
+    const cap = assess("find . -delete")
+    expect(cap.writeEffects.deletion.value).toBe(true)
+    expect(cap.actionClass.value).toBe("destruction")
+  })
+
+  test("find -exec executes code", () => {
+    const cap = assess("find . -name '*.tmp' -exec rm {} ;")
+    expect(cap.executesCode.value).toBe(true)
+    expect(cap.actionClass.value).toBe("code-execution")
+  })
+
+  test("sort -o writes the named file", () => {
+    const cap = assess("sort input.txt -o output.txt")
+    expect(cap.writeEffects.workspaceWrite.value).toBe(true)
+    expect(cap.actionClass.value).not.toBe("read-only")
+  })
+
+  test("plain find and sort remain read-only", () => {
+    expect(assess("find . -name '*.tmp'").actionClass.value).toBe("read-only")
+    expect(assess("sort input.txt").actionClass.value).toBe("read-only")
+  })
+
+  test("absolute paths with .. are normalized before classification", () => {
+    expect(assess("cat /home/user/project/../etc/hosts").actionClass.value).toBe("read-only")
+    const mv = assess(`mv file.txt ${DIR}/../outside.txt`)
+    expect(mv.writeEffects.externalWrite.value).toBe(true)
+    const tmp = assess(`cp a /tmp/../etc/passwd`)
+    expect(tmp.writeEffects.externalWrite.value).toBe(true)
+    // Normalization moved it out of the temp roots: not a temporary write.
+    expect(tmp.writeEffects.temporaryWrite.value).not.toBe(true)
+  })
+})
+
+// --- ssh file evidence: FIFO and intermediate symlinks -------------------------------------
+
+describe("trust hardening — ssh stdin file evidence resilience", () => {
+  test("a FIFO at the stdin path returns quickly instead of blocking the review", async () => {
+    const directory = tempDir("reviewer-fifo-")
+    try {
+      const fifo = join(directory, "pipe")
+      await execFileAsync("mkfifo", [fifo])
+      const started = Date.now()
+      const result = await includeEvidenceFile(fifo, directory, directory, 10_000)
+      expect(Date.now() - started).toBeLessThan(5_000)
+      expect(result.status).toBe("unavailable")
+      expect(result.reason).toContain("not a regular file")
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  }, 10_000)
+
+  test("a stdin file behind an intermediate directory symlink inside the roots still resolves", async () => {
+    const directory = tempDir("reviewer-symdir-")
+    try {
+      mkdirSync(join(directory, "real"))
+      writeFileSync(join(directory, "real", "script.txt"), "echo ok\n")
+      await execFileAsync("ln", ["-s", join(directory, "real"), join(directory, "sub")])
+      const result = await includeEvidenceFile(
+        join(directory, "sub", "script.txt"),
+        directory,
+        directory,
+        10_000,
+      )
+      expect(result.status).toBe("included")
+      expect(result.content).toContain("echo ok")
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
   })
 })

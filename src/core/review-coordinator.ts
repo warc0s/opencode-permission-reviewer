@@ -121,6 +121,11 @@ export class ReviewCoordinator {
    *  status publishing): a hung call must never leave a review pending
    *  forever; the reviewer prompt keeps its own full timeout budget. */
   private readonly metadataCallTimeoutMs: number
+  /** Directory the reviewer session runs in, once initialized. Sessions are
+   *  created OUTSIDE the project directory so host-loaded project context
+   *  (AGENTS.md, project config instructions and their remote URLs, project
+   *  MCP servers) never becomes part of the reviewer's system prompt. */
+  private isolatedReviewerDirectory: string | undefined
 
   constructor(
     private readonly ctx: RuntimeContext,
@@ -399,8 +404,30 @@ export class ReviewCoordinator {
     }
 
     if (this.isSuperseded(request)) return this.supersedeResult()
-    const reviewed = await this.runReviewer(envelope)
+    let reviewed = await this.runReviewer(envelope)
     if (this.isSuperseded(request)) return this.supersedeResult()
+
+    // Deterministic blocks on automatic approval. The reviewer model's
+    // confidence is irrelevant here: a degraded trusted config may have lost
+    // the restrictions it was supposed to carry, and elided evidence means the
+    // model judged an action it could not see in full. Both escalate.
+    if (reviewed.kind === "allow") {
+      const block = this.autoApprovalBlockReason(envelope)
+      if (block !== undefined) {
+        reviewed = this.disposeEscalate(
+          {
+            kind: "escalate",
+            reason: block,
+            ...(reviewed.decision === undefined ? {} : { decision: reviewed.decision }),
+            ...(reviewed.reviewSessionID === undefined
+              ? {}
+              : { reviewSessionID: reviewed.reviewSessionID }),
+            decisionSource: "deterministic-policy",
+          },
+          "general",
+        )
+      }
+    }
 
     // runReviewer already applied category-specific knobs (invalid-decision /
     // reviewer-failure) and stamps escalationDisposition when it does. Remaining
@@ -411,6 +438,18 @@ export class ReviewCoordinator {
         : reviewed
 
     return await this.applyDisposition(request, disposed)
+  }
+
+  /** Why an LLM "allow" must not auto-approve, or undefined when it may. */
+  private autoApprovalBlockReason(envelope: ReviewEnvelope): string | undefined {
+    const degraded = this.config.configDegraded
+    if (degraded !== undefined && degraded.length > 0) {
+      return `Automatic approval is disabled: the reviewer configuration is degraded (${degraded.join("; ")}). Fix the trusted config to restore auto-approval.`
+    }
+    if (envelope.actionEvidenceComplete === false) {
+      return "Automatic approval is blocked: a material part of the pending action was elided or truncated in the reviewer evidence, so the model judged an incomplete view of the action."
+    }
+    return undefined
   }
 
   handlePermissionReply(event: unknown): void {
@@ -599,22 +638,51 @@ export class ReviewCoordinator {
     })
   }
 
-  private async runReviewer(envelope: ReviewEnvelope): Promise<ReviewExecutionResult> {
-    const { providerID, modelID } = splitModel(this.config.model)
-    const model = { providerID, modelID }
-    let reviewSessionID: string | undefined
-
+  /**
+   * Resolve (and create once) the scratch directory reviewer sessions run in.
+   * The directory has no AGENTS.md/CLAUDE.md and no project config, so the
+   * host only loads the user's trusted global instructions for the reviewer
+   * session. Returns undefined when the directory cannot be created; callers
+   * then fall back to the project directory and log the downgrade.
+   */
+  private async reviewerSessionDirectory(): Promise<string | undefined> {
+    if (this.isolatedReviewerDirectory !== undefined) return this.isolatedReviewerDirectory
     try {
+      const { mkdir } = await import("node:fs/promises")
+      const { expandHome } = await import("../audit.ts")
+      const base =
+        this.ctx.reviewerDirectoryBase ?? "~/.local/share/opencode/permission-reviewer-isolated"
+      const directory = expandHome(base)
+      await mkdir(directory, { recursive: true, mode: 0o700 })
+      this.isolatedReviewerDirectory = directory
+      return directory
+    } catch (error) {
+      this.log("could not create the isolated reviewer directory", {
+        error: error instanceof Error ? error.message : String(error),
+      })
+      return undefined
+    }
+  }
+
+  /** Create the reviewer session, preferring the isolated directory. Throws
+   *  only when both directories fail; falls back (with a log) when the host
+   *  refuses the isolated one. */
+  private async createReviewerSession(
+    envelope: ReviewEnvelope,
+    isolated: string | undefined,
+  ): Promise<{ id: string; directory: string; fellBack: boolean }> {
+    const title = `[permission-review] ${envelope.request.permission}: ${redactSecrets(
+      envelope.request.patterns.join(", "),
+    ).slice(0, 120)}`
+    const create = async (directory: string, withParent: boolean) => {
       const created = responseData(
         await withTimeout(
           this.ctx.client.session.create({
             body: {
-              parentID: envelope.request.sessionID,
-              title: `[permission-review] ${envelope.request.permission}: ${redactSecrets(
-                envelope.request.patterns.join(", "),
-              ).slice(0, 120)}`,
+              ...(withParent ? { parentID: envelope.request.sessionID } : {}),
+              title,
             },
-            query: { directory: this.ctx.directory },
+            query: { directory },
           }),
           this.metadataCallTimeoutMs,
         ),
@@ -622,17 +690,66 @@ export class ReviewCoordinator {
       )
       if (typeof created.id !== "string")
         throw new Error("session.create returned an invalid session ID")
+      return created.id
+    }
+
+    if (isolated !== undefined) {
+      try {
+        // No parentID in the isolated instance: cross-instance parenting buys
+        // nothing (our own registry tracks recursion) and would re-link the
+        // reviewer into the reviewed project's session tree.
+        return { id: await create(isolated, false), directory: isolated, fellBack: false }
+      } catch (error) {
+        this.log("session.create failed in the isolated reviewer directory; falling back", {
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }
+    }
+    return {
+      id: await create(this.ctx.directory, true),
+      directory: this.ctx.directory,
+      fellBack: isolated !== undefined,
+    }
+  }
+
+  private async runReviewer(envelope: ReviewEnvelope): Promise<ReviewExecutionResult> {
+    const { providerID, modelID } = splitModel(this.config.model)
+    const model = { providerID, modelID }
+    let reviewSessionID: string | undefined
+    let sessionDirectory: string | undefined
+
+    try {
+      // Prefer the isolated directory; a host that refuses it falls back to the
+      // project directory (recursion and tool denial still hold, only the
+      // instruction isolation is downgraded).
+      const isolated = await this.reviewerSessionDirectory()
+      const created = await this.createReviewerSession(envelope, isolated)
+      sessionDirectory = created.directory
       reviewSessionID = created.id
+      if (created.fellBack) {
+        this.log("reviewer session created in the project directory (isolated directory refused)", {
+          requestID: envelope.request.id,
+        })
+      }
       this.reviewerSessions.add(reviewSessionID)
 
       const toolIDs = responseData(
         await withTimeout(
-          this.ctx.client.tool.ids({ query: { directory: this.ctx.directory } }),
+          this.ctx.client.tool.ids({ query: { directory: sessionDirectory } }),
           this.metadataCallTimeoutMs,
         ),
         "tool.ids",
       )
-      const tools = Object.fromEntries(toolIDs.map((id) => [id, false]))
+      // Deny every named tool AND everything else via the wildcard: the host
+      // turns each entry into a session permission rule, and session rules
+      // take precedence over agent-config allows. A plain name list is not
+      // enough — MCP tools (registered outside the tool registry) and the MCP
+      // resource tools would keep executing under host-configured allows. The
+      // wildcard key covers any permission name the host may ask for. The
+      // structured-output mechanism is added by the host outside the
+      // permission system, so denying tools does not break decision parsing.
+      const tools: Record<string, boolean> = { "*": false }
+      for (const id of toolIDs) tools[id] = false
       const policy = this.config.policy ?? DEFAULT_TENANT_POLICY
       const prompt = buildReviewerPrompt(
         policy,
@@ -640,7 +757,13 @@ export class ReviewCoordinator {
         this.config.outputFormat,
       )
 
-      const first = await this.promptReviewer(reviewSessionID, model, tools, prompt)
+      const first = await this.promptReviewer(
+        reviewSessionID,
+        sessionDirectory,
+        model,
+        tools,
+        prompt,
+      )
       let reviewerMs = first.ms
       // Record the elapsed time as soon as the reviewer returns, so a response
       // that turns out to be invalid (no data / transport error) still carries
@@ -662,6 +785,7 @@ export class ReviewCoordinator {
       if (!parsed && this.config.outputFormat === "text") {
         const retry = await this.promptReviewer(
           reviewSessionID,
+          sessionDirectory,
           model,
           tools,
           prompt,
@@ -720,7 +844,7 @@ export class ReviewCoordinator {
           await withTimeout(
             this.ctx.client.session.delete({
               path: { id: reviewSessionID },
-              query: { directory: this.ctx.directory },
+              query: { directory: sessionDirectory ?? this.ctx.directory },
             }),
             Math.min(this.config.timeoutMs, 5_000),
           ).catch(() => {})
@@ -739,6 +863,7 @@ export class ReviewCoordinator {
    */
   private async promptReviewer(
     reviewSessionID: string,
+    sessionDirectory: string,
     model: { providerID: string; modelID: string },
     tools: Record<string, boolean>,
     prompt: string,
@@ -748,7 +873,7 @@ export class ReviewCoordinator {
     const response = await withTimeout(
       this.ctx.client.session.prompt({
         path: { id: reviewSessionID },
-        query: { directory: this.ctx.directory },
+        query: { directory: sessionDirectory },
         body: {
           model,
           variant: this.config.variant,

@@ -2,32 +2,49 @@ import { readFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { parseJsoncStrict } from "./jsonc.ts"
-import { resolveConfig, DEFAULT_CONFIG, DEFAULT_RISK_POLICY } from "../config.ts"
+import {
+  countInvalidPolicyRules,
+  resolveConfig,
+  DEFAULT_CONFIG,
+  DEFAULT_RISK_POLICY,
+} from "../config.ts"
 import type { PolicyRule, ReviewerConfig } from "../types.ts"
+
+type LayerStatus = "missing" | "ok" | "read-error" | "malformed"
 
 interface ConfigLayer {
   raw: Record<string, unknown>
+  status: LayerStatus
   /** Set when the file exists but could not be interpreted; a silently
    *  unreadable trusted layer must be visible, not indistinguishable from an
    *  absent one. */
   warning?: string
 }
 
-/** Read a JSONC config file. A missing file is the common case and yields an
- *  empty record with no warning; an unreadable or malformed file also yields
- *  an empty record (the plugin must keep working) but carries a warning. */
+/** Read a JSONC config file. A missing file is the common case (status
+ *  "missing", no warning). A file that exists but cannot be read or parsed
+ *  keeps the plugin working with an empty layer, but the status lets the
+ *  caller treat an unusable TRUSTED layer as a fail-closed condition rather
+ *  than silently falling back to defaults. */
 function readConfigLayer(path: string): ConfigLayer {
   let text: string
   try {
     text = readFileSync(path, "utf8")
-  } catch {
-    return { raw: {} }
+  } catch (error) {
+    const code = (error as { code?: unknown }).code
+    if (code === "ENOENT") return { raw: {}, status: "missing" }
+    return {
+      raw: {},
+      status: "read-error",
+      warning: `permission-reviewer config at ${path} exists but could not be read (${code ?? "unknown error"}); the layer was ignored`,
+    }
   }
   try {
-    return { raw: parseJsoncStrict(text) }
+    return { raw: parseJsoncStrict(text), status: "ok" }
   } catch (error) {
     return {
       raw: {},
+      status: "malformed",
       warning: `permission-reviewer config at ${path} is malformed and was ignored (${error instanceof Error ? error.message : String(error)})`,
     }
   }
@@ -89,9 +106,32 @@ export function loadResolvedConfig(
 ): ReviewerConfig {
   const globalLayer = readConfigLayer(globalConfigPath())
   const projectLayer: ConfigLayer =
-    directory !== undefined ? readConfigLayer(projectConfigPath(directory)) : { raw: {} }
+    directory !== undefined
+      ? readConfigLayer(projectConfigPath(directory))
+      : { raw: {}, status: "missing" }
   for (const layer of [globalLayer, projectLayer]) {
     if (layer.warning !== undefined) console.warn(layer.warning)
+  }
+
+  // A TRUSTED layer that exists but cannot be honored may have lost the very
+  // restrictions it was supposed to carry (deny rules, enforce mode, stricter
+  // thresholds). That must degrade the config — automatic approval stays off
+  // until the file is fixed — instead of quietly reactivating defaults.
+  const degraded: string[] = []
+  if (globalLayer.status === "malformed") {
+    degraded.push("global config file is malformed and was ignored")
+  } else if (globalLayer.status === "read-error") {
+    degraded.push("global config file exists but could not be read")
+  } else if (globalLayer.status === "ok") {
+    const invalidRules = countInvalidPolicyRules(globalLayer.raw.policyRules)
+    if (invalidRules > 0) {
+      degraded.push(
+        `${invalidRules} policy rule(s) from the global config were dropped by validation`,
+      )
+      console.warn(
+        `permission-reviewer: ${invalidRules} policy rule(s) in the global config are invalid and were dropped; automatic approval stays disabled until they are fixed`,
+      )
+    }
   }
 
   // The trusted baseline is seeded with builtin defaults (so clamping always
@@ -110,6 +150,7 @@ export function loadResolvedConfig(
   for (const [key, value] of Object.entries(inlineOptions ?? {})) {
     if (!TRUST_BOUNDARY_KEYS.has(key)) out[key] = value
   }
+  if (degraded.length > 0) out.configDegraded = degraded
   return resolveConfig(out)
 }
 
@@ -132,6 +173,11 @@ function mergeWithTrustBoundary(
   project: Record<string, unknown>,
 ): Record<string, unknown> {
   const clamped = { ...project }
+
+  // configDegraded describes the state of TRUSTED sources; the project layer
+  // has no say in it (injecting fake degradation would only tighten, but the
+  // field must stay authoritative for the loader that computes it).
+  delete clamped.configDegraded
 
   // confidenceThreshold: project can raise but not lower it; non-numeric
   // values (including null) are ignored so they cannot reset the threshold.

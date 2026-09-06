@@ -37,6 +37,9 @@ export interface AuditMissingFields {
 export interface AuditSummary {
   path: string
   exists: boolean
+  /** True when only the bounded tail (most recent 64 MiB) was summarized:
+   *  line counts and timestamps then describe that window, not the file. */
+  truncated: boolean
   totalLines: number
   validRecords: number
   invalidLines: number
@@ -62,7 +65,8 @@ function bump(map: Record<string, number>, key: string): void {
 const AUDIT_READ_CAP_BYTES = 64 * 1024 * 1024
 
 /** Read the (bounded) tail of an audit file synchronously without loading the
- *  whole file. Returns undefined when the file cannot be read. */
+ *  whole file. Never throws: any failure to stat/open/read returns undefined
+ *  and the caller reports the file as unreadable. */
 function readTail(path: string): { text: string; truncated: boolean } | undefined {
   let size: number
   try {
@@ -72,8 +76,9 @@ function readTail(path: string): { text: string; truncated: boolean } | undefine
   }
   const truncated = size > AUDIT_READ_CAP_BYTES
   const length = truncated ? AUDIT_READ_CAP_BYTES : size
-  const fd = openSync(path, "r")
+  let fd: number | undefined
   try {
+    fd = openSync(path, "r")
     const buffer = Buffer.alloc(length)
     const offset = truncated ? size - length : 0
     readSync(fd, buffer, 0, length, offset)
@@ -83,8 +88,10 @@ function readTail(path: string): { text: string; truncated: boolean } | undefine
       text = text.replace(/^[^\n]*\n/, "")
     }
     return { text, truncated }
+  } catch {
+    return undefined
   } finally {
-    closeSyncSafe(fd)
+    if (fd !== undefined) closeSyncSafe(fd)
   }
 }
 
@@ -104,6 +111,7 @@ export function readAuditSummary(path: string): AuditSummary {
   const summary: AuditSummary = {
     path,
     exists: false,
+    truncated: false,
     totalLines: 0,
     validRecords: 0,
     invalidLines: 0,
@@ -118,6 +126,7 @@ export function readAuditSummary(path: string): AuditSummary {
   const read = readTail(path)
   if (read === undefined) return summary
   summary.exists = true
+  summary.truncated = read.truncated
   const lines = read.text.split("\n").filter((line) => line.trim().length > 0)
   // When the cap was hit only the tail was read; line counts then describe
   // the summarized window, not the whole file.
@@ -167,13 +176,16 @@ export function readAuditSummary(path: string): AuditSummary {
       actor.name === undefined ||
       actor.name === ""
     if (isUnknown) {
-      const name = actor?.name ?? (record.actor === undefined ? "(no actor field)" : "(unnamed)")
+      const rawName = actor?.name ?? (record.actor === undefined ? "(no actor field)" : "(unnamed)")
+      // A hostile or corrupted record can put anything in `name`; coerce to a
+      // string before it reaches the localeCompare below.
+      const name = typeof rawName === "string" ? rawName : JSON.stringify(rawName)
       actorCounts.set(name, (actorCounts.get(name) ?? 0) + 1)
     }
   }
   summary.unknownActorNames = [...actorCounts.entries()]
     .map(([name, count]) => ({ name, count }))
-    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
+    .sort((a, b) => b.count - a.count || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
   return summary
 }
 
@@ -203,6 +215,28 @@ export function createAuditWriter(
       ...(record.warnings === undefined
         ? {}
         : { warnings: record.warnings.map((warning) => redactSecrets(warning)) }),
+      ...(record.policyTrace === undefined
+        ? {}
+        : {
+            policyTrace: {
+              ...record.policyTrace,
+              // Rule reasons are admin-authored prose; redact them like any
+              // other free text without touching the structural fields.
+              matchedRules: record.policyTrace.matchedRules.map((match) => ({
+                ...match,
+                reason: redactSecrets(match.reason),
+              })),
+            },
+          }),
+      ...(record.askDecisions === undefined
+        ? {}
+        : {
+            askDecisions: record.askDecisions.map((decision) => ({
+              ...decision,
+              question: redactSecrets(decision.question),
+              answer: redactSecrets(decision.answer),
+            })),
+          }),
     }
     await appendFile(path, `${JSON.stringify(sanitized)}\n`, {
       encoding: "utf8",

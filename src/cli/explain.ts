@@ -283,6 +283,10 @@ async function runAudit(argv: string[]): Promise<number> {
 
 function printAuditHuman(s: AuditSummary): void {
   console.log(`audit report: ${s.path}`)
+  if (s.truncated) {
+    console.log("  NOTE: only the most recent 64 MiB were summarized; counts and")
+    console.log("  timestamps describe that tail, not the whole file.")
+  }
   console.log(`  valid records:     ${s.validRecords} (invalid lines: ${s.invalidLines})`)
   console.log(`  schema versions:   ${fmtCounts(s.bySchemaVersion)}`)
   if (s.firstTimestamp || s.lastTimestamp) {

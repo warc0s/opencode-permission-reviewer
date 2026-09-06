@@ -1,17 +1,35 @@
 import { readFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
-import { parseJsonc } from "./jsonc.ts"
+import { parseJsoncStrict } from "./jsonc.ts"
 import { resolveConfig, DEFAULT_CONFIG, DEFAULT_RISK_POLICY } from "../config.ts"
 import type { PolicyRule, ReviewerConfig } from "../types.ts"
 
-/** Read a JSONC config file; return an empty record on any error (missing,
- *  unreadable, or malformed). Never throws. */
-function readConfigFile(path: string): Record<string, unknown> {
+interface ConfigLayer {
+  raw: Record<string, unknown>
+  /** Set when the file exists but could not be interpreted; a silently
+   *  unreadable trusted layer must be visible, not indistinguishable from an
+   *  absent one. */
+  warning?: string
+}
+
+/** Read a JSONC config file. A missing file is the common case and yields an
+ *  empty record with no warning; an unreadable or malformed file also yields
+ *  an empty record (the plugin must keep working) but carries a warning. */
+function readConfigLayer(path: string): ConfigLayer {
+  let text: string
   try {
-    return parseJsonc(readFileSync(path, "utf8"))
+    text = readFileSync(path, "utf8")
   } catch {
-    return {}
+    return { raw: {} }
+  }
+  try {
+    return { raw: parseJsoncStrict(text) }
+  } catch (error) {
+    return {
+      raw: {},
+      warning: `permission-reviewer config at ${path} is malformed and was ignored (${error instanceof Error ? error.message : String(error)})`,
+    }
   }
 }
 
@@ -36,12 +54,32 @@ export function projectConfigPath(directory: string): string {
   return join(directory, ".opencode", "permission-reviewer.jsonc")
 }
 
+/** Fields managed by the trust boundary. For these, the boundary's output is
+ *  final: the project layer may only tighten them against the trusted
+ *  baseline (which already includes inline), and a later inline value must not
+ *  undo that tightening. For every other field the documented precedence
+ *  applies and inline (trusted, most specific) wins over the project. */
+const TRUST_BOUNDARY_KEYS = new Set([
+  "confidenceThreshold",
+  "audit",
+  "auditPath",
+  "model",
+  "policy",
+  "repositoryTrust",
+  "actorProfiles",
+  "enforcementMode",
+  "riskPolicy",
+  "escalationMode",
+  "policyRules",
+])
+
 /** Load and merge config from global, project, and inline sources.
  *
- * Precedence (lowest to highest): builtin defaults → global → project → inline.
- * The trust boundary ensures project config can only TIGHTEN security-sensitive
- * fields, never weaken them (lower confidence thresholds, widen risk cells,
- * disable audit, set trusted repository trust, or enable enforcement).
+ * Precedence (lowest to highest): builtin defaults → global → project → inline,
+ * with one deliberate exception: security-sensitive fields cross a trust
+ * boundary where the untrusted project layer can only TIGHTEN the trusted
+ * baseline (see mergeWithTrustBoundary), and that hardening survives even
+ * when inline set the same field.
  *
  * When no global or project files exist (the common case), the result is
  * byte-identical to calling `resolveConfig(inlineOptions)` directly. */
@@ -49,35 +87,66 @@ export function loadResolvedConfig(
   inlineOptions: Record<string, unknown> | undefined,
   directory?: string,
 ): ReviewerConfig {
-  const globalRaw = readConfigFile(globalConfigPath())
-  const projectRaw = directory !== undefined ? readConfigFile(projectConfigPath(directory)) : {}
+  const globalLayer = readConfigLayer(globalConfigPath())
+  const projectLayer: ConfigLayer =
+    directory !== undefined ? readConfigLayer(projectConfigPath(directory)) : { raw: {} }
+  for (const layer of [globalLayer, projectLayer]) {
+    if (layer.warning !== undefined) console.warn(layer.warning)
+  }
 
-  // The trusted baseline is seeded with builtin defaults so clamping always
-  // has a floor to compare against, even when global/inline omit a field.
+  // The trusted baseline is seeded with builtin defaults (so clamping always
+  // has a floor) and includes inline, which participates as a trusted source
+  // the project layer is clamped against.
   const trusted: Record<string, unknown> = {
     ...DEFAULT_CONFIG,
-    ...globalRaw,
+    ...globalLayer.raw,
     ...(inlineOptions ?? {}),
   }
-  const merged = mergeWithTrustBoundary(trusted, projectRaw)
-  return resolveConfig(merged)
+  const merged = mergeWithTrustBoundary(trusted, projectLayer.raw)
+  // Inline keeps documented precedence over the project layer for every
+  // non-security field (the boundary's own keys are exempt: re-applying inline
+  // there could undo project hardening clamped against it).
+  const out: Record<string, unknown> = { ...merged }
+  for (const [key, value] of Object.entries(inlineOptions ?? {})) {
+    if (!TRUST_BOUNDARY_KEYS.has(key)) out[key] = value
+  }
+  return resolveConfig(out)
+}
+
+/** Whether the key is present in the layer (a `null`/wrong-type value must be
+ *  handled as a present-but-invalid override, never silently forwarded). */
+function hasKey(object: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(object, key)
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
 /** Merge the trusted baseline with the untrusted project layer. Project config
- *  can only TIGHTEN security-sensitive fields, never weaken them. */
+ *  can only TIGHTEN security-sensitive fields, never weaken them. A project
+ *  value of the wrong type (including `null`) is dropped so it can never fall
+ *  through to `resolveConfig`'s defaults and reset a trusted restriction. */
 function mergeWithTrustBoundary(
   trusted: Record<string, unknown>,
   project: Record<string, unknown>,
 ): Record<string, unknown> {
   const clamped = { ...project }
 
-  // confidenceThreshold: project can raise but not lower it.
-  if (
-    typeof clamped.confidenceThreshold === "number" &&
-    typeof trusted.confidenceThreshold === "number" &&
-    clamped.confidenceThreshold < trusted.confidenceThreshold
-  ) {
-    clamped.confidenceThreshold = trusted.confidenceThreshold
+  // confidenceThreshold: project can raise but not lower it; non-numeric
+  // values (including null) are ignored so they cannot reset the threshold.
+  if (hasKey(clamped, "confidenceThreshold")) {
+    if (
+      typeof clamped.confidenceThreshold !== "number" ||
+      !Number.isFinite(clamped.confidenceThreshold)
+    ) {
+      delete clamped.confidenceThreshold
+    } else if (
+      typeof trusted.confidenceThreshold === "number" &&
+      clamped.confidenceThreshold < trusted.confidenceThreshold
+    ) {
+      clamped.confidenceThreshold = trusted.confidenceThreshold
+    }
   }
 
   // audit: project can enable but not disable.
@@ -90,8 +159,15 @@ function mergeWithTrustBoundary(
   // audit trail by pointing it at /dev/null or a path it controls.
   delete clamped.auditPath
 
-  // repositoryTrust: project cannot set "trusted" — only global/inline can.
-  if (clamped.repositoryTrust === "trusted") {
+  // model and policy: the reviewer destination and the tenant policy text are
+  // trusted decisions. A repository must not choose where code/context is sent
+  // for review, nor rewrite the policy the reviewer enforces.
+  delete clamped.model
+  delete clamped.policy
+
+  // repositoryTrust: the project layer may only declare its own repository
+  // untrusted; it cannot grant "trusted" or reset a trusted "untrusted".
+  if (clamped.repositoryTrust !== "untrusted") {
     delete clamped.repositoryTrust
   }
 
@@ -113,17 +189,17 @@ function mergeWithTrustBoundary(
   }
 
   // riskPolicy: project can narrow allow cells and harden failure knobs, never
-  // relax a trusted deny or widen an allow cell. Partial project objects must
-  // not wipe trusted onInvalidDecision/onReviewerFailure back to defaults.
-  if (typeof clamped.riskPolicy === "object" && clamped.riskPolicy !== null) {
-    const trustedPolicy =
-      typeof trusted.riskPolicy === "object" && trusted.riskPolicy !== null
-        ? (trusted.riskPolicy as Record<string, unknown>)
+  // relax a trusted deny or widen an allow cell. A non-object value (including
+  // null) is ignored entirely so it cannot wipe the trusted matrix.
+  if (hasKey(clamped, "riskPolicy")) {
+    if (isPlainObject(clamped.riskPolicy)) {
+      const trustedPolicy = isPlainObject(trusted.riskPolicy)
+        ? trusted.riskPolicy
         : (DEFAULT_RISK_POLICY as unknown as Record<string, unknown>)
-    clamped.riskPolicy = clampRiskPolicy(
-      clamped.riskPolicy as Record<string, unknown>,
-      trustedPolicy,
-    )
+      clamped.riskPolicy = clampRiskPolicy(clamped.riskPolicy, trustedPolicy)
+    } else {
+      delete clamped.riskPolicy
+    }
   }
 
   // escalationMode: project can only harden manual → deny, never relax deny →

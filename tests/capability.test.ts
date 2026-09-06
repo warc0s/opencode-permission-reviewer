@@ -203,7 +203,7 @@ describe("capability analyzer — privilege wrappers peeled", () => {
 describe("capability analyzer — resilience", () => {
   test("empty command never throws and yields unknown action class", () => {
     const a = assess("")
-    expect(a.actionClass.value).toBe("read-only")
+    expect(a.actionClass.value).toBe("unknown")
     expect(a.parserCompleteness).toBe("complete-for-supported-form")
   })
 

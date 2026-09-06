@@ -23,6 +23,27 @@ function truncate(value: string, max: number): string {
   return `${redacted.slice(0, max)}\n<truncated characters="${omitted}" />`
 }
 
+/** Tail-preserving truncation for recency-sensitive content: when a budget cut
+ *  is unavoidable, the END (most recent content) survives, unlike `truncate`
+ *  which keeps the head. */
+function truncateKeepEnd(value: string, max: number): string {
+  const redacted = redactSecrets(value)
+  if (redacted.length <= max) return redacted
+  const omitted = redacted.length - max
+  return `<truncated characters="${omitted}" />\n${redacted.slice(-max)}`
+}
+
+/** Elide the middle of an over-long command, keeping head and tail: the head
+ *  names the executable and flags, the tail carries trailing redirections and
+ *  compound tails (`… ; rm -rf`), so both ends must reach the reviewer. */
+function elideMiddle(value: string, max: number): string {
+  if (value.length <= max) return value
+  const omitted = value.length - Math.floor(max * 0.8)
+  const head = Math.floor(max * 0.5)
+  const tail = Math.floor(max * 0.3)
+  return `${value.slice(0, head)}<elided characters="${omitted}" />${value.slice(-tail)}`
+}
+
 function stableJson(value: unknown, max: number): string {
   try {
     const seen = new WeakSet<object>()
@@ -72,14 +93,7 @@ function messageSummary(message: MessageWithParts, maxPartChars: number): string
   const id = typeof message.info.id === "string" ? message.info.id : "unknown"
   const parts = message.parts
     .map((part) => {
-      if (
-        role === "user" &&
-        part.type === "text" &&
-        typeof part.text === "string" &&
-        isSyntheticControlMessage(part.text)
-      ) {
-        return
-      }
+      if (role === "user" && isSyntheticPart(part)) return
       return partSummary(part, maxPartChars)
     })
     .filter((part): part is string => Boolean(part))
@@ -89,10 +103,21 @@ function messageSummary(message: MessageWithParts, maxPartChars: number): string
 
 export function buildTranscript(messages: MessageWithParts[], config: ReviewerConfig): string {
   const selected = messages.slice(-config.transcriptMessages)
-  const summaries = selected
-    .map((message) => messageSummary(message, config.maxPartChars))
-    .filter((summary): summary is string => Boolean(summary))
-  return truncate(summaries.join("\n\n"), config.maxContextChars)
+  // Budget from the newest message backwards so the recency-sensitive tail of
+  // the conversation always survives a cut; the oldest messages of the window
+  // are dropped first.
+  const kept: string[] = []
+  let remaining = config.maxContextChars
+  for (let index = selected.length - 1; index >= 0; index -= 1) {
+    const summary = messageSummary(selected[index]!, config.maxPartChars)
+    if (!summary) continue
+    const separator = kept.length === 0 ? 0 : 2
+    if (remaining <= separator) break
+    const bounded = truncateKeepEnd(summary, remaining - separator)
+    kept.push(bounded)
+    remaining -= bounded.length + separator
+  }
+  return kept.reverse().join("\n\n")
 }
 
 function isSyntheticControlMessage(text: string): boolean {
@@ -103,12 +128,22 @@ function isSyntheticControlMessage(text: string): boolean {
   )
 }
 
+/** Host-authored text injected into a user-role message. Provenance comes from
+ *  the part's own `synthetic`/`ignored` flags first; the text-pattern check is
+ *  only a fallback for hosts that do not set the flags. */
+function isSyntheticPart(part: Record<string, unknown>): boolean {
+  if (part.type !== "text" || typeof part.text !== "string") return false
+  if (part.synthetic === true || part.ignored === true) return true
+  return isSyntheticControlMessage(part.text)
+}
+
 function userIntentSummary(message: MessageWithParts, config: ReviewerConfig): string | undefined {
   if (message.info.role !== "user") return
   const texts = message.parts.flatMap((part) => {
     if (part.type !== "text" || typeof part.text !== "string") return []
+    if (isSyntheticPart(part)) return []
     const text = part.text.trim()
-    if (!text || isSyntheticControlMessage(text)) return []
+    if (!text) return []
     return [truncate(text, config.maxPartChars)]
   })
   if (texts.length === 0) return
@@ -149,6 +184,18 @@ export function buildIntentHistory(messages: MessageWithParts[], config: Reviewe
   return keepMostRecentBlocks(summaries.slice(-config.intentMessages), config.maxIntentChars)
 }
 
+/** Bound the pending command before serialization, eliding its middle rather
+ *  than letting a head-only truncation cut the tail (where trailing
+ *  redirections and compound command tails live). */
+function boundedPendingMetadata(
+  metadata: Record<string, unknown>,
+  max: number,
+): Record<string, unknown> {
+  const command = metadata.command
+  if (typeof command !== "string" || command.length <= max) return metadata
+  return { ...metadata, command: elideMiddle(command, max) }
+}
+
 export function buildEvidence(envelope: ReviewEnvelope, config: ReviewerConfig): string {
   const request: PermissionRequest = envelope.request
   // Omitted entirely when empty: absence of ask decisions carries no signal
@@ -166,7 +213,7 @@ export function buildEvidence(envelope: ReviewEnvelope, config: ReviewerConfig):
       {
         permission: request.permission,
         patterns: request.patterns,
-        metadata: request.metadata,
+        metadata: boundedPendingMetadata(request.metadata, config.maxPartChars),
         tool: request.tool,
       },
       config.maxPartChars * 2,

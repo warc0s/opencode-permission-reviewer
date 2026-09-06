@@ -9,12 +9,13 @@ import { createAuditWriter } from "./audit.ts"
 
 export const server: Plugin = async (input, options) => {
   const config = loadResolvedConfig(options, input.directory)
-  const logger = config.debug
-    ? (message: string, details?: unknown) => {
-        console.error(`[opencode-permission-reviewer] ${message}`, details ?? "")
-      }
-    : undefined
-  const writeAudit = createAuditWriter(config, logger)
+  const debugLogger = (message: string, details?: unknown) => {
+    console.error(`[opencode-permission-reviewer] ${message}`, details ?? "")
+  }
+  const logger = config.debug ? debugLogger : undefined
+  // Audit-write failures stay visible even without debug: the audit trail is
+  // the traceability guarantee, and silently losing records hides it.
+  const writeAudit = createAuditWriter(config, config.debug ? logger : debugLogger)
   const ctx: RuntimeContext = {
     ...createV1Adapter(
       {
@@ -30,7 +31,6 @@ export const server: Plugin = async (input, options) => {
   // consumer of question events and never affects permission handling.
   const askDecisions = config.askDecisions ? new AskDecisionRegistry(logger) : undefined
   const runtime = new ApprovalReviewerRuntime(ctx, config, logger, undefined, askDecisions)
-
   return {
     event: async ({ event }) => {
       // Observe synchronously first: reviews started by later events must see

@@ -27,9 +27,11 @@ const ROOT_DESTRUCTION_REGEX = [
   /:\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:/,
 ]
 
-const OBVIOUS_SECRET_EXPORT = [
-  /\b(?:curl|wget|nc|ncat|socat)\b[^\n]*(?:\.ssh\/(?:id_|authorized_keys)|\.aws\/credentials|\.config\/gh\/hosts\.yml)/i,
-  /\b(?:curl|wget|nc|ncat|socat)\b[^\n]*(?:api[_-]?key|access[_-]?token|private[_-]?key|session[_-]?cookie)/i,
+const SECRET_EXPORT_UTILITIES = new Set(["curl", "wget", "nc", "ncat", "netcat", "socat"])
+
+const SECRET_EXPORT_TARGETS = [
+  /(?:\.ssh\/(?:id_|authorized_keys)|\.aws\/credentials|\.config\/gh\/hosts\.yml)/i,
+  /(?:api[_-]?key|access[_-]?token|private[_-]?key|session[_-]?cookie)/i,
 ]
 
 const ROOT_DESTRUCTION_REASON =
@@ -270,6 +272,28 @@ function isDeviceDestruction(command: string): boolean {
   return false
 }
 
+/**
+ * Obvious credential export through a network utility. Detected structurally —
+ * the executable itself must be the network tool — so a quoted mention inside
+ * unrelated text (`echo "curl api_key"`, docs, commit messages) does not trip
+ * the brake, exactly like the destruction detectors above. Wrapper peeling
+ * (`sh -c`, `ssh host …`, `sudo …`) still reaches the real executable.
+ */
+function isObviousSecretExport(command: string): boolean {
+  for (const segment of lexSegments(command)) {
+    for (const effective of effectiveCommands(segment)) {
+      if (effective.length === 0) continue
+      if (!SECRET_EXPORT_UTILITIES.has(shellBasename(effective[0]!.value))) continue
+      const args = effective
+        .slice(1)
+        .map((token) => token.value)
+        .join(" ")
+      if (SECRET_EXPORT_TARGETS.some((pattern) => pattern.test(args))) return true
+    }
+  }
+  return false
+}
+
 export function emergencyBrakeReason(request: PermissionRequest): string | undefined {
   if (request.permission !== "bash") return
   const command =
@@ -282,5 +306,5 @@ export function emergencyBrakeReason(request: PermissionRequest): string | undef
   if (isDeviceDestruction(command)) return ROOT_DESTRUCTION_REASON
   if (ROOT_DESTRUCTION_REGEX.some((pattern) => pattern.test(command)))
     return ROOT_DESTRUCTION_REASON
-  if (OBVIOUS_SECRET_EXPORT.some((pattern) => pattern.test(command))) return SECRET_EXPORT_REASON
+  if (isObviousSecretExport(command)) return SECRET_EXPORT_REASON
 }

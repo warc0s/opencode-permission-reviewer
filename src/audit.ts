@@ -1,8 +1,9 @@
 import { appendFile, mkdir } from "node:fs/promises"
-import { readFileSync } from "node:fs"
+import { closeSync, openSync, readSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, resolve } from "node:path"
 import type { ReviewAuditRecord, ReviewerConfig } from "./types.ts"
+import { redactSecrets } from "./redact.ts"
 
 export const DEFAULT_AUDIT_PATH = "~/.local/share/opencode/permission-reviewer-audit.jsonl"
 
@@ -54,8 +55,51 @@ function bump(map: Record<string, number>, key: string): void {
   map[key] = (map[key] ?? 0) + 1
 }
 
+/** Cap on how much of an audit file the summary reader will pull into memory:
+ *  the file is append-only and grows without bound, and the report only needs
+ *  the most recent records. When the cap is hit the reader summarizes the tail
+ *  (newest records) and flags the truncation. */
+const AUDIT_READ_CAP_BYTES = 64 * 1024 * 1024
+
+/** Read the (bounded) tail of an audit file synchronously without loading the
+ *  whole file. Returns undefined when the file cannot be read. */
+function readTail(path: string): { text: string; truncated: boolean } | undefined {
+  let size: number
+  try {
+    size = statSync(path).size
+  } catch {
+    return undefined
+  }
+  const truncated = size > AUDIT_READ_CAP_BYTES
+  const length = truncated ? AUDIT_READ_CAP_BYTES : size
+  const fd = openSync(path, "r")
+  try {
+    const buffer = Buffer.alloc(length)
+    const offset = truncated ? size - length : 0
+    readSync(fd, buffer, 0, length, offset)
+    let text = buffer.toString("utf8")
+    if (truncated) {
+      // Drop a possibly partial first line so every summarized line is whole.
+      text = text.replace(/^[^\n]*\n/, "")
+    }
+    return { text, truncated }
+  } finally {
+    closeSyncSafe(fd)
+  }
+}
+
+function closeSyncSafe(fd: number): void {
+  try {
+    closeSync(fd)
+  } catch {
+    // Best effort; the read already succeeded or failed on its own.
+  }
+}
+
 /** Read an append-only JSONL audit file and summarize it. Never throws: a
- *  missing/unreadable file returns an empty summary with `exists: false`. */
+ *  missing/unreadable file returns an empty summary with `exists: false`, and
+ *  malformed records (wrong shapes, null actors, bad JSON) are counted as
+ *  invalid lines instead of aborting the report. */
 export function readAuditSummary(path: string): AuditSummary {
   const summary: AuditSummary = {
     path,
@@ -71,14 +115,12 @@ export function readAuditSummary(path: string): AuditSummary {
     unknownActorNames: [],
     missingRequiredFields: [],
   }
-  let text: string
-  try {
-    text = readFileSync(path, "utf8")
-    summary.exists = true
-  } catch {
-    return summary
-  }
-  const lines = text.split("\n").filter((line) => line.trim().length > 0)
+  const read = readTail(path)
+  if (read === undefined) return summary
+  summary.exists = true
+  const lines = read.text.split("\n").filter((line) => line.trim().length > 0)
+  // When the cap was hit only the tail was read; line counts then describe
+  // the summarized window, not the whole file.
   summary.totalLines = lines.length
   const actorCounts = new Map<string, number>()
   for (let i = 0; i < lines.length; i++) {
@@ -114,14 +156,18 @@ export function readAuditSummary(path: string): AuditSummary {
     }
     const missing = REQUIRED_AUDIT_FIELDS.filter((f) => record[f] === undefined)
     if (missing.length > 0) summary.missingRequiredFields.push({ lineNo, missing })
-    const actor = record.actor as { name?: string; profile?: string } | undefined
+    const actor =
+      typeof record.actor === "object" && record.actor !== null
+        ? (record.actor as { name?: string; profile?: string })
+        : undefined
     const isUnknown =
       actor === undefined ||
+      actor.profile === undefined ||
       actor.profile === "unknown" ||
       actor.name === undefined ||
       actor.name === ""
     if (isUnknown) {
-      const name = actor?.name ?? (actor === undefined ? "(no actor field)" : "(unnamed)")
+      const name = actor?.name ?? (record.actor === undefined ? "(no actor field)" : "(unnamed)")
       actorCounts.set(name, (actorCounts.get(name) ?? 0) + 1)
     }
   }
@@ -146,9 +192,17 @@ export function createAuditWriter(
   return async (record) => {
     ready ??= mkdir(dirname(path), { recursive: true }).then(() => {})
     await ready
+    // Redact the free-text fields (the reason carries transport error messages
+    // and provider responses that never passed through the evidence
+    // pipeline's redaction). Structural identifiers are left intact: running
+    // the redactor over the whole serialized line would also match key names
+    // like "sessionID" and corrupt the record's correlation fields.
     const sanitized: ReviewAuditRecord = {
       ...record,
-      reason: boundedReason(record.reason),
+      reason: redactSecrets(boundedReason(record.reason)),
+      ...(record.warnings === undefined
+        ? {}
+        : { warnings: record.warnings.map((warning) => redactSecrets(warning)) }),
     }
     await appendFile(path, `${JSON.stringify(sanitized)}\n`, {
       encoding: "utf8",

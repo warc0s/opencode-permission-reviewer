@@ -2,7 +2,7 @@ import type { PermissionRequest, ReviewEnvelope, ReviewerConfig } from "../types
 import { buildIntentHistory, buildTranscript, normalizeMessages } from "../context.ts"
 import type { AskDecisionSource } from "./ask-decisions.ts"
 import type { OpenCodeClientLike } from "../opencode/types.ts"
-import { responseData } from "../opencode/transport.ts"
+import { responseData, withTimeout } from "../opencode/transport.ts"
 import { resolveActorContext } from "./actor-resolver.ts"
 import { resolveActionPurpose } from "./action-purpose.ts"
 import { parseCommand } from "../capability/command-parser.ts"
@@ -34,13 +34,18 @@ export async function assembleEvidence(
   ctx: EvidenceAssemblyContext,
 ): Promise<ReviewEnvelope> {
   const contextStart = performance.now()
-  const response = await ctx.client.session.messages({
-    path: { id: request.sessionID },
-    query: {
-      directory: ctx.directory,
-      limit: Math.max(ctx.config.historyMessages, ctx.config.transcriptMessages * 2, 20),
-    },
-  })
+  // A transcript fetch that never settles would leave the review pending
+  // forever; bound it well above any realistic fetch time.
+  const response = await withTimeout(
+    ctx.client.session.messages({
+      path: { id: request.sessionID },
+      query: {
+        directory: ctx.directory,
+        limit: Math.max(ctx.config.historyMessages, ctx.config.transcriptMessages * 2, 20),
+      },
+    }),
+    Math.min(ctx.config.timeoutMs, 15_000),
+  )
   const messages = normalizeMessages(responseData(response, "session.messages"))
 
   // Resolve actor/lineage/intent. The resolver is resilient — it never throws,

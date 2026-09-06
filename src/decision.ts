@@ -110,11 +110,17 @@ export function enforceDecision(
     }
   }
 
-  if (decision.confidence < config.confidenceThreshold) {
+  // The auto-allow confidence floor is the stricter of the two configured
+  // thresholds; riskPolicy.minimumConfidence must not be silently ignorable.
+  const effectiveThreshold = Math.max(
+    config.confidenceThreshold,
+    config.riskPolicy.minimumConfidence,
+  )
+  if (decision.confidence < effectiveThreshold) {
     return {
       kind: "escalate",
       decision,
-      reason: `Reviewer confidence ${decision.confidence.toFixed(2)} is below ${config.confidenceThreshold.toFixed(2)}.`,
+      reason: `Reviewer confidence ${decision.confidence.toFixed(2)} is below ${effectiveThreshold.toFixed(2)}.`,
       reviewerOutcome,
     }
   }

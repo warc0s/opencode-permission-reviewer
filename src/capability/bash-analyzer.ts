@@ -1,3 +1,5 @@
+import { homedir } from "node:os"
+import { resolve } from "node:path"
 import type {
   CapabilityActionClass,
   CapabilityAssessment,
@@ -174,6 +176,119 @@ const FILE_WRITE_TOOLS = new Set(["tee", "dd", "install", "truncate", "shred"])
 
 const FILE_MUTATION_TOOLS = new Set(["cp", "mv", "rename", "ln", "link", "symlink", "rsync"])
 
+/** Executables with no observable side effects on the local filesystem when
+ *  invoked with plain arguments. An executable NOT in this set (and in none of
+ *  the effect families above) is classified "unknown", not read-only: the
+ *  analyzer's inability to detect effects is not evidence that none exist. */
+const READ_ONLY_TOOLS = new Set([
+  "cat",
+  "less",
+  "more",
+  "ls",
+  "head",
+  "tail",
+  "wc",
+  "file",
+  "stat",
+  "pwd",
+  "echo",
+  "printf",
+  "date",
+  "whoami",
+  "id",
+  "uname",
+  "hostname",
+  "who",
+  "w",
+  "uptime",
+  "which",
+  "type",
+  "printenv",
+  "grep",
+  "egrep",
+  "fgrep",
+  "rg",
+  "find",
+  "du",
+  "df",
+  "tree",
+  "jq",
+  "yq",
+  "sort",
+  "uniq",
+  "cut",
+  "column",
+  "tr",
+  "diff",
+  "cmp",
+  "comm",
+  "md5sum",
+  "sha1sum",
+  "sha256sum",
+  "sha512sum",
+  "cksum",
+  "base64",
+  "xxd",
+  "od",
+  "strings",
+  "nl",
+  "tac",
+  "rev",
+  "fold",
+  "fmt",
+  "expand",
+  "unexpand",
+  "seq",
+  "true",
+  "false",
+  "sleep",
+  "clear",
+  "test",
+  "[",
+  "basename",
+  "dirname",
+  "realpath",
+  "readlink",
+  "man",
+  "info",
+  "tput",
+])
+
+/** Shell builtins with no filesystem side effects of their own (directory and
+ *  environment manipulation only). */
+const NO_EFFECT_BUILTINS = new Set([
+  "cd",
+  "pushd",
+  "popd",
+  "dirs",
+  "export",
+  "unset",
+  "set",
+  "shopt",
+  "alias",
+  "unalias",
+  "exit",
+  "return",
+  "shift",
+  "wait",
+  "jobs",
+  "fg",
+  "bg",
+  "read",
+  "local",
+  "declare",
+  "readonly",
+  "getopts",
+  "hash",
+  "help",
+  "let",
+  "trap",
+  "ulimit",
+  "umask",
+  "builtin",
+  "command",
+])
+
 const DELETION_TOOLS = new Set(["rm", "rmdir", "unlink", "shred", "truncate"])
 
 const GIT_MUTATION_SUBCOMMANDS = new Set([
@@ -282,7 +397,10 @@ function hasWriteRedirect(redirections: Redirection[]): boolean {
   return redirections.some((r) => r.operator === ">" || r.operator === ">>" || r.operator === "&>")
 }
 
-/** Classify a path target as temporary, workspace, or external. */
+/** Classify a path target as temporary, workspace, or external. Relative
+ *  targets (including `..` segments and `~/` homes) are resolved against the
+ *  working directory first, so `../../outside` cannot masquerade as a
+ *  workspace path. */
 function classifyPath(
   target: string,
   directory: string,
@@ -293,25 +411,31 @@ function classifyPath(
   let temp = false
   let external = false
   let workspace = false
+  let absolute = target
+  if (target === "~" || target.startsWith("~/")) {
+    absolute = resolve(homedir(), target.slice(target === "~" ? 1 : 2))
+  } else if (!target.startsWith("/") && !/^[A-Za-z]:[\\/]/.test(target)) {
+    absolute = resolve(directory, target)
+  }
   if (
-    target.startsWith("/tmp/") ||
-    target.startsWith("/var/tmp/") ||
-    target.startsWith("/dev/shm/") ||
-    target === "/dev/null"
+    absolute.startsWith("/tmp/") ||
+    absolute.startsWith("/var/tmp/") ||
+    absolute.startsWith("/dev/shm/") ||
+    absolute === "/dev/null"
   ) {
     temp = true
-  } else if (target.startsWith("/") || /^[A-Za-z]:[\\/]/.test(target)) {
+  } else if (absolute.startsWith("/") || /^[A-Za-z]:[\\/]/.test(absolute)) {
     // Absolute path outside the known temp roots.
-    if (target === directory || target === worktree || target.startsWith(`${worktree}/`)) {
+    if (absolute === directory || absolute === worktree || absolute.startsWith(`${worktree}/`)) {
       workspace = true
-    } else if (target.startsWith(`${directory}/`) || target === directory) {
+    } else if (absolute.startsWith(`${directory}/`) || absolute === directory) {
       workspace = true
     } else {
       external = true
     }
   } else {
-    // Relative path resolves inside the working directory.
-    workspace = true
+    // A path that still has no absolute form cannot be classified.
+    workspace = false
   }
   return { temporary: temp, workspace, external }
 }
@@ -324,6 +448,35 @@ function destinationFromTokens(tokens: ShellToken[]): string[] {
     else if (/^[a-z0-9.-]+\.[a-z]{2,}(:[0-9]+)?(\/[^\s]*)?$/i.test(v)) out.push(v)
   }
   return out
+}
+
+/** Resolve a git subcommand from the token stream, skipping global git flags
+ *  (`-C <path>`, `-c <cfg>`, `--git-dir`, …) so `git -C /repo push` still
+ *  detects the `push` mutation. Mirrors the flag-aware resolution used by the
+ *  git evidence enrichment. */
+function gitSubcommandOf(cmd: ShellToken[]): { sub?: string } {
+  let index = 1
+  while (index < cmd.length) {
+    const value = cmd[index]!.value
+    if (
+      value === "-C" ||
+      value === "-c" ||
+      value === "--git-dir" ||
+      value === "--work-tree" ||
+      value === "--namespace" ||
+      value === "--exec-path" ||
+      value === "--super-prefix"
+    ) {
+      index += 2
+      continue
+    }
+    if (value.startsWith("-") && value.length > 1) {
+      index += 1
+      continue
+    }
+    return { sub: value }
+  }
+  return {}
 }
 
 // --- analyzer ---------------------------------------------------------------
@@ -352,6 +505,8 @@ export function analyzeCapability(
   let remoteMutation = false
   let gitObserved = false
   let gitMutation = false
+  let sawReadOnlyExecutable = false
+  let sawUnknownExecutable = false
   const destinations: string[] = []
   let dominantClass: CapabilityActionClass = "unknown"
   let classConfidence: "high" | "medium" | "low" = "low"
@@ -401,6 +556,40 @@ export function analyzeCapability(
   for (const cmd of parsed.effective) {
     if (cmd.length === 0) continue
     const base = shellBasename(cmd[0]!.value)
+    // Track whether the executable itself is a known no-effect tool. Commands
+    // that match one of the effect families below override this in class
+    // resolution; for everything else, an unrecognized executable keeps the
+    // class "unknown" instead of defaulting to read-only.
+    if (
+      (READ_ONLY_TOOLS.has(base) || NO_EFFECT_BUILTINS.has(base)) &&
+      !INTERPRETERS.has(base) &&
+      !PACKAGE_MANAGERS.has(base) &&
+      !NETWORK_CLIENTS.has(base) &&
+      !FILE_WRITE_TOOLS.has(base) &&
+      !FILE_MUTATION_TOOLS.has(base) &&
+      !DELETION_TOOLS.has(base) &&
+      !SERVICE_MANAGERS.has(base) &&
+      !PERSISTENCE_TOOLS.has(base) &&
+      !PRIVILEGE_WRAPPERS.has(base)
+    ) {
+      sawReadOnlyExecutable = true
+    } else if (
+      base !== "git" &&
+      !INTERPRETERS.has(base) &&
+      !TEST_RUNNERS.has(base) &&
+      !PACKAGE_MANAGERS.has(base) &&
+      !NETWORK_CLIENTS.has(base) &&
+      !SSH_TOOLS.has(base) &&
+      !FILE_WRITE_TOOLS.has(base) &&
+      !FILE_MUTATION_TOOLS.has(base) &&
+      !DELETION_TOOLS.has(base) &&
+      !SERVICE_MANAGERS.has(base) &&
+      !PERSISTENCE_TOOLS.has(base) &&
+      !PERSISTENCE_WRAPPERS.has(base) &&
+      !PRIVILEGE_WRAPPERS.has(base)
+    ) {
+      sawUnknownExecutable = true
+    }
 
     // Executable detection.
     if (INTERPRETERS.has(base)) {
@@ -423,11 +612,15 @@ export function analyzeCapability(
       executesRepositoryCode = true
       childProcesses = true
     }
-    // `<runtime> test` / `<runtime> t` (bun, npm, pnpm, yarn, deno, …).
+    // `<runtime> test` / `<runtime> t` (bun, npm, pnpm, yarn, deno, …). Test
+    // invocations always execute code: the runner and the suite itself are
+    // executable repository content, so `executesCode` must be true, not
+    // unknown (a `read-only` class for `npm test` understates the effect).
     if (INTERPRETERS.has(base) || PACKAGE_MANAGERS.has(base)) {
       const sub = cmd[1]?.value
       if (sub === "test" || sub === "t" || sub === "check" || sub === "verify") {
         invokesTestRunner = true
+        executesCode = true
         executesRepositoryCode = true
         childProcesses = true
       }
@@ -472,7 +665,23 @@ export function analyzeCapability(
         if (cls.external) externalWrite = true
       }
     }
-    if (FILE_MUTATION_TOOLS.has(base)) workspaceWrite = true
+    if (FILE_MUTATION_TOOLS.has(base)) {
+      // cp/mv/ln/rsync move or link content: classify every operand so an
+      // external destination (`mv file /etc/config`) is reported as an
+      // external write instead of a blanket workspace write.
+      let anyOperand = false
+      for (let i = 1; i < cmd.length; i += 1) {
+        const v = cmd[i]!.value
+        if (v.startsWith("-")) continue
+        if (/^[a-z][a-z0-9+.-]*:\/\//.test(v)) continue
+        anyOperand = true
+        const cls = classifyPath(v, directory, worktree)
+        if (cls.temporary) temporaryWrite = true
+        if (cls.workspace) workspaceWrite = true
+        if (cls.external) externalWrite = true
+      }
+      if (!anyOperand) workspaceWrite = true
+    }
     if (DELETION_TOOLS.has(base)) {
       deletion = true
       let anyTarget = false
@@ -488,8 +697,8 @@ export function analyzeCapability(
       if (!anyTarget) workspaceWrite = true
     }
     if (base === "git") {
-      const sub = cmd[1]?.value
       gitObserved = true
+      const { sub } = gitSubcommandOf(cmd)
       if (sub !== undefined && GIT_MUTATION_SUBCOMMANDS.has(sub)) {
         gitMutation = true
         if (sub === "push") externalWrite = true
@@ -572,9 +781,17 @@ export function analyzeCapability(
     } else if (workspaceWrite) {
       dominantClass = "workspace-write"
       classConfidence = "medium"
-    } else {
+    } else if (sawUnknownExecutable) {
+      // An unrecognized executable is present: report unknown rather than
+      // read-only. Absence of detected effects is not evidence of absence.
+      dominantClass = "unknown"
+      classConfidence = "low"
+    } else if (sawReadOnlyExecutable || (gitObserved && !gitMutation)) {
       dominantClass = "read-only"
       classConfidence = "medium"
+    } else {
+      dominantClass = "unknown"
+      classConfidence = "low"
     }
   }
 

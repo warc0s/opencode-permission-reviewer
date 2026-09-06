@@ -129,20 +129,85 @@ function boundedList(values: string[], max = 200): { values: string[]; omitted: 
   }
 }
 
+/** Git inspection must never execute repository-configured extensions before
+ *  the permission decision. Conversion filters (`clean`/`smudge`/`process`)
+ *  and diff `textconv` drivers are shell commands from git config; disabling
+ *  hooks, fsmonitor, and external diff is not enough because `git status` and
+ *  `git diff` can invoke them on content comparison. Enumerate the configured
+ *  keys (pure config reading, executes nothing) and override every one with a
+ *  no-op so the evidence snapshot cannot run repo code. */
+async function filterNeutralizationArgs(directory: string): Promise<string[]> {
+  try {
+    const result = await execFileAsync("git", ["config", "--get-regexp", "^(filter|diff)\\."], {
+      cwd: directory,
+      timeout: 2_000,
+      maxBuffer: 64 * 1024,
+      encoding: "utf8",
+      env: gitInspectionEnv(),
+    })
+    const filterNames = new Set<string>()
+    const diffDrivers = new Set<string>()
+    for (const line of result.stdout.split("\n")) {
+      const key = line.split(/\s/, 1)[0]
+      if (key === undefined) continue
+      const filterMatch = /^filter\.([^.]+)\.(?:clean|smudge|process|required)$/.exec(key)
+      if (filterMatch) {
+        filterNames.add(filterMatch[1]!)
+        continue
+      }
+      const diffMatch = /^diff\.[^.]+\.textconv$/.exec(key)
+      if (diffMatch) diffDrivers.add(key)
+    }
+    const args: string[] = []
+    for (const name of [...filterNames].slice(0, 50)) {
+      args.push(
+        "-c",
+        `filter.${name}.clean=cat`,
+        "-c",
+        `filter.${name}.smudge=cat`,
+        "-c",
+        `filter.${name}.process=`,
+        "-c",
+        `filter.${name}.required=false`,
+      )
+    }
+    for (const key of [...diffDrivers].slice(0, 50)) {
+      args.push("-c", `${key}=`)
+    }
+    return args
+  } catch {
+    // No matching config keys (git exits 1) or git unavailable: nothing to
+    // neutralize.
+    return []
+  }
+}
+
+function gitInspectionEnv(): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    GIT_OPTIONAL_LOCKS: "0",
+    GIT_TERMINAL_PROMPT: "0",
+    // Skip the system gitconfig too: it can define filters just like the
+    // repository-local config can.
+    GIT_CONFIG_NOSYSTEM: "1",
+  }
+}
+
 async function runGit(
   directory: string,
   args: string[],
+  neutralization: string[] = [],
 ): Promise<{ ok: true; stdout: string } | { ok: false; reason: string }> {
   try {
     const result = await execFileAsync(
       "git",
-      ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", ...args],
+      ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", ...neutralization, ...args],
       {
         cwd: directory,
         timeout: 2_000,
         maxBuffer: 512 * 1024,
         encoding: "utf8",
-        env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" },
+        env: gitInspectionEnv(),
       },
     )
     return { ok: true, stdout: result.stdout }
@@ -217,10 +282,15 @@ export async function enrichGitEvidence(
     }
   }
   const gitDirectory = planned.executionDirectory
+  const neutralization = await filterNeutralizationArgs(gitDirectory)
 
   const [root, status] = await Promise.all([
-    runGit(gitDirectory, ["rev-parse", "--show-toplevel"]),
-    runGit(gitDirectory, ["status", "--porcelain=v1", "--branch", "--untracked-files=normal"]),
+    runGit(gitDirectory, ["rev-parse", "--show-toplevel"], neutralization),
+    runGit(
+      gitDirectory,
+      ["status", "--porcelain=v1", "--branch", "--untracked-files=normal"],
+      neutralization,
+    ),
   ])
   if (!root.ok || !status.ok) {
     const reason = !root.ok ? root.reason : !status.ok ? status.reason : "unknown git error"
@@ -240,7 +310,11 @@ export async function enrichGitEvidence(
   const targetDiff =
     affectedTargets.length === 0
       ? undefined
-      : await runGit(gitDirectory, ["diff", "--numstat", "--no-ext-diff", "--", ...affectedTargets])
+      : await runGit(
+          gitDirectory,
+          ["diff", "--numstat", "--no-ext-diff", "--", ...affectedTargets],
+          neutralization,
+        )
 
   const record = {
     status: "available",

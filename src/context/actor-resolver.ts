@@ -13,7 +13,11 @@ import type {
   SessionNode,
 } from "../types.ts"
 import type { OpenCodeClientLike } from "../opencode/types.ts"
-import { responseData } from "../opencode/transport.ts"
+import { responseData, withTimeout } from "../opencode/transport.ts"
+
+/** Bound for the resolver's metadata SDK calls: a hung session.get/messages
+ *  must degrade to "unknown" instead of leaving the review pending forever. */
+const METADATA_TIMEOUT_MS = 10_000
 
 /**
  * Result of actor/lineage resolution. All fields are populated
@@ -115,7 +119,10 @@ async function fetchSession(
 ): Promise<SessionMetadata | undefined> {
   if (typeof client.session.get !== "function") return undefined
   try {
-    const response = await client.session.get({ path: { id: sessionID }, query: { directory } })
+    const response = await withTimeout(
+      client.session.get({ path: { id: sessionID }, query: { directory } }),
+      METADATA_TIMEOUT_MS,
+    )
     return readSession(sessionID, responseData(response, "session.get"))
   } catch {
     return undefined
@@ -220,10 +227,13 @@ async function fetchMessagesBounded(
   limit: number,
 ): Promise<MessageWithParts[]> {
   try {
-    const response = await client.session.messages({
-      path: { id: sessionID },
-      query: { directory, limit },
-    })
+    const response = await withTimeout(
+      client.session.messages({
+        path: { id: sessionID },
+        query: { directory, limit },
+      }),
+      METADATA_TIMEOUT_MS,
+    )
     return normalizeFetched(responseData(response, "session.messages"))
   } catch {
     return []
@@ -237,29 +247,57 @@ function normalizeFetched(raw: unknown): MessageWithParts[] {
 
 // --- intent extraction ------------------------------------------------------
 
-/** Heuristic: OpenCode injects token/compact notices that are never authorization. */
-function isSynthetic(text: string): boolean {
-  return /^\s*(Magic Compact:|You have \d+ weighted tokens left)/.test(text)
+/** Host-authored text injected into a user-role message is never human
+ *  authorization. Provenance comes from the part's own `synthetic`/`ignored`
+ *  flags when the host sets them; the text-pattern check below is only a
+ *  fallback for hosts that do not. */
+function isSyntheticPart(part: Record<string, unknown>): boolean {
+  if (part.type !== "text" || typeof part.text !== "string") return false
+  if (part.synthetic === true || part.ignored === true) return true
+  return /^\s*(Magic Compact:|You have \d+ weighted tokens left)/.test(part.text)
+}
+
+function messageCreatedAt(message: MessageWithParts): number | undefined {
+  const time = message.info.time as Record<string, unknown> | undefined
+  return typeof time === "object" && time !== null && typeof time.created === "number"
+    ? time.created
+    : undefined
 }
 
 function userTextOf(message: MessageWithParts): string | undefined {
   if (message.info.role !== "user") return undefined
   for (const part of message.parts as Array<Record<string, unknown>>) {
-    if (part.type === "text" && typeof part.text === "string" && part.text.trim()) {
+    if (isSyntheticPart(part)) continue
+    if (typeof part.text === "string" && part.text.trim()) {
       return part.text
     }
   }
   return undefined
 }
 
-/** A delegation recorded as a subtask/task tool part in a parent session. */
-function extractDelegatedTasks(messages: MessageWithParts[], sessionID: string): IntentBlock[] {
+/** A delegation recorded as a subtask/task tool part in a parent session.
+ *  Task-tool parts carry the spawned child session id in
+ *  `state.metadata.sessionId`; when present, only the delegation that created
+ *  THIS session is recorded, so sibling subagent briefs are not attributed to
+ *  the request under review. */
+function extractDelegatedTasks(
+  messages: MessageWithParts[],
+  sessionID: string,
+  childSessionID: string,
+): IntentBlock[] {
   const blocks: IntentBlock[] = []
   for (const message of messages) {
     for (const part of message.parts as Array<Record<string, unknown>>) {
       const isSubtask = part.type === "subtask"
       const isTaskTool = part.type === "tool" && part.tool === "task"
       if (!isSubtask && !isTaskTool) continue
+      if (isTaskTool) {
+        const state = part.state as Record<string, unknown> | undefined
+        const metadata = state?.metadata as Record<string, unknown> | undefined
+        if (typeof metadata?.sessionId === "string" && metadata.sessionId !== childSessionID) {
+          continue
+        }
+      }
       const text =
         typeof part.prompt === "string"
           ? part.prompt
@@ -286,18 +324,32 @@ function extractDelegatedTasks(messages: MessageWithParts[], sessionID: string):
   return blocks
 }
 
-function extractDirectIntent(messages: MessageWithParts[], sessionID: string): IntentBlock[] {
+function extractDirectIntent(
+  messages: MessageWithParts[],
+  sessionID: string,
+  options?: { skipFirstUserMessage?: boolean },
+): IntentBlock[] {
   const blocks: IntentBlock[] = []
+  let skippedFirst = false
   for (const message of messages) {
     const text = userTextOf(message)
     if (!text) continue
-    if (isSynthetic(text)) continue
+    // In a delegated (child) session the FIRST user message is the parent
+    // agent's briefing, not a human instruction; it is attribution noise for
+    // "did the user authorize this" and is already recovered as a delegated
+    // task from the parent session.
+    if (options?.skipFirstUserMessage === true && !skippedFirst) {
+      skippedFirst = true
+      continue
+    }
+    const createdAt = messageCreatedAt(message)
     blocks.push({
       sessionID,
       messageID: typeof message.info.id === "string" ? message.info.id : "",
       actor: "user",
       text,
       synthetic: false,
+      ...(createdAt === undefined ? {} : { createdAt }),
       provenance: prov<"intent">("intent", "parent-session", "high"),
     })
   }
@@ -312,8 +364,11 @@ async function resolveIntent(
   directory: string,
   config: ReviewerConfig,
 ): Promise<IntentContext> {
-  // Local (current session) direct intent.
-  const localSessionIntent = extractDirectIntent(currentMessages, request.sessionID)
+  // Local (current session) direct intent. In a delegated session the first
+  // user message is the parent agent's briefing, not human input.
+  const localSessionIntent = extractDirectIntent(currentMessages, request.sessionID, {
+    skipFirstUserMessage: lineage.depth > 0,
+  })
   const limit = Math.max(config.intentMessages, 4)
 
   const directUserIntent: IntentBlock[] = [...localSessionIntent]
@@ -323,7 +378,9 @@ async function resolveIntent(
   const parent = lineage.nodes[1]
   if (parent) {
     const parentMessages = await fetchMessagesBounded(client, parent.sessionID, directory, limit)
-    delegatedTask.push(...extractDelegatedTasks(parentMessages, parent.sessionID))
+    delegatedTask.push(
+      ...extractDelegatedTasks(parentMessages, parent.sessionID, request.sessionID),
+    )
     directUserIntent.push(...extractDirectIntent(parentMessages, parent.sessionID))
   }
 
@@ -335,7 +392,17 @@ async function resolveIntent(
     directUserIntent.push(...extractDirectIntent(rootMessages, root.sessionID))
   }
 
-  const latestExplicitAuthorization = directUserIntent[directUserIntent.length - 1]
+  // Pick by creation time, not by array position: the intent arrays are
+  // concatenated local → parent → root, so the last element is the root's
+  // latest message even when the current session holds much newer input. When
+  // no block carries a timestamp, fall back to the last recovered block.
+  const timestamped = directUserIntent.filter((block) => block.createdAt !== undefined)
+  const latestExplicitAuthorization =
+    timestamped.length > 0
+      ? timestamped.reduce((best, block) =>
+          (block.createdAt ?? 0) > (best.createdAt ?? 0) ? block : best,
+        )
+      : directUserIntent[directUserIntent.length - 1]
 
   const reasons: string[] = []
   if (delegatedTask.length === 0) reasons.push("no delegation subtask located in parent session")

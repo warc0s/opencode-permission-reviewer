@@ -10,16 +10,23 @@
  * a malformed config file degrades to defaults rather than crashing the plugin.
  */
 export function parseJsonc(text: string): Record<string, unknown> {
-  const stripped = stripCommentsAndTrailingCommas(text)
   try {
-    const parsed: unknown = JSON.parse(stripped)
-    if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
-      return parsed as Record<string, unknown>
-    }
-    return {}
+    return parseJsoncStrict(text)
   } catch {
     return {}
   }
+}
+
+/** Strict variant used by the config loader: throws on a syntax error or on a
+ *  top-level non-object so callers can distinguish a malformed config file
+ *  (worth warning about) from a missing one (the common case). */
+export function parseJsoncStrict(text: string): Record<string, unknown> {
+  const stripped = stripCommentsAndTrailingCommas(text)
+  const parsed: unknown = JSON.parse(stripped)
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("top-level value is not a JSON object")
+  }
+  return parsed as Record<string, unknown>
 }
 
 /** Strip JSONC comments and trailing commas while preserving string contents.

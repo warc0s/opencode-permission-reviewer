@@ -47,7 +47,7 @@ export function evaluatePolicy(
   rules: PolicyRule[] = [],
 ): PolicyTrace {
   const effectiveRules = filterProjectAllowRules(rules)
-  const effectivePolicyHash = hashRuleSet(effectiveRules)
+  const effectivePolicyHash = hashEffectivePolicy(effectiveRules, config)
   const matched: PolicyTrace["matchedRules"] = []
 
   for (const rule of effectiveRules) {
@@ -112,10 +112,13 @@ function matches(
   if (cond.deletion === true && cap?.writeEffects.deletion.value !== true) return false
   if (cond.executesCode === true && cap?.executesCode.value !== true) return false
   if (cond.createsAdHocCode === true && cap?.createsAdHocCode.value !== true) return false
-  if (cond.packageManagement === true) {
-    if (cap?.invokesPackageLifecycleScripts.value !== true) return false
-    if (cap?.actionClass.value !== "package-management") return false
-  }
+  // Capability facts, not the dominant action class, decide package-management
+  // matches: a command can execute code AND drive a package lifecycle at once
+  // (e.g. `bun install`), and requiring the single dominant class to be
+  // "package-management" would make the condition unmatchable for exactly the
+  // most dangerous variants.
+  if (cond.packageManagement === true && cap?.invokesPackageLifecycleScripts.value !== true)
+    return false
   if (cond.gitMutation === true && cap?.git.possible.value !== true) return false
   if (cond.networkObserved === true && cap?.network.observed.value !== true) return false
   if (cond.privilegeEscalation === true && cap?.process.privilegeEscalation.value !== true)
@@ -138,6 +141,27 @@ export function hashRuleSet(rules: PolicyRule[]): string {
     .sort()
     .join("|")
   return createHash("sha256").update(canonical).digest("hex").slice(0, 16)
+}
+
+/** Hash of everything that deterministically shapes a policy outcome: the
+ *  effective rules plus the decision-relevant config (confidence floor, risk
+ *  matrix, repository trust). Two runs that would enforce different thresholds
+ *  must not share the same "effective policy" identity. */
+export function hashEffectivePolicy(rules: PolicyRule[], config: ReviewerConfig): string {
+  const rulesCanonical = rules
+    .map((r) => `${r.id}:${r.effect}:${JSON.stringify(r.when)}`)
+    .sort()
+    .join("|")
+  const decisionConfig = JSON.stringify({
+    confidenceThreshold: config.confidenceThreshold,
+    minimumConfidence: config.riskPolicy.minimumConfidence,
+    riskPolicyAllow: config.riskPolicy.allow,
+    repositoryTrust: config.repositoryTrust,
+  })
+  return createHash("sha256")
+    .update(`${rulesCanonical}#${decisionConfig}`)
+    .digest("hex")
+    .slice(0, 16)
 }
 
 /**

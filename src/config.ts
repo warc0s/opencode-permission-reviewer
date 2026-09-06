@@ -154,7 +154,30 @@ function resolvePolicyRules(value: unknown): PolicyRule[] {
 }
 /** Validate a policy condition's sub-fields; return null if malformed (so a bad
  *  rule is dropped rather than crashing the engine at match time). */
+const CONDITION_LIST_KEYS = ["actionClass", "actorProfile", "repositoryTrust"] as const
+const CONDITION_FLAG_KEYS = [
+  "writesWorkspace",
+  "writesExternal",
+  "writesTemporary",
+  "deletion",
+  "executesCode",
+  "createsAdHocCode",
+  "packageManagement",
+  "gitMutation",
+  "networkObserved",
+  "privilegeEscalation",
+  "remoteEnabled",
+  "persistence",
+] as const
+
 function validateCondition(value: Record<string, unknown>): PolicyRule["when"] | null {
+  // An unknown key (usually a typo) must drop the rule: silently discarding it
+  // could strip the rule's only condition and turn a narrow rule into a
+  // universal match.
+  const knownKeys = new Set<string>([...CONDITION_LIST_KEYS, ...CONDITION_FLAG_KEYS])
+  for (const key of Object.keys(value)) {
+    if (!knownKeys.has(key)) return null
+  }
   const out: Record<string, unknown> = {}
   if (value.actionClass !== undefined) {
     if (!isStringArray(value.actionClass)) return null
@@ -168,25 +191,19 @@ function validateCondition(value: Record<string, unknown>): PolicyRule["when"] |
     if (!isStringArray(value.repositoryTrust)) return null
     out.repositoryTrust = value.repositoryTrust
   }
-  for (const flag of [
-    "writesWorkspace",
-    "writesExternal",
-    "writesTemporary",
-    "deletion",
-    "executesCode",
-    "createsAdHocCode",
-    "packageManagement",
-    "gitMutation",
-    "networkObserved",
-    "privilegeEscalation",
-    "remoteEnabled",
-    "persistence",
-  ]) {
+  for (const flag of CONDITION_FLAG_KEYS) {
     if (value[flag] !== undefined) {
       if (typeof value[flag] !== "boolean") return null
+      // Capability facts are `true | "unknown"` — never false — so a `false`
+      // condition could never match. Reject it instead of ignoring the filter:
+      // an ignored condition widens the rule.
+      if (value[flag] === false) return null
       out[flag] = value[flag]
     }
   }
+  // A condition that validated to nothing would match every request; a
+  // catch-all must be expressed by omitting `when` entirely.
+  if (Object.keys(out).length === 0) return null
   return out as PolicyRule["when"]
 }
 

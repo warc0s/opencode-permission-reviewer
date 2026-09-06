@@ -238,9 +238,20 @@ Every option is optional. Numeric/string options are clamped to safe bounds.
 Config is layered: built-in defaults ← global
 `~/.config/opencode/permission-reviewer.jsonc` ← project
 `.opencode/permission-reviewer.jsonc` ← inline plugin options (later wins).
-For safety, project config cannot redirect `auditPath`, grant `actorProfiles`,
-downgrade a global `enforcementMode: "enforce"`, or relax a trusted
-`escalationMode: "deny"` / failure-mode deny knob.
+The project layer crosses a trust boundary: it can only **tighten**
+security-sensitive fields, and its hardening survives even when a trusted layer
+set the same field. The project layer cannot choose the reviewer `model` or
+replace the `policy` text (both decide where code/context travels and what the
+reviewer enforces), cannot redirect `auditPath`, grant `actorProfiles`, set
+`repositoryTrust: "trusted"`, downgrade a global `enforcementMode: "enforce"`,
+or relax a trusted `escalationMode: "deny"` / failure-mode deny knob /
+`confidenceThreshold` / `riskPolicy`. Project values of the wrong type
+(including `null`) are ignored, never normalized back to defaults. A malformed
+global or project config file is reported to stderr and then ignored.
+
+In declarative `policyRules`, a `when` condition with an unknown key (a typo),
+a `false` flag, or an empty object drops the whole rule — a mistyped rule must
+never degrade into a universal match.
 
 #### Interactive vs autonomous
 

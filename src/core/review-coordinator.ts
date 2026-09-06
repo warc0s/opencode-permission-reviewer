@@ -117,6 +117,10 @@ export class ReviewCoordinator {
   private readonly providers: EvidenceProvider[]
   /** Live ask-decision capture (enrichment-only; undefined when disabled). */
   private readonly askDecisions: AskDecisionSource | undefined
+  /** Bound for metadata SDK calls (session create, tool listing, replies,
+   *  status publishing): a hung call must never leave a review pending
+   *  forever; the reviewer prompt keeps its own full timeout budget. */
+  private readonly metadataCallTimeoutMs: number
 
   constructor(
     private readonly ctx: RuntimeContext,
@@ -128,6 +132,7 @@ export class ReviewCoordinator {
     this.log = logger ?? (() => {})
     this.providers = providers ?? defaultEvidenceProviders()
     this.askDecisions = askDecisions
+    this.metadataCallTimeoutMs = Math.min(this.config.timeoutMs, 10_000)
   }
 
   pendingCount(): number {
@@ -225,10 +230,11 @@ export class ReviewCoordinator {
     extras?: Pick<ReviewExecutionResult, "reviewerOutcome" | "escalationDisposition">,
   ): Promise<ReviewExecutionResult | undefined> {
     if (this.isSuperseded(request)) return this.supersedeResult()
-    await this.emit(request, "denied", reason, decision, extras?.escalationDisposition)
-    if (this.isSuperseded(request)) return this.supersedeResult()
     const accepted = await this.safeReply(request, "reject", reason)
     if (!accepted) return this.supersedeResult()
+    // Publish the terminal phase only after OpenCode accepted the reply: the
+    // UI must not claim a denial that the server never recorded.
+    await this.emit(request, "denied", reason, decision, extras?.escalationDisposition)
     return undefined
   }
 
@@ -243,6 +249,10 @@ export class ReviewCoordinator {
     if (this.isSuperseded(request)) return this.supersedeResult()
 
     if (result.kind === "allow") {
+      const accepted = await this.safeReply(request, "once")
+      if (!accepted) return this.supersedeResult()
+      // Publish the terminal phase only after OpenCode accepted the reply: the
+      // UI must not claim an approval that the server never recorded.
       await this.emit(
         request,
         "approved",
@@ -250,8 +260,6 @@ export class ReviewCoordinator {
         result.decision,
         result.escalationDisposition,
       )
-      const accepted = await this.safeReply(request, "once")
-      if (!accepted) return this.supersedeResult()
       return result
     }
 
@@ -598,15 +606,18 @@ export class ReviewCoordinator {
 
     try {
       const created = responseData(
-        await this.ctx.client.session.create({
-          body: {
-            parentID: envelope.request.sessionID,
-            title: `[permission-review] ${envelope.request.permission}: ${redactSecrets(
-              envelope.request.patterns.join(", "),
-            ).slice(0, 120)}`,
-          },
-          query: { directory: this.ctx.directory },
-        }),
+        await withTimeout(
+          this.ctx.client.session.create({
+            body: {
+              parentID: envelope.request.sessionID,
+              title: `[permission-review] ${envelope.request.permission}: ${redactSecrets(
+                envelope.request.patterns.join(", "),
+              ).slice(0, 120)}`,
+            },
+            query: { directory: this.ctx.directory },
+          }),
+          this.metadataCallTimeoutMs,
+        ),
         "session.create",
       )
       if (typeof created.id !== "string")
@@ -615,7 +626,10 @@ export class ReviewCoordinator {
       this.reviewerSessions.add(reviewSessionID)
 
       const toolIDs = responseData(
-        await this.ctx.client.tool.ids({ query: { directory: this.ctx.directory } }),
+        await withTimeout(
+          this.ctx.client.tool.ids({ query: { directory: this.ctx.directory } }),
+          this.metadataCallTimeoutMs,
+        ),
         "tool.ids",
       )
       const tools = Object.fromEntries(toolIDs.map((id) => [id, false]))
@@ -780,14 +794,17 @@ export class ReviewCoordinator {
     message?: string,
   ): Promise<boolean> {
     const replyStart = performance.now()
-    const response = await this.ctx.permissionReply({
-      path: { requestID: request.id },
-      body: {
-        reply,
-        ...(message === undefined ? {} : { message: `[Automatic permission review] ${message}` }),
-      },
-      query: { directory: this.ctx.directory },
-    })
+    const response = await withTimeout(
+      this.ctx.permissionReply({
+        path: { requestID: request.id },
+        body: {
+          reply,
+          ...(message === undefined ? {} : { message: `[Automatic permission review] ${message}` }),
+        },
+        query: { directory: this.ctx.directory },
+      }),
+      this.metadataCallTimeoutMs,
+    )
     const replyMs = performance.now() - replyStart
     const currentTimings = this.timingsByRequest.get(request.id) ?? {}
     this.timingsByRequest.set(request.id, { ...currentTimings, replyMs })
@@ -824,9 +841,13 @@ export class ReviewCoordinator {
       ...(actor?.agentName.value === undefined ? {} : { actorName: actor.agentName.value }),
       ...(actor === undefined ? {} : { actorProfile: actor.profile.value }),
     })
-    // Status publishing is best-effort: a TUI failure must not fail the review.
+    // Status publishing is best-effort: a TUI failure must not fail the review,
+    // and a hung publish must not stall the review pipeline either.
     try {
-      const response = await this.ctx.publishUiStatus(status)
+      const response = await withTimeout(
+        this.ctx.publishUiStatus(status),
+        Math.min(this.metadataCallTimeoutMs, 5_000),
+      )
       // Both publish paths resolve with `{ data, error }`; a failure arrives as
       // an `error` field rather than a rejection (the raw fallback can reject
       // too, caught below).

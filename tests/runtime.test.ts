@@ -355,11 +355,10 @@ describe("runtime decisions", () => {
     const harness = runtime(client)
     harness.runtime.handle(request())
     await harness.runtime.waitForIdle()
-    expect(client.uiStatuses.map((status) => status.phase)).toEqual([
-      "reviewing",
-      "approved",
-      "manual",
-    ])
+    // The terminal "approved" phase is published only after OpenCode accepts
+    // the reply, so a rejected reply goes straight from "reviewing" to the
+    // escalated "manual" state without ever claiming approval.
+    expect(client.uiStatuses.map((status) => status.phase)).toEqual(["reviewing", "manual"])
   })
 
   test("a broken TUI status channel never changes the safety decision", async () => {

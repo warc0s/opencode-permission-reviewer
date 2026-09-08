@@ -11,11 +11,11 @@
 
 [![OpenCode](https://img.shields.io/badge/OpenCode-%E2%89%A51.18.11-6E56CF)](https://opencode.ai)
 [![Bun](https://img.shields.io/badge/Bun-%E2%89%A51.3.0-000000)](https://bun.sh)
-[![npm](https://img.shields.io/npm/v/opencode-permission-reviewer)](https://www.npmjs.com/package/opencode-permission-reviewer)
-[![Downloads](https://img.shields.io/npm/dw/opencode-permission-reviewer)](https://www.npmjs.org/package/opencode-permission-reviewer)
+[![npm](https://img.shields.io/npm/v/opencode-permission-reviewer?color=CB3837)](https://www.npmjs.com/package/opencode-permission-reviewer)
+[![Downloads](https://img.shields.io/npm/dw/opencode-permission-reviewer?color=F59E0B)](https://www.npmjs.org/package/opencode-permission-reviewer)
 [![License](https://img.shields.io/github/license/Warc0s/opencode-permission-reviewer?color=blue)](./LICENSE)
 [![Checks](https://img.shields.io/github/actions/workflow/status/Warc0s/opencode-permission-reviewer/ci.yml?branch=main&label=checks)](https://github.com/Warc0s/opencode-permission-reviewer/actions/workflows/ci.yml)
-[![Open issues](https://img.shields.io/github/issues/Warc0s/opencode-permission-reviewer)](https://github.com/Warc0s/opencode-permission-reviewer/issues)
+[![Open issues](https://img.shields.io/github/issues/Warc0s/opencode-permission-reviewer?color=555)](https://github.com/Warc0s/opencode-permission-reviewer/issues)
 
 OpenCode pauses on **every** `ask` permission and waits for a keystroke — even
 for safe, routine actions. This plugin adds a Codex-Guardian-style reviewer: a

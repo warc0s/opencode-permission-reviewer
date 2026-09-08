@@ -17,6 +17,12 @@ updates:
         update-types:
           - minor
           - patch
+    ignore:
+      # The shipped solid-js pin must match @opentui/solid's peerDependencies
+      # pin exactly (same version string) so npm installs of the tarball keep
+      # a single solid-js runtime. Bump it only together with @opentui/solid
+      # when upstream moves its pin.
+      - dependency-name: solid-js
     commit-message:
       prefix: chore
       include: scope

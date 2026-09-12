@@ -11,6 +11,7 @@ on:
 permissions:
   contents: read
   security-events: write
+  actions: read
 
 jobs:
   analyze:
@@ -27,8 +28,22 @@ jobs:
           # command-injection and path-traversal regressions.
           queries: security-extended
       - uses: github/codeql-action/analyze@v4
+        id: analyze
         with:
           category: "/language:javascript-typescript"
+          output: sarif-results
+      # Suppression annotations (`// codeql[rule-id]`) tag suppressed results
+      # in the SARIF, but GitHub does not dismiss existing alerts from that
+      # alone: apply the dismissals after each default-branch analysis so
+      # annotated false positives do not linger as open alerts.
+      - name: Dismiss suppressed alerts
+        if: github.ref == 'refs/heads/main'
+        uses: advanced-security/dismiss-alerts@v2
+        with:
+          sarif-id: ${{ steps.analyze.outputs.sarif-id }}
+          sarif-file: sarif-results/javascript-typescript.sarif
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
 
   # Stable required-check name for branch protection (matches the workflow name
   # already configured on main). Must use always() so a failed analyze still

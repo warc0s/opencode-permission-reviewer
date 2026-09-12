@@ -34,6 +34,35 @@ describe("shell lexer", () => {
     expect(firstExecutables("stdbuf -oL rm -rf /")).toEqual([["rm", "-rf", "/"]])
   })
 
+  test("peels timeout, watch and xargs wrappers", () => {
+    expect(firstExecutables("timeout 5 make")).toEqual([["make"]])
+    expect(firstExecutables("timeout --signal=KILL 10s rm -rf /")).toEqual([["rm", "-rf", "/"]])
+    expect(firstExecutables("timeout -s KILL 10s rm -rf /")).toEqual([["rm", "-rf", "/"]])
+    expect(firstExecutables("timeout -k 5 10s rm -rf /")).toEqual([["rm", "-rf", "/"]])
+    expect(firstExecutables("timeout -- 10s rm -rf /")).toEqual([["rm", "-rf", "/"]])
+    expect(firstExecutables("sudo timeout 5 rm -rf /")).toEqual([["rm", "-rf", "/"]])
+    expect(firstExecutables("watch ls")).toEqual([["ls"]])
+    expect(firstExecutables("watch -n 5 curl https://example.invalid")).toEqual([
+      ["curl", "https://example.invalid"],
+    ])
+    expect(firstExecutables("watch --interval=5 ls")).toEqual([["ls"]])
+    expect(firstExecutables("echo hi | xargs curl https://example.invalid")).toEqual([
+      ["echo", "hi"],
+      ["curl", "https://example.invalid"],
+    ])
+    expect(firstExecutables("xargs -n 1 curl https://example.invalid")).toEqual([
+      ["curl", "https://example.invalid"],
+    ])
+    expect(firstExecutables("xargs -I{} curl https://example.invalid")).toEqual([
+      ["curl", "https://example.invalid"],
+    ])
+  })
+
+  test("wrapper peeling without a command yields no effective command", () => {
+    expect(firstExecutables("timeout 5")).toEqual([])
+    expect(firstExecutables("timeout")).toEqual([])
+    expect(firstExecutables("xargs")).toEqual([])
+  })
   test("peels nested wrappers and env-style assignments together", () => {
     expect(firstExecutables("sudo env VAR=1 rm -rf /")).toEqual([["rm", "-rf", "/"]])
   })

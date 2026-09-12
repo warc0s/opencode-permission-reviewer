@@ -1,11 +1,27 @@
-import { appendFile, mkdir } from "node:fs/promises"
-import { closeSync, openSync, readSync, statSync } from "node:fs"
+import { mkdir } from "node:fs/promises"
+import {
+  closeSync,
+  constants as fsConstants,
+  fchmodSync,
+  fstatSync,
+  openSync,
+  readSync,
+  writeSync,
+} from "node:fs"
 import { homedir } from "node:os"
 import { dirname, resolve } from "node:path"
 import type { ReviewAuditRecord, ReviewerConfig } from "./types.ts"
 import { redactSecrets } from "./redact.ts"
 
 export const DEFAULT_AUDIT_PATH = "~/.local/share/opencode/permission-reviewer-audit.jsonl"
+
+const O_RDONLY = typeof fsConstants.O_RDONLY === "number" ? fsConstants.O_RDONLY : 0
+const O_WRONLY = typeof fsConstants.O_WRONLY === "number" ? fsConstants.O_WRONLY : 0
+const O_CREAT = typeof fsConstants.O_CREAT === "number" ? fsConstants.O_CREAT : 0
+const O_EXCL = typeof fsConstants.O_EXCL === "number" ? fsConstants.O_EXCL : 0
+const O_APPEND = typeof fsConstants.O_APPEND === "number" ? fsConstants.O_APPEND : 0
+const O_NOFOLLOW = typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0
+const O_NONBLOCK = typeof fsConstants.O_NONBLOCK === "number" ? fsConstants.O_NONBLOCK : 0
 
 export function expandHome(path: string): string {
   if (path === "~") return homedir()
@@ -65,24 +81,32 @@ function bump(map: Record<string, number>, key: string): void {
 const AUDIT_READ_CAP_BYTES = 64 * 1024 * 1024
 
 /** Read the (bounded) tail of an audit file synchronously without loading the
- *  whole file. Never throws: any failure to stat/open/read returns undefined
- *  and the caller reports the file as unreadable. */
+ *  whole file. The size and the bytes both come from the open descriptor, so
+ *  the window matches the data actually read. Never throws: any failure to
+ *  open/stat/read returns undefined and the caller reports the file as
+ *  unreadable. */
 function readTail(path: string): { text: string; truncated: boolean } | undefined {
-  let size: number
-  try {
-    size = statSync(path).size
-  } catch {
-    return undefined
-  }
-  const truncated = size > AUDIT_READ_CAP_BYTES
-  const length = truncated ? AUDIT_READ_CAP_BYTES : size
   let fd: number | undefined
   try {
-    fd = openSync(path, "r")
+    // O_NOFOLLOW rejects a symlinked audit path and O_NONBLOCK keeps a FIFO
+    // from blocking the CLI before fstat can reject the non-regular file.
+    fd = openSync(path, O_RDONLY | O_NONBLOCK | O_NOFOLLOW)
+    const info = fstatSync(fd)
+    if (!info.isFile()) return undefined
+    const size = info.size
+    const truncated = size > AUDIT_READ_CAP_BYTES
+    const length = truncated ? AUDIT_READ_CAP_BYTES : size
     const buffer = Buffer.alloc(length)
     const offset = truncated ? size - length : 0
-    readSync(fd, buffer, 0, length, offset)
-    let text = buffer.toString("utf8")
+    let read = 0
+    while (read < length) {
+      const count = readSync(fd, buffer, read, length - read, offset + read)
+      if (count === 0) break
+      read += count
+    }
+    // A shrink after fstat can end the read early; decode only the bytes
+    // actually read so no zero-padding leaks into the text.
+    let text = (read < length ? buffer.subarray(0, read) : buffer).toString("utf8")
     if (truncated) {
       // Drop a possibly partial first line so every summarized line is whole.
       text = text.replace(/^[^\n]*\n/, "")
@@ -238,14 +262,48 @@ export function createAuditWriter(
             })),
           }),
     }
-    await appendFile(path, `${JSON.stringify(sanitized)}\n`, {
-      encoding: "utf8",
-      mode: 0o600,
-    }).catch((error) => {
+    try {
+      appendAuditLine(path, `${JSON.stringify(sanitized)}\n`)
+    } catch (error) {
+      // The audit trail is best-effort: a lost record is logged, never thrown.
       logger?.("failed to append audit record", {
         path,
         error: error instanceof Error ? error.message : String(error),
       })
-    })
+    }
+  }
+}
+
+/** Append one JSONL line through an explicitly opened descriptor: O_NOFOLLOW
+ *  rejects a symlinked audit path, the descriptor is verified to be a regular
+ *  file before writing, and restrictive permissions are applied only when this
+ *  call created the file (never tightening or loosening a pre-existing file
+ *  the user may own jointly). One open per record matches the previous
+ *  append-per-call behavior. Throws on failure; the caller logs and swallows. */
+function appendAuditLine(path: string, line: string): void {
+  let fd: number | undefined
+  let created = false
+  try {
+    try {
+      fd = openSync(path, O_WRONLY | O_CREAT | O_EXCL | O_APPEND | O_NOFOLLOW)
+      created = true
+    } catch (error) {
+      // Anything but "already exists" (notably ELOOP from O_NOFOLLOW on a
+      // symlink) is a genuine failure for the caller to log.
+      if ((error as { code?: unknown }).code !== "EEXIST") throw error
+      fd = openSync(path, O_WRONLY | O_APPEND | O_NOFOLLOW)
+    }
+    if (!fstatSync(fd).isFile()) {
+      throw new Error(`not a regular file: ${path}`)
+    }
+    if (created) fchmodSync(fd, 0o600)
+    const data = Buffer.from(line, "utf8")
+    let written = 0
+    while (written < data.length) {
+      const count = writeSync(fd, data, written, data.length - written)
+      written += count
+    }
+  } finally {
+    if (fd !== undefined) closeSyncSafe(fd)
   }
 }

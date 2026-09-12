@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises"
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises"
 import { readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
@@ -102,6 +102,45 @@ describe("audit writer", () => {
     expect(logs.length).toBeGreaterThan(0)
   })
 
+  test("a symlinked audit path is rejected without throwing and the target is untouched", async () => {
+    const target = join(directory, "target.jsonl")
+    await writeFile(target, "")
+    await symlink(target, join(directory, "audit.jsonl"))
+    const logs: unknown[] = []
+    const writeAudit = createAuditWriter(
+      { ...DEFAULT_CONFIG, audit: true, auditPath: join(directory, "audit.jsonl") },
+      (_msg, details) => logs.push(details),
+    )!
+    await expect(writeAudit(record())).resolves.toBeUndefined()
+    expect(logs.length).toBeGreaterThan(0)
+    // The record is lost rather than written through the link.
+    expect(await readFile(target, "utf8")).toBe("")
+  })
+
+  test("a non-regular audit path is rejected without throwing", async () => {
+    // A character device opens fine but fails the regular-file check, the
+    // same path a FIFO or socket takes after a successful non-blocking open.
+    const logs: unknown[] = []
+    const writeAudit = createAuditWriter(
+      { ...DEFAULT_CONFIG, audit: true, auditPath: "/dev/null" },
+      (_msg, details) => logs.push(details),
+    )!
+    await expect(writeAudit(record())).resolves.toBeUndefined()
+    expect(logs.length).toBeGreaterThan(0)
+  })
+
+  test("a pre-existing audit file keeps its permissions (restrictive mode only on create)", async () => {
+    const auditPath = join(directory, "audit.jsonl")
+    await writeFile(auditPath, "")
+    await chmod(auditPath, 0o644)
+    const writeAudit = createAuditWriter({ ...DEFAULT_CONFIG, audit: true, auditPath })!
+    await writeAudit(record({ requestID: "per_keep" }))
+    const info = await stat(auditPath)
+    expect(info.mode & 0o777).toBe(0o644)
+    const parsed = JSON.parse((await readFile(auditPath, "utf8")).trim()) as ReviewAuditRecord
+    expect(parsed.requestID).toBe("per_keep")
+  })
+
   test("expandHome handles ~ and ~/ paths without throwing", async () => {
     // We cannot write to real ~ in test, but we can verify that `~` and `~/...`
     // are resolved (not treated as relative) — by checking the writer is created
@@ -158,6 +197,15 @@ describe("audit summary hardening", () => {
     const summary = readAuditSummary(file)
     expect(summary.exists).toBe(false)
     expect(summary.truncated).toBe(false)
+    expect(summary.validRecords).toBe(0)
+  })
+
+  test("a symlinked audit file reads as missing instead of following the link", async () => {
+    const target = join(directory, "target.jsonl")
+    writeFileSync(target, `${JSON.stringify(record({ requestID: "per_link" }))}\n`)
+    await symlink(target, join(directory, "audit.jsonl"))
+    const summary = readAuditSummary(join(directory, "audit.jsonl"))
+    expect(summary.exists).toBe(false)
     expect(summary.validRecords).toBe(0)
   })
 

@@ -98,6 +98,22 @@ function readTail(path: string): { text: string; truncated: boolean } | undefine
     const length = truncated ? AUDIT_READ_CAP_BYTES : size
     const buffer = Buffer.alloc(length)
     const offset = truncated ? size - length : 0
+    // When the window does not start at the beginning of the file, its first
+    // byte may land mid-line. Peek at the byte just before the window: a
+    // newline there means the window already starts at a line boundary, so
+    // the first line is whole and must be kept. Otherwise the first line may
+    // be partial and is dropped below. A failed peek keeps the old
+    // always-strip behavior; it only ever drops one line from the report.
+    let atLineBoundary = false
+    if (truncated && offset > 0) {
+      try {
+        const probe = Buffer.alloc(1)
+        const seen = readSync(fd, probe, 0, 1, offset - 1)
+        atLineBoundary = seen === 1 && probe[0] === 0x0a
+      } catch {
+        atLineBoundary = false
+      }
+    }
     let read = 0
     while (read < length) {
       const count = readSync(fd, buffer, read, length - read, offset + read)
@@ -107,7 +123,7 @@ function readTail(path: string): { text: string; truncated: boolean } | undefine
     // A shrink after fstat can end the read early; decode only the bytes
     // actually read so no zero-padding leaks into the text.
     let text = (read < length ? buffer.subarray(0, read) : buffer).toString("utf8")
-    if (truncated) {
+    if (truncated && !atLineBoundary) {
       // Drop a possibly partial first line so every summarized line is whole.
       text = text.replace(/^[^\n]*\n/, "")
     }
@@ -226,8 +242,21 @@ export function createAuditWriter(
   const path = expandHome(config.auditPath ?? DEFAULT_AUDIT_PATH)
   let ready: Promise<void> | undefined
   return async (record) => {
-    ready ??= mkdir(dirname(path), { recursive: true }).then(() => {})
-    await ready
+    try {
+      ready ??= mkdir(dirname(path), { recursive: true }).then(() => {})
+      await ready
+    } catch (error) {
+      // The audit trail is best-effort: a directory that cannot be created
+      // loses the record the same way an append failure does, logged and
+      // never thrown. The cached promise is cleared so a later record retries
+      // the mkdir instead of sticking to the rejection.
+      logger?.("failed to append audit record", {
+        path,
+        error: error instanceof Error ? error.message : String(error),
+      })
+      ready = undefined
+      return
+    }
     // Redact the free-text fields (the reason carries transport error messages
     // and provider responses that never passed through the evidence
     // pipeline's redaction). Structural identifiers are left intact: running

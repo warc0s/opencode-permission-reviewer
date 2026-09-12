@@ -312,16 +312,16 @@ are stored as **SHA-256**, never in clear text. Set `audit: false` to disable.
 Narrowly scoped temp cleanup; matches user intent.
 ```
 
-The optional TUI status strip reserves space below the session instead of
-covering the editor or native approval controls. It uses one line while
-reviewing and a second line for the result rationale; long text is truncated.
-The review keymap is active only while reviewing and is released as soon as
-the permission is resolved. OpenCode still hides its editor while a permission
-is pending. On a technical failure or escalation, the strip is removed and
-OpenCode's native approval controls remain available with a **manual review
-required** warning. Completed approvals/denials stay visible for 5 s, then
-close automatically. A broken TUI transport **never changes the safety
-decision**.
+While reviewing, the optional TUI overlay covers the native approval controls
+with **Reviewing this permission** and **No action needed**, plus the action,
+reviewer model, and elapsed time. Once resolved, the overlay becomes a compact
+status strip below the session: one line for the result and a second for its
+rationale, with long text truncated. The review keymap is released immediately
+so you can resume typing while the result stays visible for 5 s. OpenCode still
+hides its editor while a permission is pending. On a technical failure or
+escalation, the overlay is removed and OpenCode's native approval controls
+become available with a **manual review required** warning. A broken TUI
+transport **never changes the safety decision**.
 
 ## How it works
 

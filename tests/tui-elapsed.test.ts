@@ -56,8 +56,8 @@ describe("tui panel live elapsed counter", () => {
       state: { session: { get: () => undefined } },
       mode: { current: () => "normal", push: () => () => {} },
       slots: {
-        register: (plugin: { slots: { app_bottom?: () => unknown } }) => {
-          factory = plugin.slots.app_bottom
+        register: (plugin: { slots: { app?: () => unknown } }) => {
+          factory = plugin.slots.app
         },
       },
     } as unknown as TuiPluginApi
@@ -83,12 +83,7 @@ describe("tui panel live elapsed counter", () => {
     const setup = await testRender(() => factory!() as Element, { width: 80, height: 24 })
     disposers.push(() => setup.renderer.destroy())
     await setup.flush()
-    expect(
-      setup
-        .captureCharFrame()
-        .split("\n")
-        .filter((line) => line.trim()),
-    ).toHaveLength(1)
+    expect(setup.captureCharFrame()).toContain("No action needed")
 
     const readElapsed = (): number => {
       const frame = setup.captureCharFrame()

@@ -1,6 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { execFile } from "node:child_process"
-import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, rmSync, existsSync } from "node:fs"
+import {
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+  rmSync,
+  existsSync,
+  appendFileSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { promisify } from "node:util"
@@ -17,7 +25,11 @@ import { parseCommand } from "../src/capability/command-parser.ts"
 import { emergencyBrakeReason } from "../src/emergency-brake.ts"
 import { enforceDecision } from "../src/decision.ts"
 import { enrichSshEvidence, includeEvidenceFile } from "../src/ssh-evidence.ts"
-import { enrichGitEvidence } from "../src/git-evidence.ts"
+import {
+  enrichGitEvidence,
+  collectConversionKeys,
+  conversionNeutralizationArgs,
+} from "../src/git-evidence.ts"
 import { buildEvidence, buildTranscript } from "../src/context.ts"
 import { createAuditWriter, readAuditSummary } from "../src/audit.ts"
 import { resolveActorContext } from "../src/context/actor-resolver.ts"
@@ -773,6 +785,90 @@ describe("trust hardening — git conversion-filter neutralization edge cases", 
       rmSync(directory, { recursive: true })
     }
   }, 30_000)
+})
+
+// --- git filter neutralization: names with spaces or equals ------------------------
+
+describe("trust hardening — git conversion-filter names with spaces or equals", () => {
+  test("a filter name containing a space is parsed and neutralized", () => {
+    // NUL-delimited scan output for `[filter "a b"]` plus a spaced diff driver.
+    const stdout = "filter.a b.clean\ncat\0diff.my driver.textconv\ncat\0"
+    const { filterNames, diffDrivers } = collectConversionKeys(stdout)
+    expect([...filterNames]).toEqual(["a b"])
+    expect([...diffDrivers]).toEqual(["my driver"])
+    const args = conversionNeutralizationArgs(filterNames, diffDrivers)
+    expect(args).toContain("filter.a b.clean=cat")
+    expect(args).toContain("filter.a b.smudge=cat")
+    expect(args).toContain("diff.my driver.textconv=")
+  })
+
+  test("a plain filter name still neutralizes exactly as before", () => {
+    const { filterNames, diffDrivers } = collectConversionKeys("filter.lfs.clean\ncat\0")
+    expect([...filterNames]).toEqual(["lfs"])
+    expect(diffDrivers.size).toBe(0)
+    expect(conversionNeutralizationArgs(filterNames, diffDrivers)).toEqual([
+      "-c",
+      "filter.lfs.clean=cat",
+      "-c",
+      "filter.lfs.smudge=cat",
+      "-c",
+      "filter.lfs.process=",
+      "-c",
+      "filter.lfs.required=false",
+    ])
+  })
+
+  test("a filter name containing = cannot be overridden, so building args throws", () => {
+    const { filterNames } = collectConversionKeys("filter.x=y.clean\ncat\0")
+    expect([...filterNames]).toEqual(["x=y"])
+    expect(() => conversionNeutralizationArgs(filterNames, new Set())).toThrow(
+      "refusing to inspect",
+    )
+  })
+
+  test("a repo with a spaced filter subsection still produces a snapshot", async () => {
+    const directory = tempDir("reviewer-gitfilter-space-")
+    try {
+      const run = (args: string[]) => execFileAsync("git", args, { cwd: directory })
+      await run(["init", "-b", "staging"])
+      await run(["config", "user.email", "reviewer@example.invalid"])
+      await run(["config", "user.name", "Reviewer Test"])
+      await run(["config", "filter.a b.clean", "cat"])
+      writeFileSync(join(directory, "data.txt"), "BBBB\n")
+      const result = await enrichGitEvidence(
+        bashRequest("git add data.txt && git commit -m bounded"),
+        directory,
+        24_000,
+      )
+      expect(result.text).toContain("GIT_STATE_ANALYSIS")
+      expect(result.text).not.toContain("unavailable")
+    } finally {
+      rmSync(directory, { recursive: true })
+    }
+  }, 20_000)
+
+  test("a repo with an equals filter subsection withholds the snapshot", async () => {
+    const directory = tempDir("reviewer-gitfilter-equals-")
+    try {
+      const run = (args: string[]) => execFileAsync("git", args, { cwd: directory })
+      await run(["init", "-b", "staging"])
+      await run(["config", "user.email", "reviewer@example.invalid"])
+      await run(["config", "user.name", "Reviewer Test"])
+      appendFileSync(join(directory, ".git", "config"), '[filter "x=y"]\n\tclean = cat\n')
+      writeFileSync(join(directory, "data.txt"), "BBBB\n")
+      const result = await enrichGitEvidence(
+        bashRequest("git add data.txt && git commit -m bounded"),
+        directory,
+        24_000,
+      )
+      // Fail closed: the name cannot be neutralized via -c overrides, so no
+      // snapshot is taken and the reason says so.
+      expect(result.text).toContain("unavailable")
+      expect(result.text).toContain("refusing to inspect")
+    } finally {
+      rmSync(directory, { recursive: true })
+    }
+  }, 20_000)
 })
 
 // --- universal rules and degraded trusted config ----------------------------------------

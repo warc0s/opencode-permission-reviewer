@@ -137,6 +137,13 @@ function boundedList(values: string[], max = 200): { values: string[]; omitted: 
  *  keys (pure config reading, executes nothing) and override every one with a
  *  no-op so the evidence snapshot cannot run repo code.
  *
+ *  The scan uses NUL-delimited output (`git config -z --get-regexp`), where
+ *  each record is `key\nvalue\0`: splitting lines on whitespace would
+ *  mis-parse legal subsections containing spaces (`[filter "a b"]`) and
+ *  silently leave them active. Names containing `=` cannot be expressed
+ *  through `-c KEY=VALUE` overrides (the override splits on the first `=`),
+ *  so such a name fails the scan instead of being partially neutralized.
+ *
  *  Only the in-flight subprocess is shared per directory: concurrent snapshots
  *  reuse one scan so burst evidence collection does not multiply git
  *  processes, but the result is never reused across time — a repository whose
@@ -150,17 +157,23 @@ const inFlightFilterScans = new Map<string, Promise<string[]>>()
 
 /** Filter/driver names may themselves contain dots (`filter.a.b.clean`), so
  *  keys are matched structurally (strip the section and the trailing property)
- *  instead of with a dot-free capture group. */
-function collectConversionKeys(stdout: string): {
+ *  instead of with a dot-free capture group. Names may also contain spaces
+ *  (`[filter "a b"]` is legal and overridable via `-c`), so keys are parsed
+ *  from NUL-delimited scan output, never by splitting on whitespace. */
+export function collectConversionKeys(stdout: string): {
   filterNames: Set<string>
   diffDrivers: Set<string>
 } {
   const filterNames = new Set<string>()
   const diffDrivers = new Set<string>()
   const filterProps = [".clean", ".smudge", ".process", ".required"]
-  for (const line of stdout.split("\n")) {
-    const key = line.split(/\s/, 1)[0]
-    if (key === undefined) continue
+  // `git config -z --get-regexp` emits one `key\nvalue\0` record per match;
+  // the key is everything before the first newline, whatever it contains.
+  for (const record of stdout.split("\0")) {
+    if (record.length === 0) continue
+    const newline = record.indexOf("\n")
+    const key = newline < 0 ? record : record.slice(0, newline)
+    if (key.length === 0) continue
     if (key.startsWith("filter.")) {
       const prop = filterProps.find((suffix) => key.endsWith(suffix))
       if (prop === undefined) continue
@@ -176,18 +189,63 @@ function collectConversionKeys(stdout: string): {
   return { filterNames, diffDrivers }
 }
 
+/** Build the `-c` overrides that neutralize every collected filter and diff
+ *  driver. A name containing `=` cannot be expressed as a `-c KEY=VALUE`
+ *  override (the override splits on the first `=` and would arm the wrong
+ *  key), so it throws and the caller withholds the snapshot instead. */
+export function conversionNeutralizationArgs(
+  filterNames: Set<string>,
+  diffDrivers: Set<string>,
+): string[] {
+  for (const name of filterNames) {
+    if (name.includes("=")) {
+      throw new Error(
+        `repository configures conversion filter "${name}" which cannot be neutralized with a config override; refusing to inspect`,
+      )
+    }
+  }
+  for (const driver of diffDrivers) {
+    if (driver.includes("=")) {
+      throw new Error(
+        `repository configures diff textconv driver "${driver}" which cannot be neutralized with a config override; refusing to inspect`,
+      )
+    }
+  }
+  const args: string[] = []
+  for (const name of filterNames) {
+    args.push(
+      "-c",
+      `filter.${name}.clean=cat`,
+      "-c",
+      `filter.${name}.smudge=cat`,
+      "-c",
+      `filter.${name}.process=`,
+      "-c",
+      `filter.${name}.required=false`,
+    )
+  }
+  for (const driver of diffDrivers) {
+    args.push("-c", `diff.${driver}.textconv=`)
+  }
+  return args
+}
+
 function filterNeutralizationArgs(directory: string): Promise<string[]> {
   const existing = inFlightFilterScans.get(directory)
   if (existing !== undefined) return existing
   const scan = (async () => {
     try {
-      const result = await execFileAsync("git", ["config", "--get-regexp", "^(filter|diff)\\."], {
-        cwd: directory,
-        timeout: 5_000,
-        maxBuffer: 64 * 1024,
-        encoding: "utf8",
-        env: gitInspectionEnv(),
-      })
+      const result = await execFileAsync(
+        "git",
+        ["config", "-z", "--get-regexp", "^(filter|diff)\\."],
+        {
+          cwd: directory,
+          timeout: 5_000,
+          maxBuffer: 64 * 1024,
+          encoding: "utf8",
+          env: gitInspectionEnv(),
+        },
+      )
       const { filterNames, diffDrivers } = collectConversionKeys(result.stdout)
       if (filterNames.size > MAX_NEUTRALIZED_FILTERS) {
         // A resource limit must never degrade into "inspect while leaving the
@@ -201,22 +259,7 @@ function filterNeutralizationArgs(directory: string): Promise<string[]> {
           `repository configures ${diffDrivers.size} diff textconv drivers (limit ${MAX_NEUTRALIZED_DIFF_DRIVERS}); refusing to inspect`,
         )
       }
-      const args: string[] = []
-      for (const name of filterNames) {
-        args.push(
-          "-c",
-          `filter.${name}.clean=cat`,
-          "-c",
-          `filter.${name}.smudge=cat`,
-          "-c",
-          `filter.${name}.process=`,
-          "-c",
-          `filter.${name}.required=false`,
-        )
-      }
-      for (const driver of diffDrivers) {
-        args.push("-c", `diff.${driver}.textconv=`)
-      }
+      const args = conversionNeutralizationArgs(filterNames, diffDrivers)
       return args
     } catch (error) {
       const record = error as { code?: unknown }

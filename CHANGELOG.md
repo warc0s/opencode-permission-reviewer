@@ -63,6 +63,20 @@ curl …`, and piped `xargs curl …` trip the secret-export brake and
   and policy text are not project-settable, and malformed config files warn
   instead of silently degrading. User intent is attributed by session origin,
   so no child-session message counts as human authorization.
+- Filesystem reads and writes in the decision path go through explicitly
+  opened, verified descriptors: config layers are rejected when symlinked,
+  non-regular, or oversized (a committed link to a FIFO or an endless source
+  can no longer hang or exhaust startup); audit records are appended through
+  a descriptor that refuses symlinked and non-regular targets and applies
+  `0600` on creation; evidence file reads loop to completion so a short read
+  is reported as truncated instead of partially included; and the audit
+  report reader takes its size and bytes from the open descriptor instead of
+  a racy stat-then-open pair.
+- `opencode-permission-reviewer init` re-verifies each planned write against
+  the current file before touching it: a file that drifted since planning
+  (created, deleted, or turned malformed) aborts with a refusal instead of
+  being merged or clobbered, new files are created exclusively, and backups
+  claim their destination atomically instead of overwriting a collision.
 
 ## [1.3.1] - 2026-09-03
 

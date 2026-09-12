@@ -351,9 +351,9 @@ rationale, confidence }`. The session is created in a scratch directory
    reviewer's system prompt — only your trusted global instructions remain.
    Tool denial is a wildcard session permission rule, which takes precedence
    over agent-config allows and therefore also covers MCP tools and MCP
-   resource tools. If the host refuses the isolated directory, the session
-   falls back to the project directory with tool denial and recursion
-   protection still active.
+   resource tools. If the host refuses the isolated directory, the review is
+   not run in the project directory: it escalates to the human as a reviewer
+   failure instead, so isolation is never silently degraded.
 5. Decisions are enforced with invariants: **critical risk is never approved**,
    **high risk with low/unknown authorization is escalated**, **medium risk
    with unknown authorization is escalated**, low confidence is escalated,
@@ -429,9 +429,9 @@ binary, blocked, or truncated evidence) remains a reviewer decision.
   takes precedence over agent-config allows.
 - The reviewer session runs outside the project directory, so repository
   instructions (`AGENTS.md` and project-config `instructions`) are not part of
-  its system prompt; a documented fallback to the project directory keeps the
-  tool denial and recursion protection if the host refuses the isolated
-  directory.
+  its system prompt; if the isolated directory cannot be established, the
+  review escalates to the human as a reviewer failure rather than running
+  with degraded isolation.
 - A narrow deterministic emergency brake rejects unmistakable root destruction
   (including privilege-prefixed and command-string forms such as
   `sudo rm -rf /`, `sh -c 'rm -rf /'`, `ssh host rm -rf /`) and direct

@@ -119,6 +119,39 @@ describe("redactSecrets — credential formats", () => {
     expect(redactSecrets(`token ${opaque}`)).not.toContain(opaque)
   })
 
+  test("redacts Bearer tokens containing dashes", () => {
+    const dashed = "dGhpcy1pcy1hLXNlY3JldC10b2tlbg"
+    const out = redactSecrets(`Authorization: Bearer ${dashed}`)
+    expect(out).not.toContain(dashed)
+    expect(out).toContain("Bearer [REDACTED:bearer]")
+  })
+
+  test("redacts Basic tokens containing dashes and padding", () => {
+    const dashed = "YWJjLWRlZi1naGk="
+    const out = redactSecrets(`Authorization: Basic ${dashed}`)
+    expect(out).not.toContain(dashed)
+    expect(out).toContain("Basic [REDACTED:basic]")
+  })
+
+  test("dashed auth-scheme tokens stay redacted on a second pass", () => {
+    const samples = [
+      "Authorization: Bearer dGhpcy1pcy1hLXNlY3JldC10b2tlbg",
+      "Authorization: Basic YWJjLWRlZi1naGk=",
+    ]
+    for (const sample of samples) {
+      const once = redactSecrets(sample)
+      expect(once).toContain("[REDACTED:")
+      expect(redactSecrets(once)).toBe(once)
+    }
+  })
+
+  test("redacts a dash-free Bearer token", () => {
+    const plain = "abcdefghij1234567890"
+    const out = redactSecrets(`Authorization: Bearer ${plain}`)
+    expect(out).not.toContain(plain)
+    expect(out).toContain("Bearer [REDACTED:bearer]")
+  })
+
   test("redacts Cookie / Set-Cookie headers", () => {
     expect(redactSecrets("Cookie: session=abcdefgh1234567890")).not.toContain("abcdefgh")
     expect(redactSecrets("Set-Cookie: sid=abcdefgh1234567890")).not.toContain("abcdefgh")

@@ -33,6 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The redaction rule for auth-scheme tokens (`Bearer`/`Basic`/`Token`)
+  treated the `-` in its character class as a range, so tokens containing
+  dashes were never matched as a whole and could reach the reviewer
+  unredacted; the dash is now a literal member of the class.
 - Reviewer sessions now run in a scratch directory outside the project, so
   repository instructions (`AGENTS.md`, project config instructions, project
   MCP context) never enter the reviewer's system prompt; every tool is denied

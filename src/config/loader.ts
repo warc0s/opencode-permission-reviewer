@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs"
+import { closeSync, constants as fsConstants, fstatSync, openSync, readSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { parseJsoncStrict } from "./jsonc.ts"
@@ -9,6 +9,16 @@ import {
   DEFAULT_RISK_POLICY,
 } from "../config.ts"
 import type { PolicyRule, ReviewerConfig } from "../types.ts"
+
+const O_RDONLY = typeof fsConstants.O_RDONLY === "number" ? fsConstants.O_RDONLY : 0
+const O_NOFOLLOW = typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0
+const O_NONBLOCK = typeof fsConstants.O_NONBLOCK === "number" ? fsConstants.O_NONBLOCK : 0
+
+/** Cap on a single config file read: the project layer is repository-controlled
+ *  and read at startup, so an unbounded read lets a committed symlink to an
+ *  endless source exhaust memory. A file over the cap is treated like any
+ *  other unreadable layer (warned about and ignored). */
+const CONFIG_READ_CAP_BYTES = 1024 * 1024
 
 type LayerStatus = "missing" | "ok" | "read-error" | "malformed"
 
@@ -25,27 +35,79 @@ interface ConfigLayer {
  *  "missing", no warning). A file that exists but cannot be read or parsed
  *  keeps the plugin working with an empty layer, but the status lets the
  *  caller treat an unusable TRUSTED layer as a fail-closed condition rather
- *  than silently falling back to defaults. */
+ *  than silently falling back to defaults.
+ *
+ *  The read goes through an explicitly opened descriptor: O_NOFOLLOW rejects
+ *  a symlinked layer (a committed link to a FIFO would otherwise hang startup
+ *  and a link to an endless source would exhaust memory), O_NONBLOCK keeps a
+ *  FIFO from blocking before fstat can reject it, fstat requires a regular
+ *  file, and the byte cap bounds the read. */
 function readConfigLayer(path: string): ConfigLayer {
-  let text: string
+  const read = readLayerText(path)
+  if (!("text" in read)) return read
   try {
-    text = readFileSync(path, "utf8")
-  } catch (error) {
-    const code = (error as { code?: unknown }).code
-    if (code === "ENOENT") return { raw: {}, status: "missing" }
-    return {
-      raw: {},
-      status: "read-error",
-      warning: `permission-reviewer config at ${path} exists but could not be read (${code ?? "unknown error"}); the layer was ignored`,
-    }
-  }
-  try {
-    return { raw: parseJsoncStrict(text), status: "ok" }
+    return { raw: parseJsoncStrict(read.text), status: "ok" }
   } catch (error) {
     return {
       raw: {},
       status: "malformed",
       warning: `permission-reviewer config at ${path} is malformed and was ignored (${error instanceof Error ? error.message : String(error)})`,
+    }
+  }
+}
+
+/** Read at most the capped bytes through the open descriptor. A missing file
+ *  is the common case (status "missing", no warning); anything else that
+ *  prevents honoring the layer degrades to the same warn-and-ignore outcome
+ *  the loader already uses for malformed files. Never throws. */
+function readLayerText(path: string): ConfigLayer | { status: "ok"; text: string } {
+  const readError = (warning: string): ConfigLayer => ({ raw: {}, status: "read-error", warning })
+  let fd: number | undefined
+  try {
+    try {
+      fd = openSync(path, O_RDONLY | O_NONBLOCK | O_NOFOLLOW)
+    } catch (error) {
+      const code = (error as { code?: unknown }).code
+      if (code === "ENOENT") return { raw: {}, status: "missing" }
+      return readError(
+        `permission-reviewer config at ${path} exists but could not be read (${code ?? "unknown error"}); the layer was ignored`,
+      )
+    }
+    const info = fstatSync(fd)
+    if (!info.isFile()) {
+      return readError(
+        `permission-reviewer config at ${path} is not a regular file and was ignored`,
+      )
+    }
+    if (info.size > CONFIG_READ_CAP_BYTES) {
+      return readError(
+        `permission-reviewer config at ${path} exceeds the size limit (${CONFIG_READ_CAP_BYTES} bytes) and was ignored`,
+      )
+    }
+    const length = info.size
+    const buffer = Buffer.alloc(length)
+    let read = 0
+    while (read < length) {
+      const count = readSync(fd, buffer, read, length - read, read)
+      if (count === 0) break
+      read += count
+    }
+    // A concurrent shrink can end the read early; decode only the bytes
+    // actually read so no zero-padding leaks into the parser.
+    const text = (read < length ? buffer.subarray(0, read) : buffer).toString("utf8")
+    return { status: "ok", text }
+  } catch (error) {
+    const code = (error as { code?: unknown }).code
+    return readError(
+      `permission-reviewer config at ${path} exists but could not be read (${code ?? "unknown error"}); the layer was ignored`,
+    )
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd)
+      } catch {
+        // Best effort; the read already succeeded or failed on its own.
+      }
     }
   }
 }

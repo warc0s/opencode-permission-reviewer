@@ -416,7 +416,22 @@ async function includeFileOnce(
         }
       }
       const buffer = Buffer.alloc(Math.min(info.size, limit + 1))
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
+      // A single read is not guaranteed to fill the buffer, so loop until
+      // full or EOF. A short total means the file shrank mid-read; the status
+      // below then reports truncation instead of silently covering fewer
+      // bytes than the size claims.
+      let bytesRead = 0
+      while (bytesRead < buffer.length) {
+        const { bytesRead: count } = await handle.read(
+          buffer,
+          bytesRead,
+          buffer.length - bytesRead,
+          bytesRead,
+        )
+        if (count === 0) break
+        bytesRead += count
+      }
+      const shortRead = bytesRead < buffer.length
       const included = buffer.subarray(0, Math.min(bytesRead, limit))
       const content = included.toString("utf8")
       const replacementCount = [...content].filter((character) => character === "\uFFFD").length
@@ -442,7 +457,7 @@ async function includeFileOnce(
       return {
         source: "file",
         path: resolved,
-        status: info.size > limit ? "truncated" : "included",
+        status: info.size > limit || shortRead ? "truncated" : "included",
         size: info.size,
         includedBytes: included.length,
         includedSha256: sha256(included),

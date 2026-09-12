@@ -41,7 +41,9 @@ jobs:
         uses: advanced-security/dismiss-alerts@v2
         with:
           sarif-id: ${{ steps.analyze.outputs.sarif-id }}
-          sarif-file: sarif-results/javascript-typescript.sarif
+          # Directory mode: the action discovers every *.sarif in it, so the
+          # step does not depend on the exact file naming of codeql-action.
+          sarif-file: sarif-results
         env:
           GITHUB_TOKEN: ${{ github.token }}
 

@@ -10,7 +10,7 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises"
-import { readFileSync, writeFileSync } from "node:fs"
+import { readFileSync, writeFileSync, openSync, writeSync, closeSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { createAuditWriter, DEFAULT_AUDIT_PATH, readAuditSummary } from "../src/audit.ts"
@@ -27,6 +27,18 @@ function record(overrides: Partial<ReviewAuditRecord> = {}): ReviewAuditRecord {
     outcome: "allow",
     reason: "narrow safe command",
     ...overrides,
+  }
+}
+
+/** Write a string at an absolute file offset, looping to completion. Lets
+ *  tests plant small records at far offsets so the file grows sparsely. */
+function writeAt(fd: number, data: string, position: number): void {
+  const buffer = Buffer.from(data, "utf8")
+  let written = 0
+  while (written < buffer.length) {
+    const count = writeSync(fd, buffer, written, buffer.length - written, position + written)
+    if (count === 0) throw new Error("short write while building sparse fixture")
+    written += count
   }
 }
 
@@ -110,6 +122,28 @@ describe("audit writer", () => {
     )!
     await expect(writeAudit(record())).resolves.toBeUndefined()
     expect(logs.length).toBeGreaterThan(0)
+  })
+
+  test("a mkdir failure is logged and never thrown, and later records retry", async () => {
+    // A regular file where a directory should be makes mkdir fail with
+    // ENOTDIR, so the writer cannot reach the append path at all.
+    const blocker = join(directory, "blocker")
+    await writeFile(blocker, "x")
+    const auditPath = join(blocker, "nested", "audit.jsonl")
+    const details: unknown[] = []
+    const writeAudit = createAuditWriter(
+      { ...DEFAULT_CONFIG, audit: true, auditPath },
+      (_msg, info) => details.push(info),
+    )!
+    await expect(writeAudit(record({ requestID: "per_lost_1" }))).resolves.toBeUndefined()
+    // The failure is not sticky: every record logs, and the writer recovers
+    // once the directory can be created.
+    await expect(writeAudit(record({ requestID: "per_lost_2" }))).resolves.toBeUndefined()
+    expect(details.length).toBeGreaterThanOrEqual(2)
+    await rm(blocker, { force: true })
+    await writeAudit(record({ requestID: "per_recovered" }))
+    const parsed = JSON.parse((await readFile(auditPath, "utf8")).trim()) as ReviewAuditRecord
+    expect(parsed.requestID).toBe("per_recovered")
   })
 
   test("a symlinked audit path is rejected without throwing and the target is untouched", async () => {
@@ -253,6 +287,116 @@ describe("audit summary hardening", () => {
     expect(summary.unknownActorNames[0]!.name).toBe("42")
     expect(summary.unknownActorNames[0]!.count).toBe(2)
   })
+
+  test("summarizes only the bounded tail when the file exceeds the read cap", async () => {
+    // Mirrors AUDIT_READ_CAP_BYTES in src/audit.ts. The file is built
+    // sparsely: one header line at offset 0, a hole of unwritten zeros,
+    // and the tail block at a far offset, so no 64 MiB buffer is allocated
+    // by the test itself. A leading newline isolates the zero hole from
+    // the first tail line, so the partial-line strip only eats garbage.
+    const CAP = 64 * 1024 * 1024
+    const file = join(directory, "audit.jsonl")
+    const headLine = `${JSON.stringify(
+      record({
+        requestID: "per_head",
+        outcome: "allow",
+        permission: "bash",
+        timestamp: "2020-01-01T00:00:00.000Z",
+      }),
+    )}\n`
+    const tailLines = [1, 2, 3].map(
+      (i) =>
+        `${JSON.stringify(
+          record({
+            requestID: `per_tail_${i}`,
+            outcome: "deny",
+            permission: "read",
+            timestamp: `2026-05-0${i}T00:00:00.000Z`,
+          }),
+        )}\n`,
+    )
+    const tailStart = CAP + 1024
+    const tailBlock = `\n${tailLines.join("")}`
+    const fd = openSync(file, "w")
+    try {
+      writeAt(fd, headLine, 0)
+      writeAt(fd, tailBlock, tailStart)
+    } finally {
+      closeSync(fd)
+    }
+    const summary = readAuditSummary(file)
+    expect(summary.exists).toBe(true)
+    expect(summary.truncated).toBe(true)
+    expect(summary.validRecords).toBe(3)
+    expect(summary.totalLines).toBe(3)
+    expect(summary.invalidLines).toBe(0)
+    // The header line is outside the window: no trace of it remains.
+    expect(summary.byOutcome).toEqual({ deny: 3 })
+    expect(summary.byPermission).toEqual({ read: 3 })
+    expect(summary.firstTimestamp).toBe("2026-05-01T00:00:00.000Z")
+    expect(summary.lastTimestamp).toBe("2026-05-03T00:00:00.000Z")
+  }, 30_000)
+
+  test("keeps a complete first line when the tail window starts at a line boundary", async () => {
+    // Same sparse layout, but the window is aligned so its first byte is
+    // the start of a whole line: a newline is planted at offset - 1 and a
+    // complete boundary record at offset. The reader must keep it instead
+    // of stripping it as a partial line.
+    const CAP = 64 * 1024 * 1024
+    const file = join(directory, "audit.jsonl")
+    const headLine = `${JSON.stringify(
+      record({
+        requestID: "per_head",
+        outcome: "allow",
+        permission: "bash",
+        timestamp: "2020-01-01T00:00:00.000Z",
+      }),
+    )}\n`
+    const boundaryLine = `${JSON.stringify(
+      record({
+        requestID: "per_boundary",
+        outcome: "allow",
+        permission: "write",
+        timestamp: "2026-06-01T00:00:00.000Z",
+      }),
+    )}\n`
+    const tailLines = [1, 2].map(
+      (i) =>
+        `${JSON.stringify(
+          record({
+            requestID: `per_tail_${i}`,
+            outcome: "deny",
+            permission: "read",
+            timestamp: `2026-06-0${i + 1}T00:00:00.000Z`,
+          }),
+        )}\n`,
+    )
+    const tailStart = CAP + 4096
+    const tailBlock = `\n${tailLines.join("")}`
+    const size = tailStart + Buffer.byteLength(tailBlock, "utf8")
+    const offset = size - CAP
+    const fd = openSync(file, "w")
+    try {
+      writeAt(fd, headLine, 0)
+      writeAt(fd, tailBlock, tailStart)
+      writeAt(fd, "\n", offset - 1)
+      writeAt(fd, boundaryLine, offset)
+    } finally {
+      closeSync(fd)
+    }
+    const summary = readAuditSummary(file)
+    expect(summary.exists).toBe(true)
+    expect(summary.truncated).toBe(true)
+    // Boundary record plus the two tail records; the zero hole between
+    // them counts as a single invalid line.
+    expect(summary.validRecords).toBe(3)
+    expect(summary.totalLines).toBe(4)
+    expect(summary.invalidLines).toBe(1)
+    expect(summary.byPermission).toEqual({ read: 2, write: 1 })
+    expect(summary.byOutcome).toEqual({ allow: 1, deny: 2 })
+    expect(summary.firstTimestamp).toBe("2026-06-01T00:00:00.000Z")
+    expect(summary.lastTimestamp).toBe("2026-06-03T00:00:00.000Z")
+  }, 30_000)
 })
 
 describe("audit writer nested redaction", () => {

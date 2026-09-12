@@ -1,8 +1,13 @@
 import type { PermissionRequest, ReviewEnvelope, ReviewerConfig } from "../types.ts"
-import { buildIntentHistory, buildTranscript, normalizeMessages } from "../context.ts"
+import {
+  buildIntentHistory,
+  buildTranscript,
+  normalizeMessages,
+  pendingPermissionSection,
+} from "../context.ts"
 import type { AskDecisionSource } from "./ask-decisions.ts"
 import type { OpenCodeClientLike } from "../opencode/types.ts"
-import { responseData } from "../opencode/transport.ts"
+import { responseData, withTimeout } from "../opencode/transport.ts"
 import { resolveActorContext } from "./actor-resolver.ts"
 import { resolveActionPurpose } from "./action-purpose.ts"
 import { parseCommand } from "../capability/command-parser.ts"
@@ -34,13 +39,18 @@ export async function assembleEvidence(
   ctx: EvidenceAssemblyContext,
 ): Promise<ReviewEnvelope> {
   const contextStart = performance.now()
-  const response = await ctx.client.session.messages({
-    path: { id: request.sessionID },
-    query: {
-      directory: ctx.directory,
-      limit: Math.max(ctx.config.historyMessages, ctx.config.transcriptMessages * 2, 20),
-    },
-  })
+  // A transcript fetch that never settles would leave the review pending
+  // forever; bound it well above any realistic fetch time.
+  const response = await withTimeout(
+    ctx.client.session.messages({
+      path: { id: request.sessionID },
+      query: {
+        directory: ctx.directory,
+        limit: Math.max(ctx.config.historyMessages, ctx.config.transcriptMessages * 2, 20),
+      },
+    }),
+    Math.min(ctx.config.timeoutMs, 15_000),
+  )
   const messages = normalizeMessages(responseData(response, "session.messages"))
 
   // Resolve actor/lineage/intent. The resolver is resilient — it never throws,
@@ -71,15 +81,22 @@ export async function assembleEvidence(
   const contextMs = performance.now() - contextStart
 
   const enrichmentStart = performance.now()
-  const fragments = await Promise.all(
-    providers.map((provider) =>
-      provider.collect({
-        request,
-        directory: ctx.directory,
-        worktree: ctx.worktree,
-        maxChars: ctx.config.maxEnrichmentChars,
-      }),
+  // The provider phase has per-call bounds (git timeouts, bounded reads) but
+  // no global one of its own; a provider that hangs despite them (e.g. a
+  // blocking filesystem edge case) must not leave the review pending forever.
+  // On timeout the whole assembly fails into the fail-safe escalation path.
+  const fragments = await withTimeout(
+    Promise.all(
+      providers.map((provider) =>
+        provider.collect({
+          request,
+          directory: ctx.directory,
+          worktree: ctx.worktree,
+          maxChars: ctx.config.maxEnrichmentChars,
+        }),
+      ),
     ),
+    Math.min(ctx.config.timeoutMs, 20_000),
   )
   const enrichmentMs = performance.now() - enrichmentStart
 
@@ -111,13 +128,22 @@ export async function assembleEvidence(
   const completenessReasons = [...actor.completeness.reasons]
   if (!purposeOk) completenessReasons.push("action purpose unavailable")
 
+  // Whether the action under review reached the rendered evidence in full
+  // (no elided command middle, no truncated PENDING_PERMISSION section). The
+  // coordinator blocks automatic approval when this is false.
+  const { actionEvidenceComplete } = pendingPermissionSection(request, ctx.config)
+  if (!actionEvidenceComplete)
+    completenessReasons.push("pending action was elided or truncated in the evidence")
+
   return {
     request,
     directory: ctx.directory,
     worktree: ctx.worktree,
     timings: { contextMs, enrichmentMs },
     transcript: buildTranscript(messages, ctx.config),
-    intentHistory: buildIntentHistory(messages, ctx.config),
+    intentHistory: buildIntentHistory(messages, ctx.config, {
+      delegatedSession: actor.lineage.origin !== "human-root",
+    }),
     enrichment,
     sshAudit,
     ...(preflightDenial === undefined ? {} : { preflightDenial }),
@@ -125,6 +151,7 @@ export async function assembleEvidence(
     lineage: actor.lineage,
     intent: actor.intent,
     actionPurpose,
+    actionEvidenceComplete,
     evidenceCompleteness: {
       ...actor.completeness,
       purpose: purposeOk,

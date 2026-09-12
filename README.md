@@ -11,9 +11,11 @@
 
 [![OpenCode](https://img.shields.io/badge/OpenCode-%E2%89%A51.18.11-6E56CF)](https://opencode.ai)
 [![Bun](https://img.shields.io/badge/Bun-%E2%89%A51.3.0-000000)](https://bun.sh)
+[![npm](https://img.shields.io/npm/v/opencode-permission-reviewer?color=CB3837)](https://www.npmjs.com/package/opencode-permission-reviewer)
+[![Downloads](https://img.shields.io/npm/dw/opencode-permission-reviewer)](https://www.npmjs.org/package/opencode-permission-reviewer)
 [![License](https://img.shields.io/github/license/Warc0s/opencode-permission-reviewer?color=blue)](./LICENSE)
 [![Checks](https://img.shields.io/github/actions/workflow/status/Warc0s/opencode-permission-reviewer/ci.yml?branch=main&label=checks)](https://github.com/Warc0s/opencode-permission-reviewer/actions/workflows/ci.yml)
-[![Open issues](https://img.shields.io/github/issues/Warc0s/opencode-permission-reviewer)](https://github.com/Warc0s/opencode-permission-reviewer/issues)
+[![Open issues](https://img.shields.io/github/issues/Warc0s/opencode-permission-reviewer?color=555)](https://github.com/Warc0s/opencode-permission-reviewer/issues)
 
 OpenCode pauses on **every** `ask` permission and waits for a keystroke — even
 for safe, routine actions. This plugin adds a Codex-Guardian-style reviewer: a
@@ -25,7 +27,10 @@ fails safe to manual review.
 
 - **Preserves your policy** — `allow` continues, `deny` stays blocked; neither
   ever reaches the reviewer.
-- **Tool-free child session** — the reviewer has no tools and cannot request
+- **Isolated, tool-free reviewer session** — the reviewer runs in a scratch
+  directory outside your project (no `AGENTS.md`, project instructions, or
+  project MCP servers) with every tool denied through a wildcard session
+  permission rule, so it can neither call tools (MCP included) nor request
   permissions recursively.
 - **Read-only enrichment** — bounded, sanitized SSH / local-script / Git
   evidence for the reviewer; the filesystem is never modified.
@@ -146,7 +151,8 @@ call (up to `timeoutMs`). Your model spend scales with how much your policy
 
 ## Choosing the reviewer model
 
-The reviewer is a normal OpenCode model invocation (tools disabled), so it can
+The reviewer is a normal OpenCode model invocation (every tool denied at the
+session-permission level), so it can
 be **any model from any provider you have configured**. Three options,
 identical in both config files:
 
@@ -238,9 +244,29 @@ Every option is optional. Numeric/string options are clamped to safe bounds.
 Config is layered: built-in defaults ← global
 `~/.config/opencode/permission-reviewer.jsonc` ← project
 `.opencode/permission-reviewer.jsonc` ← inline plugin options (later wins).
-For safety, project config cannot redirect `auditPath`, grant `actorProfiles`,
-downgrade a global `enforcementMode: "enforce"`, or relax a trusted
-`escalationMode: "deny"` / failure-mode deny knob.
+The project layer crosses a trust boundary: it can only **tighten**
+security-sensitive fields, and its hardening survives even when a trusted layer
+set the same field. The project layer cannot choose the reviewer `model` or
+replace the `policy` text (both decide where code/context travels and what the
+reviewer enforces), cannot redirect `auditPath`, grant `actorProfiles`, set
+`repositoryTrust: "trusted"`, downgrade a global `enforcementMode: "enforce"`,
+or relax a trusted `escalationMode: "deny"` / failure-mode deny knob /
+`confidenceThreshold` / `riskPolicy`. Project values of the wrong type
+(including `null`) are ignored, never normalized back to defaults.
+
+A config file that exists but cannot be honored fails CLOSED on the trusted
+side: a malformed or unreadable **global** config, or trusted `policyRules`
+dropped by validation, marks the run _degraded_ — reviews still run, but
+automatic approval stays off (everything escalates) until the file is fixed,
+and the degradation is reported on stderr. A malformed **project** file is
+reported and ignored (the untrusted layer adds nothing anyway).
+
+In declarative `policyRules`, a `when` condition with an unknown key (a typo),
+a `false` flag, or an empty object drops the whole rule — a mistyped rule must
+never degrade into a universal match. Catch-all rules are spelled explicitly:
+omit `when` entirely, or use `"when": { "always": true }` (valid only alone).
+When a catch-all comes from the trusted global config it simply matches
+everything; project-sourced allow rules are still rejected outright.
 
 #### Interactive vs autonomous
 
@@ -281,22 +307,21 @@ are stored as **SHA-256**, never in clear text. Set `audit: false` to disable.
 
 ## What you'll see
 
-```
-┌──────────────────────────────────────────────────────────┐
-│ ✓ Review approved                          1.4s           │
-│ bash  $ rm -rf /tmp/scratch-cache                        │
-│ low risk · high authorization · 0.94 confidence           │
-│ Narrowly scoped temp cleanup; matches user intent.       │
-└──────────────────────────────────────────────────────────┘
+```text
+✓ Review approved · bash · rm -rf /tmp/scratch-cache
+Narrowly scoped temp cleanup; matches user intent.
 ```
 
-While reviewing, the panel covers OpenCode's native approval controls and
-switches the keymap out of approval mode. On a denial you get a red panel with
-the rationale. On a technical failure or escalation, the overlay is removed and
-OpenCode's native approval controls are exposed with a **manual review
-required** warning. Completed approvals/denials stay visible for 5 s, then
-close automatically. A broken TUI transport **never changes the safety
-decision**.
+While reviewing, the optional TUI overlay covers the native approval controls
+with **Reviewing this permission** and **No action needed**, plus the action,
+reviewer model, and elapsed time. Once resolved, the overlay becomes a compact
+status strip below the session: one line for the result and a second for its
+rationale, with long text truncated. The review keymap is released immediately
+so you can resume typing while the result stays visible for 5 s. OpenCode still
+hides its editor while a permission is pending. On a technical failure or
+escalation, the overlay is removed and OpenCode's native approval controls
+become available with a **manual review required** warning. A broken TUI
+transport **never changes the safety decision**.
 
 ## How it works
 
@@ -307,20 +332,35 @@ decision**.
    `env VAR=x rm -rf /`, `/bin/rm -rf /`, `sh -c 'rm -rf /'`, `ssh host rm -rf /`,
    and `busybox rm -rf /` are all caught.
 3. The plugin builds bounded **evidence**: recent transcript, recovered user
-   intent (filtering synthetic compaction messages), and optional read-only
-   enrichment for SSH commands, local interpreter scripts, and Git state.
+   intent, and optional read-only enrichment for SSH commands, local
+   interpreter scripts, and Git state. Intent attribution uses a single origin
+   rule: synthetic/host-flagged parts are never human intent, and in a
+   delegated (subagent) session **no** user-role message counts as human
+   authorization — the initial briefing and every later `task_id` follow-up
+   are agent-authored and surface only as labeled delegation context.
    **Common credential formats are always redacted** from this evidence
    (`Bearer`, AWS / GitHub / OpenAI / Anthropic / Slack / Google / Stripe /
    GitLab keys, JWTs, private keys, URL userinfo, cookies, and
    credential-bearing assignments) so a secret you once pasted into the
    session never travels to the reviewer's provider.
-4. A **tool-free child session** runs the reviewer model with a strict JSON
-   schema and returns `{ outcome, risk_level, user_authorization, rationale,
-confidence }`.
+4. An **isolated, tool-free reviewer session** runs the reviewer model with a
+   strict JSON schema and returns `{ outcome, risk_level, user_authorization,
+rationale, confidence }`. The session is created in a scratch directory
+   outside your project so the host does not prepend repository instructions
+   (`AGENTS.md`, project config `instructions`, project MCP context) to the
+   reviewer's system prompt — only your trusted global instructions remain.
+   Tool denial is a wildcard session permission rule, which takes precedence
+   over agent-config allows and therefore also covers MCP tools and MCP
+   resource tools. If the host refuses the isolated directory, the review is
+   not run in the project directory: it escalates to the human as a reviewer
+   failure instead, so isolation is never silently degraded.
 5. Decisions are enforced with invariants: **critical risk is never approved**,
    **high risk with low/unknown authorization is escalated**, **medium risk
    with unknown authorization is escalated**, low confidence is escalated,
-   invalid output is escalated, errors and timeouts are escalated. A single
+   invalid output is escalated, errors and timeouts are escalated. Two
+   deterministic blocks also apply regardless of model confidence: a degraded
+   trusted config (see above) and evidence where a material part of the action
+   itself was elided or truncated — neither can auto-approve. A single
    enforcement boundary then disposes every internal `escalate` according to
    `escalationMode` (`manual` → human; `deny` → reject with the original reason).
 6. Approved actions get `once` (never `always`) and execute **silently** — the
@@ -355,7 +395,14 @@ by itself** (one narrow deterministic exception exists for SSH, below).
   shell-expanded paths, and a bounded numstat for changes that would be
   discarded. Snapshots use fixed non-interactive Git queries with locking and
   hooks disabled, a two-second timeout, and bounded output. **The repository is
-  never modified.**
+  never modified.** Repository-configured conversion filters (`clean`,
+  `smudge`, `process`) and diff `textconv` drivers are enumerated before every
+  snapshot and neutralized with config overrides (including dotted names); if
+  the configuration cannot be fully verified — too many filters, or the config
+  scan itself fails — the snapshot is withheld rather than risk executing
+  repository-configured commands. Verification and inspection are still two
+  distinct moments: a filter configured between them is a residual race the
+  snapshot does not claim to eliminate.
 
 Only regular text files inside the working directory, the worktree, or
 `/tmp/opencode` can be included. Missing, blocked, and truncated executable
@@ -377,8 +424,14 @@ binary, blocked, or truncated evidence) remains a reviewer decision.
 - Invalid, low-confidence, or inconsistent output is escalated to the user.
 - **Common credential formats are always redacted** from the evidence before
   reaching the reviewer, so credentials never leak to the reviewer's provider.
-- Reviewer sessions cannot request permissions recursively; all reviewer tools
-  are explicitly disabled.
+- Reviewer sessions cannot request permissions recursively; every tool is
+  denied by a wildcard session permission rule that also covers MCP tools and
+  takes precedence over agent-config allows.
+- The reviewer session runs outside the project directory, so repository
+  instructions (`AGENTS.md` and project-config `instructions`) are not part of
+  its system prompt; if the isolated directory cannot be established, the
+  review escalates to the human as a reviewer failure rather than running
+  with degraded isolation.
 - A narrow deterministic emergency brake rejects unmistakable root destruction
   (including privilege-prefixed and command-string forms such as
   `sudo rm -rf /`, `sh -c 'rm -rf /'`, `ssh host rm -rf /`) and direct

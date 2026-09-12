@@ -21,7 +21,11 @@ import { resolveConfig } from "../config.ts"
 import { loadResolvedConfig, globalConfigPath, projectConfigPath } from "../config/loader.ts"
 import { parseCommand } from "../capability/command-parser.ts"
 import { analyzeCapability } from "../capability/bash-analyzer.ts"
-import { evaluatePolicy, filterProjectAllowRules, hashRuleSet } from "../policy/policy-engine.ts"
+import {
+  evaluatePolicy,
+  filterProjectAllowRules,
+  hashEffectivePolicy,
+} from "../policy/policy-engine.ts"
 import { expandHome, resolveAuditPath, readAuditSummary, type AuditSummary } from "../audit.ts"
 import { runInit } from "./init.ts"
 import type { PermissionRequest, PermissionToolSource, ReviewerConfig } from "../types.ts"
@@ -161,7 +165,7 @@ async function runDoctor(argv: string[]): Promise<number> {
   const pkg = readPackageJson()
   const config = loadResolvedConfig(undefined, directory)
   const sources = inspectConfigSources(directory)
-  const effectiveHash = hashRuleSet(filterProjectAllowRules(config.policyRules))
+  const effectiveHash = hashEffectivePolicy(filterProjectAllowRules(config.policyRules), config)
   const auditPath = resolveAuditPath(config)
   const auditWritable = await checkWritable(auditPath)
 
@@ -236,7 +240,7 @@ async function runConfig(argv: string[]): Promise<number> {
     config: redactConfig(config),
     policy: {
       ruleCount: config.policyRules.length,
-      effectivePolicyHash: hashRuleSet(filterProjectAllowRules(config.policyRules)),
+      effectivePolicyHash: hashEffectivePolicy(filterProjectAllowRules(config.policyRules), config),
     },
   }
   console.log(JSON.stringify(report, null, 2))
@@ -279,6 +283,10 @@ async function runAudit(argv: string[]): Promise<number> {
 
 function printAuditHuman(s: AuditSummary): void {
   console.log(`audit report: ${s.path}`)
+  if (s.truncated) {
+    console.log("  NOTE: only the most recent 64 MiB were summarized; counts and")
+    console.log("  timestamps describe that tail, not the whole file.")
+  }
   console.log(`  valid records:     ${s.validRecords} (invalid lines: ${s.invalidLines})`)
   console.log(`  schema versions:   ${fmtCounts(s.bySchemaVersion)}`)
   if (s.firstTimestamp || s.lastTimestamp) {

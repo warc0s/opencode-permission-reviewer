@@ -65,3 +65,12 @@ and a configured reviewer model:
 opencode serve &   # then point the harness at it
 bun run tests/live-harness.ts http://127.0.0.1:41973 --smoke
 ```
+
+The smoke requires completed tool execution and matching audit decisions;
+provider failures cannot count as successful denials. Set
+`REVIEWER_LIVE_DIRECTORY` to run against a separate synthetic fixture directory.
+
+After building, `bun tests/live-host-regressions.ts` starts its own fresh
+OpenCode server, a synthetic MCP tool, and a local deterministic provider. It
+checks the actual provider tool list after host filtering and the regression
+cases without paid inference. It complements the live model smoke above.

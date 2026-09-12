@@ -1,8 +1,13 @@
 import { createHash } from "node:crypto"
-import { open, realpath, stat } from "node:fs/promises"
+import { constants as fsConstants } from "node:fs"
+import { open, realpath, readlink } from "node:fs/promises"
 import { basename, isAbsolute, resolve, sep } from "node:path"
 import type { PermissionRequest } from "./types.ts"
 import { sourceCommand } from "./evidence/source-command.ts"
+
+const O_RDONLY = typeof fsConstants.O_RDONLY === "number" ? fsConstants.O_RDONLY : 0
+const O_NOFOLLOW = typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0
+const O_NONBLOCK = typeof fsConstants.O_NONBLOCK === "number" ? fsConstants.O_NONBLOCK : 0
 
 interface Token {
   value: string
@@ -218,8 +223,8 @@ function commandName(value: string): string {
   return basename(value)
 }
 
-function findSshIndex(tokens: Token[]): number {
-  return tokens.findIndex((token) => commandName(token.value) === "ssh")
+function findSshIndex(tokens: ReadonlyArray<string>): number {
+  return tokens.findIndex((token) => commandName(token) === "ssh")
 }
 
 function optionValue(token: string, option: string): string | undefined {
@@ -229,7 +234,7 @@ function optionValue(token: string, option: string): string | undefined {
 }
 
 function parseSsh(
-  tokens: Token[],
+  tokens: ReadonlyArray<string>,
   sshIndex: number,
 ):
   | {
@@ -249,10 +254,10 @@ function parseSsh(
   let index = sshIndex + 1
 
   while (index < tokens.length) {
-    const token = tokens[index]!.value
+    const token = tokens[index]!
     if (token === "--") {
       index += 1
-      destination = tokens[index]?.value
+      destination = tokens[index]
       index += 1
       break
     }
@@ -273,7 +278,7 @@ function parseSsh(
     }
 
     if (OPTION_WITH_VALUE.has(token)) {
-      const following = tokens[index + 1]?.value
+      const following = tokens[index + 1]
       if (token === "-i") identityFile = following
       if (token === "-p") port = following
       if (token === "-o" && following) {
@@ -290,7 +295,7 @@ function parseSsh(
   const at = destination.lastIndexOf("@")
   const user = at > 0 ? destination.slice(0, at) : undefined
   const host = at > 0 ? destination.slice(at + 1) : destination
-  const remoteTokens = tokens.slice(index).map((token) => token.value)
+  const remoteTokens = [...tokens.slice(index)]
   while (remoteTokens.length > 0 && /^\d*(?:>|<)/.test(remoteTokens.at(-1)!)) remoteTokens.pop()
   return {
     destination,
@@ -303,10 +308,9 @@ function parseSsh(
   }
 }
 
-function catSource(tokens: Token[]): string | undefined {
-  if (tokens.length < 2 || commandName(tokens[0]!.value) !== "cat") return
-  const values = tokens.slice(1).map((token) => token.value)
-  const positional = values.filter((value) => value !== "--" && !value.startsWith("-"))
+function catSource(tokens: ReadonlyArray<string>): string | undefined {
+  if (tokens.length < 2 || commandName(tokens[0]!) !== "cat") return
+  const positional = tokens.slice(1).filter((value) => value !== "--" && !value.startsWith("-"))
   if (positional.length !== 1) return
   const source = positional[0]!
   if (/[$`*?{}<>]/.test(source)) return
@@ -315,6 +319,19 @@ function catSource(tokens: Token[]): string | undefined {
 
 function within(path: string, root: string): boolean {
   return path === root || path.startsWith(`${root}${sep}`)
+}
+
+/** Best-effort Linux-only resolution of an open descriptor back to its real
+ *  path (`/proc/self/fd/<n>`). Returns undefined where /proc is unavailable
+ *  (non-Linux platforms, hardened containers): the caller then keeps the
+ *  pre-open checks as the only line of defense, which is the documented
+ *  limitation rather than a silent pass. */
+async function descriptorRealPath(fd: number): Promise<string | undefined> {
+  try {
+    return await readlink(`/proc/self/fd/${fd}`)
+  } catch {
+    return undefined
+  }
 }
 
 async function includeFileOnce(
@@ -354,16 +371,67 @@ async function includeFileOnce(
       }
     }
 
-    const info = await stat(actual)
-    if (!info.isFile()) {
-      return { source: "file", path: resolved, status: "unavailable", reason: "not a regular file" }
-    }
-
+    // Open first, then verify through the open descriptor (fstat): the checks
+    // above judged a path, and the descriptor is the only thing guaranteed to
+    // match what we actually read. O_NOFOLLOW (where available) rejects a
+    // last-component symlink swapped in between realpath and open. O_NONBLOCK
+    // keeps the open from BLOCKING on a FIFO with no writer — without it the
+    // review would hang before fstat ever got the chance to reject the
+    // non-regular file; on regular files the flag is a no-op.
     const limit = Math.max(1, maxChars)
-    const handle = await open(actual, "r")
+    const handle = await open(actual, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
     try {
+      const info = await handle.stat()
+      if (!info.isFile()) {
+        return {
+          source: "file",
+          path: resolved,
+          status: "unavailable",
+          reason: "not a regular file",
+        }
+      }
+      // O_NOFOLLOW only guards the LAST path component. On Linux, resolve the
+      // open descriptor back to its real path and re-run the containment and
+      // sensitivity checks against what is actually being read: an
+      // intermediate directory swapped for a symlink between the realpath
+      // check and the open is then caught instead of silently reading outside
+      // the approved roots.
+      const fdPath = await descriptorRealPath(handle.fd)
+      if (fdPath !== undefined) {
+        if (![directoryRoot, worktreeRoot, temporaryRoot].some((root) => within(fdPath, root))) {
+          return {
+            source: "file",
+            path: resolved,
+            status: "blocked",
+            reason: `open descriptor resolves outside approved enrichment roots (${fdPath})`,
+          }
+        }
+        if (SENSITIVE_PATH.test(fdPath)) {
+          return {
+            source: "file",
+            path: resolved,
+            status: "blocked",
+            reason: "sensitive resolved path",
+          }
+        }
+      }
       const buffer = Buffer.alloc(Math.min(info.size, limit + 1))
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
+      // A single read is not guaranteed to fill the buffer, so loop until
+      // full or EOF. A short total means the file shrank mid-read; the status
+      // below then reports truncation instead of silently covering fewer
+      // bytes than the size claims.
+      let bytesRead = 0
+      while (bytesRead < buffer.length) {
+        const { bytesRead: count } = await handle.read(
+          buffer,
+          bytesRead,
+          buffer.length - bytesRead,
+          bytesRead,
+        )
+        if (count === 0) break
+        bytesRead += count
+      }
+      const shortRead = bytesRead < buffer.length
       const included = buffer.subarray(0, Math.min(bytesRead, limit))
       const content = included.toString("utf8")
       const replacementCount = [...content].filter((character) => character === "\uFFFD").length
@@ -389,7 +457,7 @@ async function includeFileOnce(
       return {
         source: "file",
         path: resolved,
-        status: info.size > limit ? "truncated" : "included",
+        status: info.size > limit || shortRead ? "truncated" : "included",
         size: info.size,
         includedBytes: included.length,
         includedSha256: sha256(included),
@@ -500,7 +568,11 @@ export async function enrichSshEvidence(
   const command = sourceCommand(request)
   if (!/(?:^|[\s;&|])ssh(?:\s|$)/.test(command)) return { text: "", audit: [] }
 
-  const segments = commandSegments(shellTokens(command))
+  // Track the working directory across `cd` chains (same representation the
+  // local-script and git enrichments use) so a pipeline like
+  // `cd subdir && cat file | ssh …` resolves the stdin source where the shell
+  // would, not against the initial directory.
+  const segments = shellCommandSegmentsWithDirectory(command, directory)
   const records: Array<Record<string, unknown>> = []
   const audit: SshAuditSummary[] = []
   const preflightDenials: string[] = []
@@ -517,7 +589,14 @@ export async function enrichSshEvidence(
     const stdin =
       stdinPath === undefined
         ? undefined
-        : await includeEvidenceFile(stdinPath, directory, worktree, maxChars)
+        : segment.directory === undefined && !isAbsolute(stdinPath)
+          ? {
+              source: "file" as const,
+              path: stdinPath,
+              status: "unavailable" as const,
+              reason: segment.directoryReason ?? "working directory before ssh is unresolved",
+            }
+          : await includeEvidenceFile(stdinPath, segment.directory ?? directory, worktree, maxChars)
     const remoteCommandSha256 = parsed.remoteCommand ? sha256(parsed.remoteCommand) : undefined
     const analyzedStdin = stdinSignals(stdin)
     const denial = deterministicDenial(stdin)

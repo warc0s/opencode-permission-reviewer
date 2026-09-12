@@ -42,13 +42,16 @@ export const tui: TuiPlugin = async (api, options) => {
     timeoutMs: config.timeoutMs,
   })
 
-  // Signal bumps whenever the UI state changes. The slot factory below reads it
-  // directly in its body, which is what makes the host re-render the panel:
+  // Signal bumps whenever the UI state changes. Both slot factories read it
+  // directly in their bodies, which makes the host re-render each panel:
   // a factory that only returns a component without reading any signal in its
   // own scope renders exactly once at boot and never updates again.
   const [revision, setRevision] = createSignal(0)
   const [frame, setFrame] = createSignal(0)
-  const touch = () => setRevision((value) => value + 1)
+  const touch = () => {
+    syncMode()
+    setRevision((value) => value + 1)
+  }
 
   const active = () => {
     const sessionID = routeSessionID(api)
@@ -59,7 +62,7 @@ export const tui: TuiPlugin = async (api, options) => {
   let popMode: (() => void) | undefined
   const syncMode = () => {
     const status = active()
-    const wanted = status !== undefined && status.phase !== "manual"
+    const wanted = status?.phase === "reviewing"
     if (wanted && popMode === undefined) {
       try {
         popMode = api.mode.push(REVIEW_MODE)
@@ -90,16 +93,20 @@ export const tui: TuiPlugin = async (api, options) => {
     touch()
   })
 
-  // Drives the spinner and the watchdog/expiry transitions. The interval lives
-  // for the lifetime of the plugin activation; the scoped plugin API disposes
-  // the event listeners above, but timers have no scope hook to unwind.
-  setInterval(() => {
-    setFrame((value) => (value + 1) % SPINNER.length)
+  // Keep watchdog and result expiry running even when the UI is hidden.
+  const ticker = setInterval(() => {
+    if (active()?.phase === "reviewing") setFrame((value) => (value + 1) % SPINNER.length)
     const expired = state.expire()
     for (const status of expired) notifyManual(api, status)
     const dismissed = state.dismissResults()
     if (expired.length > 0 || dismissed.length > 0) touch()
   }, 250)
+
+  api.lifecycle.onDispose(() => {
+    clearInterval(ticker)
+    popMode?.()
+    popMode = undefined
+  })
 
   api.slots.register({
     order: 1_000,
@@ -114,12 +121,21 @@ export const tui: TuiPlugin = async (api, options) => {
         const status = active()
         syncMode()
         return (
-          <Show when={status} keyed>
-            {(current) =>
-              current.phase === "manual" ? null : (
-                <ReviewPanel api={api} status={current} frame={frame} />
-              )
-            }
+          <Show when={status?.phase === "reviewing" ? status : undefined} keyed>
+            {(current) => <ReviewOverlay api={api} status={current} frame={frame} />}
+          </Show>
+        )
+      },
+      app_bottom() {
+        revision()
+        const status = active()
+        syncMode()
+        return (
+          <Show
+            when={status?.phase === "approved" || status?.phase === "denied" ? status : undefined}
+            keyed
+          >
+            {(current) => <ReviewResult api={api} status={current} />}
           </Show>
         )
       },
@@ -127,30 +143,13 @@ export const tui: TuiPlugin = async (api, options) => {
   })
 }
 
-function ReviewPanel(props: {
+function ReviewOverlay(props: {
   api: TuiPluginApi
   status: ReviewUiStatus
   /** Spinner signal, read inside text children so only those update per tick. */
   frame: () => number
 }) {
   const theme = () => props.api.theme.current
-  const appearance = () => {
-    if (props.status.phase === "approved") {
-      return { color: theme().success, icon: "✓", title: "Review approved" }
-    }
-    if (props.status.phase === "denied") {
-      // Fail-closed escalate→deny is distinct from an explicit reviewer/policy deny.
-      if (props.status.escalationDisposition === "deny") {
-        return { color: theme().error, icon: "✕", title: "Review blocked (fail-closed)" }
-      }
-      return { color: theme().error, icon: "✕", title: "Review blocked" }
-    }
-    return {
-      color: theme().info,
-      icon: SPINNER[props.frame() % SPINNER.length] ?? "◐",
-      title: "Reviewing this permission",
-    }
-  }
   const elapsed = () => {
     // Reading the tick signal inside the text child is what re-renders it every
     // 250ms: Date.now() and status.emittedAt are plain values, so a text that
@@ -171,7 +170,7 @@ function ReviewPanel(props: {
       overflow="hidden"
       backgroundColor={theme().backgroundPanel}
       border={["left"]}
-      borderColor={appearance().color}
+      borderColor={theme().info}
       flexDirection="column"
       onMouseDown={(event) => {
         event.preventDefault()
@@ -191,12 +190,11 @@ function ReviewPanel(props: {
         paddingRight={3}
       >
         <box flexDirection="row" gap={1}>
-          <text fg={appearance().color}>{appearance().icon}</text>
-          <text fg={theme().text}>{appearance().title}</text>
+          <text fg={theme().info}>{SPINNER[props.frame() % SPINNER.length] ?? "◐"}</text>
+          <text fg={theme().text}>Reviewing this permission</text>
           <box flexGrow={1} />
           <text fg={theme().textMuted}>{elapsed()}</text>
         </box>
-
         <box flexDirection="row" gap={1} paddingLeft={2}>
           <text fg={theme().textMuted}>{props.status.permission}</text>
           <text fg={theme().text} wrapMode="word">
@@ -206,25 +204,51 @@ function ReviewPanel(props: {
             <text fg={theme().textMuted}>· actor {props.status.actorName}</text>
           </Show>
         </box>
-
-        <Show when={props.status.phase === "reviewing"}>
-          <box paddingLeft={2} flexDirection="row" gap={1}>
-            <text fg={theme().textMuted}>
-              {props.status.model} · reasoning {props.status.variant}
-            </text>
-            <box flexGrow={1} />
-            <text fg={theme().textMuted}>No action needed</text>
-          </box>
-        </Show>
-
-        <Show when={props.status.phase !== "reviewing" && props.status.reason}>
-          <box paddingLeft={2}>
-            <text fg={theme().textMuted} wrapMode="word">
-              {props.status.reason}
-            </text>
-          </box>
-        </Show>
+        <box paddingLeft={2} flexDirection="row" gap={1}>
+          <text fg={theme().textMuted}>
+            {props.status.model} · reasoning {props.status.variant}
+          </text>
+          <box flexGrow={1} />
+          <text fg={theme().textMuted}>No action needed</text>
+        </box>
       </box>
+    </box>
+  )
+}
+
+function ReviewResult(props: { api: TuiPluginApi; status: ReviewUiStatus }) {
+  const theme = () => props.api.theme.current
+  const appearance = () => {
+    if (props.status.phase === "approved") {
+      return { color: theme().success, icon: "✓", title: "Review approved" }
+    }
+    // Fail-closed escalate→deny is distinct from an explicit reviewer/policy deny.
+    if (props.status.escalationDisposition === "deny") {
+      return { color: theme().error, icon: "✕", title: "Review blocked (fail-closed)" }
+    }
+    return { color: theme().error, icon: "✕", title: "Review blocked" }
+  }
+  const singleLine = (value: string) => value.replace(/[\r\n\t]+/g, " ")
+
+  return (
+    <box
+      height={props.status.reason ? 2 : 1}
+      flexShrink={0}
+      overflow="hidden"
+      backgroundColor={theme().backgroundPanel}
+      flexDirection="column"
+      paddingLeft={1}
+      paddingRight={1}
+    >
+      <text fg={appearance().color} wrapMode="none" truncate>
+        {appearance().icon} {appearance().title} · {props.status.permission} ·{" "}
+        {singleLine(props.status.action)}
+      </text>
+      <Show when={props.status.reason}>
+        <text fg={theme().textMuted} wrapMode="none" truncate>
+          {singleLine(props.status.reason ?? "")}
+        </text>
+      </Show>
     </box>
   )
 }

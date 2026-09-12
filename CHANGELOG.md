@@ -7,6 +7,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.2] - 2026-09-12
+
+### Added
+
+- The TUI overlay now covers pending reviews: an in-flight review renders in
+  the overlay panel while it runs, with resolved results kept below, so the
+  user sees what is being decided instead of only learning the outcome.
+- A live host-regression harness exercises provider tools and end-to-end
+  review decisions against a real server, guarding the reviewer transport and
+  the deterministic brake paths outside unit tests.
+
+### Changed
+
+- Bumped `@opencode-ai/plugin` to 1.18.28 and `@opentui/core`/`@opentui/solid`
+  to 0.5.10, with `bun.lock` synchronized (dependency bumps only; no behavior
+  change).
+- The exact pending action now leads the reviewer evidence and reserves the
+  head of the context budget, with actor, lineage, and intent sections
+  following it — previously the action could be truncated away while context
+  survived. Session lineage additionally records its origin (human root vs
+  delegated), and whether the action evidence survived truncation is tracked
+  explicitly so the reviewer judges a complete view of the action or the
+  decision escalates.
+
+### Fixed
+
+- The redaction rule for auth-scheme tokens (`Bearer`/`Basic`/`Token`)
+  treated the `-` in its character class as a range, so tokens containing
+  dashes were never matched as a whole and could reach the reviewer
+  unredacted; the dash is now a literal member of the class.
+- Reviewer sessions now run in a scratch directory outside the project, so
+  repository instructions (`AGENTS.md`, project config instructions, project
+  MCP context) never enter the reviewer's system prompt; every tool is denied
+  by a wildcard session permission rule that also covers MCP tools. If the
+  isolated directory cannot be established, the review escalates to the human
+  as a reviewer failure instead of running inside the project with degraded
+  isolation.
+- Automatic approval is now blocked while the trusted configuration is
+  degraded or a material part of the pending action was elided from the
+  evidence: invalid policy rules in trusted (global/inline) layers are
+  rejected at load and keep auto-approval disabled until fixed, instead of a
+  narrowed config silently permitting more.
+- The shared per-directory git conversion-filter scan now parses
+  NUL-delimited (`-z`) output, so a legal filter subsection containing a
+  space (e.g. `[filter "a b"]`) is neutralized like any other instead of
+  being mis-parsed and silently left active. A name containing `=` cannot be
+  expressed through `-c` overrides, so it withholds the snapshot (fail
+  closed) rather than arming the wrong key — same as the existing over-limit
+  refusals.
+- The deterministic emergency brake now peels `timeout`, `xargs`, and `watch`
+  wrappers before judging the executable, so `timeout 5 curl …`, `watch -n 5
+curl …`, and piped `xargs curl …` trip the secret-export brake and
+  `timeout --signal=KILL 10s rm -rf /` trips root destruction. `timeout`
+  skips its mandatory duration operand explicitly; benign commands under
+  these wrappers (`watch ls`, `timeout 5 make`) stay quiet.
+- Project config can no longer weaken trusted layers: null and wrong-type
+  overrides are dropped instead of resetting defaults, the reviewer model
+  and policy text are not project-settable, and malformed config files warn
+  instead of silently degrading. User intent is attributed by session origin,
+  so no child-session message counts as human authorization.
+- Filesystem reads and writes in the decision path go through explicitly
+  opened, verified descriptors: config layers are rejected when symlinked,
+  non-regular, or oversized (a committed link to a FIFO or an endless source
+  can no longer hang or exhaust startup); audit records are appended through
+  a descriptor that refuses symlinked and non-regular targets and applies
+  `0600` on creation; evidence file reads loop to completion so a short read
+  is reported as truncated instead of partially included; and the audit
+  report reader takes its size and bytes from the open descriptor instead of
+  a racy stat-then-open pair.
+- `opencode-permission-reviewer init` re-verifies each planned write against
+  the current file before touching it: a file that drifted since planning
+  (created, deleted, or turned malformed) aborts with a refusal instead of
+  being merged or clobbered, new files are created exclusively, and backups
+  claim their destination atomically instead of overwriting a collision.
+
 ## [1.3.1] - 2026-09-03
 
 ### Fixed

@@ -204,7 +204,7 @@ describe("policy engine — condition matching", () => {
     expect(evaluatePolicy(c, actor("workspace"), config, rules).matchedRules).toHaveLength(0)
   })
 
-  test("packageManagement requires both lifecycle scripts and the package-management class", () => {
+  test("packageManagement matches on the lifecycle-scripts fact regardless of the dominant class", () => {
     const rules: PolicyRule[] = [
       {
         id: "pkg",
@@ -214,8 +214,9 @@ describe("policy engine — condition matching", () => {
         reason: "pkg",
       },
     ]
-    // lifecycle scripts detected but the action class is not package-management → no match.
-    const cLifecycleOnly = cap({
+    // Lifecycle scripts detected with a different dominant class (bun install
+    // executes code AND drives a package lifecycle) → must still match.
+    const cLifecycleWithCode = cap({
       actionClass: { value: "code-execution", source: "static-analysis", confidence: "high" },
       invokesPackageLifecycleScripts: {
         value: true,
@@ -223,17 +224,19 @@ describe("policy engine — condition matching", () => {
         confidence: "high",
       },
     })
-    expect(evaluatePolicy(cLifecycleOnly, undefined, config, rules).matchedRules).toHaveLength(0)
-    // both gates satisfied → match.
-    const cBoth = cap({
+    expect(evaluatePolicy(cLifecycleWithCode, undefined, config, rules).matchedRules).toHaveLength(
+      1,
+    )
+    // fact unknown → no match.
+    const cNoLifecycle = cap({
       actionClass: { value: "package-management", source: "static-analysis", confidence: "high" },
       invokesPackageLifecycleScripts: {
-        value: true,
+        value: "unknown",
         source: "static-analysis",
-        confidence: "high",
+        confidence: "unknown",
       },
     })
-    expect(evaluatePolicy(cBoth, undefined, config, rules).matchedRules).toHaveLength(1)
+    expect(evaluatePolicy(cNoLifecycle, undefined, config, rules).matchedRules).toHaveLength(0)
   })
 
   test("repositoryTrust condition excludes non-matching trust levels", () => {

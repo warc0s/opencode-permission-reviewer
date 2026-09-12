@@ -47,7 +47,7 @@ export function evaluatePolicy(
   rules: PolicyRule[] = [],
 ): PolicyTrace {
   const effectiveRules = filterProjectAllowRules(rules)
-  const effectivePolicyHash = hashRuleSet(effectiveRules)
+  const effectivePolicyHash = hashEffectivePolicy(effectiveRules, config)
   const matched: PolicyTrace["matchedRules"] = []
 
   for (const rule of effectiveRules) {
@@ -91,13 +91,16 @@ export function filterProjectAllowRules(rules: PolicyRule[]): PolicyRule[] {
   return rules.filter((r) => !(r.source === "project" && r.effect === "allow"))
 }
 
-/** Whether every field of a condition matches the observed facts. */
+/** Whether every field of a condition matches the observed facts. A missing
+ *  condition (or `{ always: true }`) is a universal rule: it matches any
+ *  request, which is why the loader only accepts that shape explicitly. */
 function matches(
-  cond: PolicyCondition,
+  cond: PolicyCondition | undefined,
   cap: CapabilityAssessment | undefined,
   actor: ActorContext | undefined,
   config: ReviewerConfig,
 ): boolean {
+  if (cond === undefined || cond.always === true) return true
   if (cond.actionClass !== undefined) {
     if (!Array.isArray(cond.actionClass) || cap === undefined) return false
     if (!cond.actionClass.includes(cap.actionClass.value)) return false
@@ -112,10 +115,13 @@ function matches(
   if (cond.deletion === true && cap?.writeEffects.deletion.value !== true) return false
   if (cond.executesCode === true && cap?.executesCode.value !== true) return false
   if (cond.createsAdHocCode === true && cap?.createsAdHocCode.value !== true) return false
-  if (cond.packageManagement === true) {
-    if (cap?.invokesPackageLifecycleScripts.value !== true) return false
-    if (cap?.actionClass.value !== "package-management") return false
-  }
+  // Capability facts, not the dominant action class, decide package-management
+  // matches: a command can execute code AND drive a package lifecycle at once
+  // (e.g. `bun install`), and requiring the single dominant class to be
+  // "package-management" would make the condition unmatchable for exactly the
+  // most dangerous variants.
+  if (cond.packageManagement === true && cap?.invokesPackageLifecycleScripts.value !== true)
+    return false
   if (cond.gitMutation === true && cap?.git.possible.value !== true) return false
   if (cond.networkObserved === true && cap?.network.observed.value !== true) return false
   if (cond.privilegeEscalation === true && cap?.process.privilegeEscalation.value !== true)
@@ -129,15 +135,31 @@ function matches(
   return true
 }
 
-/** Deterministic hash of the rule set for audit reproducibility. The engine
- *  uses this for the policy trace; exposing it lets diagnostics print the exact
- *  same hash a review would produce. */
-export function hashRuleSet(rules: PolicyRule[]): string {
-  const canonical = rules
-    .map((r) => `${r.id}:${r.effect}:${JSON.stringify(r.when)}`)
+/** Hash of everything that deterministically shapes a policy outcome: the
+ *  effective rules plus the decision-relevant config (confidence floor, risk
+ *  matrix and failure knobs, repository trust, enforcement/escalation modes,
+ *  config degradation). Two runs that would enforce different thresholds or
+ *  failure dispositions must not share the same "effective policy" identity. */
+export function hashEffectivePolicy(rules: PolicyRule[], config: ReviewerConfig): string {
+  const rulesCanonical = rules
+    .map((r) => `${r.id}:${r.effect}:${JSON.stringify(r.when ?? null)}`)
     .sort()
     .join("|")
-  return createHash("sha256").update(canonical).digest("hex").slice(0, 16)
+  const decisionConfig = JSON.stringify({
+    confidenceThreshold: config.confidenceThreshold,
+    minimumConfidence: config.riskPolicy.minimumConfidence,
+    riskPolicyAllow: config.riskPolicy.allow,
+    onInvalidDecision: config.riskPolicy.onInvalidDecision,
+    onReviewerFailure: config.riskPolicy.onReviewerFailure,
+    repositoryTrust: config.repositoryTrust,
+    enforcementMode: config.enforcementMode,
+    escalationMode: config.escalationMode,
+    configDegraded: config.configDegraded?.length ?? 0,
+  })
+  return createHash("sha256")
+    .update(`${rulesCanonical}#${decisionConfig}`)
+    .digest("hex")
+    .slice(0, 16)
 }
 
 /**

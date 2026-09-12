@@ -1,10 +1,27 @@
-import { appendFile, mkdir } from "node:fs/promises"
-import { readFileSync } from "node:fs"
+import { mkdir } from "node:fs/promises"
+import {
+  closeSync,
+  constants as fsConstants,
+  fchmodSync,
+  fstatSync,
+  openSync,
+  readSync,
+  writeSync,
+} from "node:fs"
 import { homedir } from "node:os"
 import { dirname, resolve } from "node:path"
 import type { ReviewAuditRecord, ReviewerConfig } from "./types.ts"
+import { redactSecrets } from "./redact.ts"
 
 export const DEFAULT_AUDIT_PATH = "~/.local/share/opencode/permission-reviewer-audit.jsonl"
+
+const O_RDONLY = typeof fsConstants.O_RDONLY === "number" ? fsConstants.O_RDONLY : 0
+const O_WRONLY = typeof fsConstants.O_WRONLY === "number" ? fsConstants.O_WRONLY : 0
+const O_CREAT = typeof fsConstants.O_CREAT === "number" ? fsConstants.O_CREAT : 0
+const O_EXCL = typeof fsConstants.O_EXCL === "number" ? fsConstants.O_EXCL : 0
+const O_APPEND = typeof fsConstants.O_APPEND === "number" ? fsConstants.O_APPEND : 0
+const O_NOFOLLOW = typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0
+const O_NONBLOCK = typeof fsConstants.O_NONBLOCK === "number" ? fsConstants.O_NONBLOCK : 0
 
 export function expandHome(path: string): string {
   if (path === "~") return homedir()
@@ -36,6 +53,9 @@ export interface AuditMissingFields {
 export interface AuditSummary {
   path: string
   exists: boolean
+  /** True when only the bounded tail (most recent 64 MiB) was summarized:
+   *  line counts and timestamps then describe that window, not the file. */
+  truncated: boolean
   totalLines: number
   validRecords: number
   invalidLines: number
@@ -54,12 +74,68 @@ function bump(map: Record<string, number>, key: string): void {
   map[key] = (map[key] ?? 0) + 1
 }
 
+/** Cap on how much of an audit file the summary reader will pull into memory:
+ *  the file is append-only and grows without bound, and the report only needs
+ *  the most recent records. When the cap is hit the reader summarizes the tail
+ *  (newest records) and flags the truncation. */
+const AUDIT_READ_CAP_BYTES = 64 * 1024 * 1024
+
+/** Read the (bounded) tail of an audit file synchronously without loading the
+ *  whole file. The size and the bytes both come from the open descriptor, so
+ *  the window matches the data actually read. Never throws: any failure to
+ *  open/stat/read returns undefined and the caller reports the file as
+ *  unreadable. */
+function readTail(path: string): { text: string; truncated: boolean } | undefined {
+  let fd: number | undefined
+  try {
+    // O_NOFOLLOW rejects a symlinked audit path and O_NONBLOCK keeps a FIFO
+    // from blocking the CLI before fstat can reject the non-regular file.
+    fd = openSync(path, O_RDONLY | O_NONBLOCK | O_NOFOLLOW)
+    const info = fstatSync(fd)
+    if (!info.isFile()) return undefined
+    const size = info.size
+    const truncated = size > AUDIT_READ_CAP_BYTES
+    const length = truncated ? AUDIT_READ_CAP_BYTES : size
+    const buffer = Buffer.alloc(length)
+    const offset = truncated ? size - length : 0
+    let read = 0
+    while (read < length) {
+      const count = readSync(fd, buffer, read, length - read, offset + read)
+      if (count === 0) break
+      read += count
+    }
+    // A shrink after fstat can end the read early; decode only the bytes
+    // actually read so no zero-padding leaks into the text.
+    let text = (read < length ? buffer.subarray(0, read) : buffer).toString("utf8")
+    if (truncated) {
+      // Drop a possibly partial first line so every summarized line is whole.
+      text = text.replace(/^[^\n]*\n/, "")
+    }
+    return { text, truncated }
+  } catch {
+    return undefined
+  } finally {
+    if (fd !== undefined) closeSyncSafe(fd)
+  }
+}
+
+function closeSyncSafe(fd: number): void {
+  try {
+    closeSync(fd)
+  } catch {
+    // Best effort; the read already succeeded or failed on its own.
+  }
+}
+
 /** Read an append-only JSONL audit file and summarize it. Never throws: a
- *  missing/unreadable file returns an empty summary with `exists: false`. */
+ *  missing/unreadable file returns an empty summary with `exists: false`, and
+ *  malformed records (wrong shapes, null actors, bad JSON) are counted as
+ *  invalid lines instead of aborting the report. */
 export function readAuditSummary(path: string): AuditSummary {
   const summary: AuditSummary = {
     path,
     exists: false,
+    truncated: false,
     totalLines: 0,
     validRecords: 0,
     invalidLines: 0,
@@ -71,14 +147,13 @@ export function readAuditSummary(path: string): AuditSummary {
     unknownActorNames: [],
     missingRequiredFields: [],
   }
-  let text: string
-  try {
-    text = readFileSync(path, "utf8")
-    summary.exists = true
-  } catch {
-    return summary
-  }
-  const lines = text.split("\n").filter((line) => line.trim().length > 0)
+  const read = readTail(path)
+  if (read === undefined) return summary
+  summary.exists = true
+  summary.truncated = read.truncated
+  const lines = read.text.split("\n").filter((line) => line.trim().length > 0)
+  // When the cap was hit only the tail was read; line counts then describe
+  // the summarized window, not the whole file.
   summary.totalLines = lines.length
   const actorCounts = new Map<string, number>()
   for (let i = 0; i < lines.length; i++) {
@@ -114,20 +189,27 @@ export function readAuditSummary(path: string): AuditSummary {
     }
     const missing = REQUIRED_AUDIT_FIELDS.filter((f) => record[f] === undefined)
     if (missing.length > 0) summary.missingRequiredFields.push({ lineNo, missing })
-    const actor = record.actor as { name?: string; profile?: string } | undefined
+    const actor =
+      typeof record.actor === "object" && record.actor !== null
+        ? (record.actor as { name?: string; profile?: string })
+        : undefined
     const isUnknown =
       actor === undefined ||
+      actor.profile === undefined ||
       actor.profile === "unknown" ||
       actor.name === undefined ||
       actor.name === ""
     if (isUnknown) {
-      const name = actor?.name ?? (actor === undefined ? "(no actor field)" : "(unnamed)")
+      const rawName = actor?.name ?? (record.actor === undefined ? "(no actor field)" : "(unnamed)")
+      // A hostile or corrupted record can put anything in `name`; coerce to a
+      // string before it reaches the localeCompare below.
+      const name = typeof rawName === "string" ? rawName : JSON.stringify(rawName)
       actorCounts.set(name, (actorCounts.get(name) ?? 0) + 1)
     }
   }
   summary.unknownActorNames = [...actorCounts.entries()]
     .map(([name, count]) => ({ name, count }))
-    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
+    .sort((a, b) => b.count - a.count || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
   return summary
 }
 
@@ -146,18 +228,86 @@ export function createAuditWriter(
   return async (record) => {
     ready ??= mkdir(dirname(path), { recursive: true }).then(() => {})
     await ready
+    // Redact the free-text fields (the reason carries transport error messages
+    // and provider responses that never passed through the evidence
+    // pipeline's redaction). Structural identifiers are left intact: running
+    // the redactor over the whole serialized line would also match key names
+    // like "sessionID" and corrupt the record's correlation fields.
     const sanitized: ReviewAuditRecord = {
       ...record,
-      reason: boundedReason(record.reason),
+      reason: redactSecrets(boundedReason(record.reason)),
+      ...(record.warnings === undefined
+        ? {}
+        : { warnings: record.warnings.map((warning) => redactSecrets(warning)) }),
+      ...(record.policyTrace === undefined
+        ? {}
+        : {
+            policyTrace: {
+              ...record.policyTrace,
+              // Rule reasons are admin-authored prose; redact them like any
+              // other free text without touching the structural fields.
+              matchedRules: record.policyTrace.matchedRules.map((match) => ({
+                ...match,
+                reason: redactSecrets(match.reason),
+              })),
+            },
+          }),
+      ...(record.askDecisions === undefined
+        ? {}
+        : {
+            askDecisions: record.askDecisions.map((decision) => ({
+              ...decision,
+              question: redactSecrets(decision.question),
+              answer: redactSecrets(decision.answer),
+            })),
+          }),
     }
-    await appendFile(path, `${JSON.stringify(sanitized)}\n`, {
-      encoding: "utf8",
-      mode: 0o600,
-    }).catch((error) => {
+    try {
+      appendAuditLine(path, `${JSON.stringify(sanitized)}\n`)
+    } catch (error) {
+      // The audit trail is best-effort: a lost record is logged, never thrown.
       logger?.("failed to append audit record", {
         path,
         error: error instanceof Error ? error.message : String(error),
       })
-    })
+    }
+  }
+}
+
+/** Append one JSONL line through an explicitly opened descriptor: O_NOFOLLOW
+ *  rejects a symlinked audit path, the descriptor is verified to be a regular
+ *  file before writing, and restrictive permissions are applied only when this
+ *  call created the file (never tightening or loosening a pre-existing file
+ *  the user may own jointly). One open per record matches the previous
+ *  append-per-call behavior. Throws on failure; the caller logs and swallows. */
+function appendAuditLine(path: string, line: string): void {
+  let fd: number | undefined
+  let created = false
+  try {
+    try {
+      fd = openSync(path, O_WRONLY | O_CREAT | O_EXCL | O_APPEND | O_NOFOLLOW)
+      created = true
+    } catch (error) {
+      // Anything but "already exists" (notably ELOOP from O_NOFOLLOW on a
+      // symlink) is a genuine failure for the caller to log.
+      if ((error as { code?: unknown }).code !== "EEXIST") throw error
+      // The re-open after EEXIST is refused, not raced: O_NOFOLLOW rejects a
+      // swapped-in symlink with ELOOP, the descriptor must pass the regular-file
+      // check below, and the caller logs and swallows any failure.
+      // codeql[js/file-system-race]
+      fd = openSync(path, O_WRONLY | O_APPEND | O_NOFOLLOW)
+    }
+    if (!fstatSync(fd).isFile()) {
+      throw new Error(`not a regular file: ${path}`)
+    }
+    if (created) fchmodSync(fd, 0o600)
+    const data = Buffer.from(line, "utf8")
+    let written = 0
+    while (written < data.length) {
+      const count = writeSync(fd, data, written, data.length - written)
+      written += count
+    }
+  } finally {
+    if (fd !== undefined) closeSyncSafe(fd)
   }
 }

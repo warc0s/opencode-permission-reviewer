@@ -38,3 +38,6 @@ coverage/
 
 # reference clones (e.g. codex) if placed inside the worktree
 /codex
+
+# test scratch directories
+tests/.tmp-reviewer-isolated/

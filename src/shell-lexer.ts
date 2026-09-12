@@ -9,9 +9,10 @@
  *   - stripping `#` comments when they begin a token,
  *   - a recursive "effective command" resolver that peels privilege wrappers
  *     (`sudo`, `doas`, `env`, `command`, `nice`, `nohup`, `time`, `stdbuf`,
- *     `ionice`, `pkexec`, `fakeroot`, `setsid`, `setpriv`, `unshare`, `run0`)
- *     and destructures command-string forms (`sh -c`, `su -c`, `env -S`,
- *     `ssh host cmd`, `busybox applet`, `chroot root cmd`).
+ *     `ionice`, `pkexec`, `fakeroot`, `setsid`, `setpriv`, `unshare`, `run0`,
+ *     `watch`, `xargs`) and destructures command-string forms (`sh -c`,
+ *     `su -c`, `env -S`, `ssh host cmd`, `busybox applet`, `chroot root cmd`,
+ *     `timeout duration cmd`).
  *
  * It deliberately does NOT expand variables, globs, command substitutions,
  * heredocs, or arithmetic. Those remain the model reviewer's job; the brake
@@ -48,6 +49,9 @@ const TRANSPARENT_WRAPPERS = new Set([
   "setpriv",
   "unshare",
   "run0",
+  "watch",
+  "xargs",
+  "timeout",
 ])
 
 /**
@@ -79,6 +83,29 @@ const VALUE_OPTIONS: Record<string, Set<string>> = {
   setsid: new Set(),
   unshare: new Set(),
   run0: new Set(["--unit", "--service", "--slice", "--setenv", "--chdir"]),
+  // watch takes only two value options (-n/--interval); its pure flags
+  // (-d, -g, -t, -b, -c, -e, …) stay absent like the other wrappers above.
+  watch: new Set(["-n", "--interval"]),
+  // xargs value-taking options with a separate argument: without these the
+  // generic peel would mistake the option's argument for the command. Pure
+  // flags (-0, -r, -t, …) stay absent, as do options with optional arguments
+  // (-E, -l, --replace), where skipping a following token could swallow the
+  // real executable instead.
+  xargs: new Set([
+    "-I",
+    "-n",
+    "-P",
+    "-s",
+    "-L",
+    "--arg-file",
+    "--max-args",
+    "--max-chars",
+    "--max-procs",
+    "--max-lines",
+  ]),
+  // timeout value options; the DURATION operand itself is skipped by dedicated
+  // handling in walk(), not by the generic loop.
+  timeout: new Set(["-k", "-s", "--kill-after", "--signal"]),
 }
 
 const SHELL_BINARIES = new Set(["sh", "bash", "zsh", "dash", "ksh", "ash", "mksh", "fish"])
@@ -256,6 +283,31 @@ function walk(tokens: ShellToken[], out: ShellToken[][]): void {
         for (const sub of lexSegments(tail ? `${script} ${tail}` : script)) walk(sub.tokens, out)
         return
       }
+    }
+    if (base === "timeout") {
+      // timeout [OPTION]... DURATION COMMAND [ARG]...: unlike the generic
+      // wrappers, a mandatory non-option DURATION operand sits between the
+      // options and the command, so skip options, then exactly one duration
+      // token, then recurse into the real command tail. With no command left
+      // (plain `timeout 5` just errors) there is nothing to peel to.
+      const valueOpts = VALUE_OPTIONS.timeout ?? new Set<string>()
+      let j = i + 1
+      while (j < tokens.length) {
+        const opt = tokens[j]!.value
+        if (opt === "--") {
+          j += 1
+          break
+        }
+        if (opt.startsWith("-") && opt.length > 1) {
+          if (valueOpts.has(opt)) j += 2
+          else j += 1
+          continue
+        }
+        break
+      }
+      if (j < tokens.length) j += 1
+      if (j < tokens.length) walk(tokens.slice(j), out)
+      return
     }
     if (TRANSPARENT_WRAPPERS.has(base)) {
       const valueOpts = VALUE_OPTIONS[base] ?? new Set<string>()

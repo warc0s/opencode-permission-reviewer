@@ -32,6 +32,11 @@ export interface RuntimeContext {
   writeAudit?(record: ReviewAuditRecord): Promise<void>
   directory: string
   worktree: string
+  /** Where reviewer sessions run when isolation is available: a directory
+   *  without project instructions or project config. Production resolves the
+   *  shared data directory; tests inject a scratch path so they never touch
+   *  the developer's HOME. */
+  reviewerDirectoryBase?: string
 }
 
 // Re-export for convenience.

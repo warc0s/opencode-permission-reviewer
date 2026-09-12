@@ -13,7 +13,11 @@ import type {
   SessionNode,
 } from "../types.ts"
 import type { OpenCodeClientLike } from "../opencode/types.ts"
-import { responseData } from "../opencode/transport.ts"
+import { responseData, withTimeout } from "../opencode/transport.ts"
+
+/** Bound for the resolver's metadata SDK calls: a hung session.get/messages
+ *  must degrade to "unknown" instead of leaving the review pending forever. */
+const METADATA_TIMEOUT_MS = 10_000
 
 /**
  * Result of actor/lineage resolution. All fields are populated
@@ -115,8 +119,16 @@ async function fetchSession(
 ): Promise<SessionMetadata | undefined> {
   if (typeof client.session.get !== "function") return undefined
   try {
-    const response = await client.session.get({ path: { id: sessionID }, query: { directory } })
-    return readSession(sessionID, responseData(response, "session.get"))
+    const response = await withTimeout(
+      client.session.get({ path: { id: sessionID }, query: { directory } }),
+      METADATA_TIMEOUT_MS,
+    )
+    const raw = responseData(response, "session.get")
+    if (typeof raw !== "object" || raw === null) return undefined
+    const data = raw as Record<string, unknown>
+    if (data.id !== sessionID || (data.parentID !== undefined && typeof data.parentID !== "string"))
+      return undefined
+    return readSession(sessionID, data)
   } catch {
     return undefined
   }
@@ -150,6 +162,8 @@ async function walkLineage(
     mode: undefined,
     createdAt: undefined,
   }
+  const origin =
+    current === undefined ? "unknown" : current.parentID !== undefined ? "delegated" : "human-root"
   nodes.push(toNode(current ?? fallback))
   visited.add(sessionID)
 
@@ -158,7 +172,10 @@ async function walkLineage(
   while (cursor?.parentID) {
     if (depth >= config.maxSessionDepth || nodes.length - 1 >= config.maxParentSessions) {
       // Hit a configured bound; remaining ancestry is truncated, not missing.
-      return finalize(nodes, cursor.parentID, depth, cycleDetected, true, missingParents)
+      return {
+        ...finalize(nodes, cursor.parentID, depth, cycleDetected, true, missingParents),
+        origin,
+      }
     }
     if (visited.has(cursor.parentID)) {
       cycleDetected = true
@@ -175,7 +192,7 @@ async function walkLineage(
     depth += 1
     cursor = parent
   }
-  return finalize(nodes, undefined, depth, cycleDetected, false, missingParents)
+  return { ...finalize(nodes, undefined, depth, cycleDetected, false, missingParents), origin }
 }
 
 function toNode(s: SessionMetadata): SessionNode {
@@ -220,10 +237,13 @@ async function fetchMessagesBounded(
   limit: number,
 ): Promise<MessageWithParts[]> {
   try {
-    const response = await client.session.messages({
-      path: { id: sessionID },
-      query: { directory, limit },
-    })
+    const response = await withTimeout(
+      client.session.messages({
+        path: { id: sessionID },
+        query: { directory, limit },
+      }),
+      METADATA_TIMEOUT_MS,
+    )
     return normalizeFetched(responseData(response, "session.messages"))
   } catch {
     return []
@@ -237,35 +257,76 @@ function normalizeFetched(raw: unknown): MessageWithParts[] {
 
 // --- intent extraction ------------------------------------------------------
 
-/** Heuristic: OpenCode injects token/compact notices that are never authorization. */
-function isSynthetic(text: string): boolean {
-  return /^\s*(Magic Compact:|You have \d+ weighted tokens left)/.test(text)
+/** Host-authored text injected into a user-role message is never human
+ *  authorization. Provenance comes from the part's own `synthetic`/`ignored`
+ *  flags when the host sets them; the text-pattern check below is only a
+ *  fallback for hosts that do not. */
+function isSyntheticPart(part: Record<string, unknown>): boolean {
+  if (part.type !== "text" || typeof part.text !== "string") return false
+  if (part.synthetic === true || part.ignored === true) return true
+  return /^\s*(Magic Compact:|You have \d+ weighted tokens left)/.test(part.text)
+}
+
+function messageCreatedAt(message: MessageWithParts): number | undefined {
+  const time = message.info.time as Record<string, unknown> | undefined
+  return typeof time === "object" && time !== null && typeof time.created === "number"
+    ? time.created
+    : undefined
 }
 
 function userTextOf(message: MessageWithParts): string | undefined {
   if (message.info.role !== "user") return undefined
   for (const part of message.parts as Array<Record<string, unknown>>) {
-    if (part.type === "text" && typeof part.text === "string" && part.text.trim()) {
+    if (isSyntheticPart(part)) continue
+    if (typeof part.text === "string" && part.text.trim()) {
       return part.text
     }
   }
   return undefined
 }
 
-/** A delegation recorded as a subtask/task tool part in a parent session. */
-function extractDelegatedTasks(messages: MessageWithParts[], sessionID: string): IntentBlock[] {
+/** A delegation recorded as a subtask/task tool part in a parent session.
+ *  Task-tool parts carry the spawned child session id in
+ *  `state.metadata.sessionId`; when present, only the delegation that created
+ *  THIS session is recorded, so sibling subagent briefs are not attributed to
+ *  the request under review. The task text is read from `part.prompt` /
+ *  `part.description` and, for the normal tool-part shape, from the persisted
+ *  call arguments in `state.input`. */
+function extractDelegatedTasks(
+  messages: MessageWithParts[],
+  sessionID: string,
+  childSessionID: string,
+): IntentBlock[] {
   const blocks: IntentBlock[] = []
   for (const message of messages) {
     for (const part of message.parts as Array<Record<string, unknown>>) {
       const isSubtask = part.type === "subtask"
       const isTaskTool = part.type === "tool" && part.tool === "task"
       if (!isSubtask && !isTaskTool) continue
+      let input: Record<string, unknown> | undefined
+      if (isTaskTool) {
+        const state = part.state as Record<string, unknown> | undefined
+        const metadata = state?.metadata as Record<string, unknown> | undefined
+        if (typeof metadata?.sessionId === "string" && metadata.sessionId !== childSessionID) {
+          continue
+        }
+        input =
+          typeof state?.input === "object" && state?.input !== null
+            ? (state.input as Record<string, unknown>)
+            : undefined
+      }
+      const fromInput =
+        typeof input?.prompt === "string"
+          ? input.prompt
+          : typeof input?.description === "string"
+            ? input.description
+            : undefined
       const text =
         typeof part.prompt === "string"
           ? part.prompt
           : typeof part.description === "string"
             ? part.description
-            : undefined
+            : fromInput
       if (!text || !text.trim()) continue
       blocks.push({
         sessionID,
@@ -286,19 +347,31 @@ function extractDelegatedTasks(messages: MessageWithParts[], sessionID: string):
   return blocks
 }
 
-function extractDirectIntent(messages: MessageWithParts[], sessionID: string): IntentBlock[] {
+/** Extract the user-role text blocks of one session with a single source rule:
+ *  in a DELEGATED session (one created by a parent agent's task tool) every
+ *  user-role message is agent-authored — the initial briefing AND any later
+ *  `task_id` follow-ups — so they are labeled `assistant` and can never be
+ *  presented as human authorization. In a top-level session they are human
+ *  input. Message-window position is irrelevant to origin, which is why this
+ *  does not "skip the first message". */
+function extractSessionUserBlocks(
+  messages: MessageWithParts[],
+  sessionID: string,
+  delegated: boolean,
+): IntentBlock[] {
   const blocks: IntentBlock[] = []
   for (const message of messages) {
     const text = userTextOf(message)
     if (!text) continue
-    if (isSynthetic(text)) continue
+    const createdAt = messageCreatedAt(message)
     blocks.push({
       sessionID,
       messageID: typeof message.info.id === "string" ? message.info.id : "",
-      actor: "user",
+      actor: delegated ? "assistant" : "user",
       text,
       synthetic: false,
-      provenance: prov<"intent">("intent", "parent-session", "high"),
+      ...(createdAt === undefined ? {} : { createdAt }),
+      provenance: prov<"intent">("intent", delegated ? "parent-session" : "session-api", "high"),
     })
   }
   return blocks
@@ -312,19 +385,43 @@ async function resolveIntent(
   directory: string,
   config: ReviewerConfig,
 ): Promise<IntentContext> {
-  // Local (current session) direct intent.
-  const localSessionIntent = extractDirectIntent(currentMessages, request.sessionID)
+  // One source rule for every intent section: a session created by a parent
+  // agent (delegated) has NO human-authored user messages — the initial
+  // briefing and every `task_id` follow-up all come from the orchestrating
+  // agent. They remain visible as local-session context labeled `assistant`
+  // but can never surface as human authorization.
+  const currentDelegated = lineage.origin !== "human-root"
+  const localSessionIntent = extractSessionUserBlocks(
+    currentMessages,
+    request.sessionID,
+    currentDelegated,
+  )
+  if (lineage.origin === "unknown") {
+    for (const block of localSessionIntent) {
+      block.actor = "unknown"
+      block.provenance = prov<"intent">("intent", "unavailable", "unknown")
+    }
+  }
+  const directUserIntent: IntentBlock[] = currentDelegated ? [] : localSessionIntent
+  const delegatedTask: IntentBlock[] = []
   const limit = Math.max(config.intentMessages, 4)
 
-  const directUserIntent: IntentBlock[] = [...localSessionIntent]
-  const delegatedTask: IntentBlock[] = []
-
-  // Immediate parent: delegation that created/instructed this session.
+  // Immediate parent: delegation that created/instructed this session. The
+  // parent's own user messages are human intent only when the parent is
+  // itself a top-level session (no grandparent).
   const parent = lineage.nodes[1]
   if (parent) {
     const parentMessages = await fetchMessagesBounded(client, parent.sessionID, directory, limit)
-    delegatedTask.push(...extractDelegatedTasks(parentMessages, parent.sessionID))
-    directUserIntent.push(...extractDirectIntent(parentMessages, parent.sessionID))
+    delegatedTask.push(
+      ...extractDelegatedTasks(parentMessages, parent.sessionID, request.sessionID),
+    )
+    directUserIntent.push(
+      ...extractSessionUserBlocks(
+        parentMessages,
+        parent.sessionID,
+        parent.parentID !== undefined,
+      ).filter((block) => block.actor === "user"),
+    )
   }
 
   // Root session (if distinct from parent AND from the current session whose
@@ -332,19 +429,39 @@ async function resolveIntent(
   const root = lineage.nodes[lineage.nodes.length - 1]
   if (root && root !== parent && root.sessionID !== request.sessionID) {
     const rootMessages = await fetchMessagesBounded(client, root.sessionID, directory, limit)
-    directUserIntent.push(...extractDirectIntent(rootMessages, root.sessionID))
+    directUserIntent.push(
+      ...extractSessionUserBlocks(rootMessages, root.sessionID, root.parentID !== undefined).filter(
+        (block) => block.actor === "user",
+      ),
+    )
   }
 
-  const latestExplicitAuthorization = directUserIntent[directUserIntent.length - 1]
+  // Pick by creation time, not by array position: the intent arrays are
+  // concatenated local → parent → root, so the last element is the root's
+  // latest message even when the current session holds much newer input. When
+  // no block carries a timestamp, fall back to the last recovered block.
+  const timestamped = directUserIntent.filter((block) => block.createdAt !== undefined)
+  const latestExplicitAuthorization =
+    timestamped.length > 0
+      ? timestamped.reduce((best, block) =>
+          (block.createdAt ?? 0) > (best.createdAt ?? 0) ? block : best,
+        )
+      : directUserIntent[directUserIntent.length - 1]
 
   const reasons: string[] = []
-  if (delegatedTask.length === 0) reasons.push("no delegation subtask located in parent session")
+  if (delegatedTask.length === 0 && lineage.depth > 0)
+    reasons.push("no delegation subtask located in parent session")
   if (lineage.missingParents.length > 0)
     reasons.push(`missing parents: ${lineage.missingParents.join(", ")}`)
-  if (directUserIntent.length === 0) reasons.push("no direct user intent recovered")
+  if (directUserIntent.length === 0)
+    reasons.push(
+      currentDelegated
+        ? "delegated session: no human-authored user messages exist in this session chain window"
+        : "no direct user intent recovered",
+    )
 
   const completeness: IntentContext["completeness"] =
-    directUserIntent.length > 0 && delegatedTask.length > 0
+    directUserIntent.length > 0 && (delegatedTask.length > 0 || !currentDelegated)
       ? "complete"
       : directUserIntent.length > 0 || localSessionIntent.length > 0
         ? "partial"
@@ -399,10 +516,10 @@ function assembleActorContext(
         )
       : UNKNOWN_STRING
 
-  const parent = lineage.nodes[1]
+  const parentID = lineage.nodes[0]?.parentID
   const parentSessionID =
-    parent !== undefined
-      ? prov<string | undefined>(parent.sessionID, "session-api", "confirmed")
+    parentID !== undefined
+      ? prov<string | undefined>(parentID, "session-api", "confirmed")
       : prov<string | undefined>(undefined, "unavailable", "unknown")
 
   const identityCompleteness: ActorContext["identityCompleteness"] =
@@ -502,6 +619,7 @@ export async function resolveActorContext(
 export function unknownResolution(request: PermissionRequest, error: unknown): ActorResolution {
   const message = error instanceof Error ? error.message : String(error)
   const lineage: SessionLineage = {
+    origin: "unknown",
     nodes: [{ sessionID: request.sessionID }],
     rootSessionID: request.sessionID,
     depth: 0,

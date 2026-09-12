@@ -23,6 +23,27 @@ function truncate(value: string, max: number): string {
   return `${redacted.slice(0, max)}\n<truncated characters="${omitted}" />`
 }
 
+/** Tail-preserving truncation for recency-sensitive content: when a budget cut
+ *  is unavoidable, the END (most recent content) survives, unlike `truncate`
+ *  which keeps the head. */
+function truncateKeepEnd(value: string, max: number): string {
+  const redacted = redactSecrets(value)
+  if (redacted.length <= max) return redacted
+  const omitted = redacted.length - max
+  return `<truncated characters="${omitted}" />\n${redacted.slice(-max)}`
+}
+
+/** Elide the middle of an over-long command, keeping head and tail: the head
+ *  names the executable and flags, the tail carries trailing redirections and
+ *  compound tails (`… ; rm -rf`), so both ends must reach the reviewer. */
+function elideMiddle(value: string, max: number): string {
+  if (value.length <= max) return value
+  const omitted = value.length - Math.floor(max * 0.8)
+  const head = Math.floor(max * 0.5)
+  const tail = Math.floor(max * 0.3)
+  return `${value.slice(0, head)}<elided characters="${omitted}" />${value.slice(-tail)}`
+}
+
 function stableJson(value: unknown, max: number): string {
   try {
     const seen = new WeakSet<object>()
@@ -72,14 +93,7 @@ function messageSummary(message: MessageWithParts, maxPartChars: number): string
   const id = typeof message.info.id === "string" ? message.info.id : "unknown"
   const parts = message.parts
     .map((part) => {
-      if (
-        role === "user" &&
-        part.type === "text" &&
-        typeof part.text === "string" &&
-        isSyntheticControlMessage(part.text)
-      ) {
-        return
-      }
+      if (role === "user" && isSyntheticPart(part)) return
       return partSummary(part, maxPartChars)
     })
     .filter((part): part is string => Boolean(part))
@@ -89,10 +103,21 @@ function messageSummary(message: MessageWithParts, maxPartChars: number): string
 
 export function buildTranscript(messages: MessageWithParts[], config: ReviewerConfig): string {
   const selected = messages.slice(-config.transcriptMessages)
-  const summaries = selected
-    .map((message) => messageSummary(message, config.maxPartChars))
-    .filter((summary): summary is string => Boolean(summary))
-  return truncate(summaries.join("\n\n"), config.maxContextChars)
+  // Budget from the newest message backwards so the recency-sensitive tail of
+  // the conversation always survives a cut; the oldest messages of the window
+  // are dropped first.
+  const kept: string[] = []
+  let remaining = config.maxContextChars
+  for (let index = selected.length - 1; index >= 0; index -= 1) {
+    const summary = messageSummary(selected[index]!, config.maxPartChars)
+    if (!summary) continue
+    const separator = kept.length === 0 ? 0 : 2
+    if (remaining <= separator) break
+    const bounded = truncateKeepEnd(summary, remaining - separator)
+    kept.push(bounded)
+    remaining -= bounded.length + separator
+  }
+  return kept.reverse().join("\n\n")
 }
 
 function isSyntheticControlMessage(text: string): boolean {
@@ -103,12 +128,22 @@ function isSyntheticControlMessage(text: string): boolean {
   )
 }
 
+/** Host-authored text injected into a user-role message. Provenance comes from
+ *  the part's own `synthetic`/`ignored` flags first; the text-pattern check is
+ *  only a fallback for hosts that do not set the flags. */
+function isSyntheticPart(part: Record<string, unknown>): boolean {
+  if (part.type !== "text" || typeof part.text !== "string") return false
+  if (part.synthetic === true || part.ignored === true) return true
+  return isSyntheticControlMessage(part.text)
+}
+
 function userIntentSummary(message: MessageWithParts, config: ReviewerConfig): string | undefined {
   if (message.info.role !== "user") return
   const texts = message.parts.flatMap((part) => {
     if (part.type !== "text" || typeof part.text !== "string") return []
+    if (isSyntheticPart(part)) return []
     const text = part.text.trim()
-    if (!text || isSyntheticControlMessage(text)) return []
+    if (!text) return []
     return [truncate(text, config.maxPartChars)]
   })
   if (texts.length === 0) return
@@ -136,7 +171,17 @@ function keepMostRecentBlocks(blocks: string[], maxChars: number): string {
   return selected.reverse().join("\n\n")
 }
 
-export function buildIntentHistory(messages: MessageWithParts[], config: ReviewerConfig): string {
+/** Render the USER_INTENT_HISTORY section. In a delegated session there is no
+ *  human-authored user text at all (every user-role message is the parent
+ *  agent's briefing or a `task_id` follow-up), so the section is emptied
+ *  rather than risking agent instructions being read as human intent — they
+ *  already appear, correctly labeled, in LOCAL_SESSION_CONTEXT. */
+export function buildIntentHistory(
+  messages: MessageWithParts[],
+  config: ReviewerConfig,
+  options?: { delegatedSession?: boolean },
+): string {
+  if (options?.delegatedSession === true) return ""
   const seen = new Set<string>()
   const summaries = messages.flatMap((message) => {
     const summary = userIntentSummary(message, config)
@@ -149,28 +194,64 @@ export function buildIntentHistory(messages: MessageWithParts[], config: Reviewe
   return keepMostRecentBlocks(summaries.slice(-config.intentMessages), config.maxIntentChars)
 }
 
+/** Bound the pending command before serialization, eliding its middle rather
+ *  than letting a head-only truncation cut the tail (where trailing
+ *  redirections and compound command tails live). */
+function boundedPendingMetadata(
+  metadata: Record<string, unknown>,
+  max: number,
+): { metadata: Record<string, unknown>; elided: boolean } {
+  const command = metadata.command
+  if (typeof command !== "string" || command.length <= max) {
+    return { metadata, elided: false }
+  }
+  return { metadata: { ...metadata, command: elideMiddle(command, max) }, elided: true }
+}
+
+/** Render the PENDING_PERMISSION section and report whether the action under
+ *  review reached the prompt IN FULL. An elided command middle or a section
+ *  that itself hit the serialization budget means the reviewer judged an
+ *  action it could not see completely — callers must treat that as blocking
+ *  for automatic approval, whatever confidence the model reports. */
+export function pendingPermissionSection(
+  request: PermissionRequest,
+  config: ReviewerConfig,
+): { text: string; actionEvidenceComplete: boolean } {
+  const { metadata, elided } = boundedPendingMetadata(request.metadata, config.maxPartChars)
+  const text = stableJson(
+    {
+      permission: request.permission,
+      patterns: request.patterns,
+      metadata,
+      tool: request.tool,
+    },
+    config.maxPartChars * 2,
+  )
+  const truncated = text.includes('<truncated characters="')
+  return { text, actionEvidenceComplete: !elided && !truncated }
+}
+
 export function buildEvidence(envelope: ReviewEnvelope, config: ReviewerConfig): string {
+  return buildEvidenceResult(envelope, config).text
+}
+
+export function buildEvidenceResult(
+  envelope: ReviewEnvelope,
+  config: ReviewerConfig,
+): { text: string; actionEvidenceComplete: boolean } {
   const request: PermissionRequest = envelope.request
   // Omitted entirely when empty: absence of ask decisions carries no signal
   // for the reviewer (the transcript remains the fallback source).
   const askDecisions = renderAskDecisions(envelope.askDecisions)
+  const pending = pendingPermissionSection(request, config)
   const evidence = [
+    `PENDING_PERMISSION\n${pending.text}`,
     renderPolicySummary(envelope.policyTrace, config.maxPartChars * 2),
     `WORKING_DIRECTORY\n${envelope.directory}`,
     `WORKTREE\n${envelope.worktree}`,
-    // Actor/lineage/intent sections precede PENDING_PERMISSION so the reviewer
-    // judges the request knowing who is asking and why.
+    // Reserve the leading budget for the exact action before contextual sections.
     ...actorEvidenceSections(envelope, config),
     renderActionPurpose(envelope.actionPurpose, config.maxPartChars * 2),
-    `PENDING_PERMISSION\n${stableJson(
-      {
-        permission: request.permission,
-        patterns: request.patterns,
-        metadata: request.metadata,
-        tool: request.tool,
-      },
-      config.maxPartChars * 2,
-    )}`,
     envelope.enrichment || "ACTION_ENRICHMENT\n<none />",
     `REPOSITORY_CONTEXT\n${stableJson(
       { trust: config.repositoryTrust, directory: envelope.directory, worktree: envelope.worktree },
@@ -180,13 +261,18 @@ export function buildEvidence(envelope: ReviewEnvelope, config: ReviewerConfig):
     ...(askDecisions === undefined ? [] : [`USER_ASK_DECISIONS\n${askDecisions}`]),
     `RECENT_TRANSCRIPT\n${envelope.transcript || "<no transcript available />"}`,
   ].join("\n\n")
-  return truncate(
+  const text = truncate(
     evidence,
     config.maxContextChars +
       config.maxPartChars * 2 +
       config.maxEnrichmentChars +
       config.maxIntentChars,
   )
+  return {
+    text,
+    actionEvidenceComplete:
+      pending.actionEvidenceComplete && text.startsWith(`PENDING_PERMISSION\n${pending.text}\n\n`),
+  }
 }
 
 function renderActionPurpose(purpose: ActionPurpose | undefined, max: number): string {
@@ -260,6 +346,7 @@ function renderActor(actor: ActorContext, max: number): string {
 function renderLineage(lineage: SessionLineage, max: number): string {
   return stableJson(
     {
+      origin: lineage.origin ?? "unknown",
       depth: lineage.depth,
       rootSessionID: lineage.rootSessionID,
       cycleDetected: lineage.cycleDetected,

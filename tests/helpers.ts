@@ -158,7 +158,9 @@ export function runtime(
   client = new MockClient(),
   configOverrides: Partial<ReviewerConfig> = {},
   logger?: (message: string, details?: unknown) => void,
-  contextOverrides: Partial<Pick<RuntimeContext, "directory" | "worktree">> = {},
+  contextOverrides: Partial<
+    Pick<RuntimeContext, "directory" | "worktree" | "reviewerDirectoryBase">
+  > = {},
 ): { runtime: ApprovalReviewerRuntime; client: MockClient; ctx: RuntimeContext } {
   const auditRecords: ReviewAuditRecord[] = []
   const ctx: RuntimeContext = {
@@ -171,6 +173,11 @@ export function runtime(
     },
     directory: contextOverrides.directory ?? "/workspace/project",
     worktree: contextOverrides.worktree ?? contextOverrides.directory ?? "/workspace/project",
+    // Reviewer sessions must not be created in the developer's real HOME
+    // during tests: point isolation at a scratch directory under the OS temp
+    // root (created lazily by the coordinator).
+    reviewerDirectoryBase:
+      contextOverrides.reviewerDirectoryBase ?? `${import.meta.dir}/.tmp-reviewer-isolated`,
   }
   return {
     runtime: new ApprovalReviewerRuntime(ctx, config(configOverrides), logger),

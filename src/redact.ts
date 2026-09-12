@@ -75,7 +75,7 @@ const RULES: ReadonlyArray<{ re: RegExp; replace: (match: string, groups: string
   // Auth-scheme prefixes (Bearer / Basic / Token) followed by a token.
   // Case-insensitive so lowercase "bearer", "basic", "token" are caught too.
   {
-    re: /\b(Bearer|Basic|Token)\s+(?!\[REDACTED)[A-Za-z0-9._~+/-=]{8,}/gi,
+    re: /\b(Bearer|Basic|Token)\s+(?!\[REDACTED)[A-Za-z0-9._~+/=-]{8,}/gi,
     replace: (_m, g) => {
       const scheme = g[0] ?? ""
       return `${scheme} ${REDACT(scheme.toLowerCase())}`

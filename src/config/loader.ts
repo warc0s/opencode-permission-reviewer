@@ -65,6 +65,9 @@ function readLayerText(path: string): ConfigLayer | { status: "ok"; text: string
   let fd: number | undefined
   try {
     try {
+      // Read-only descriptor open of an existing config path; no file is
+      // created here and the descriptor must pass the regular-file check below.
+      // codeql[js/insecure-temporary-file]
       fd = openSync(path, O_RDONLY | O_NONBLOCK | O_NOFOLLOW)
     } catch (error) {
       const code = (error as { code?: unknown }).code

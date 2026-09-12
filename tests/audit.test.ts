@@ -1,5 +1,15 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises"
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  open,
+  readFile,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises"
 import { readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
@@ -135,10 +145,15 @@ describe("audit writer", () => {
     await chmod(auditPath, 0o644)
     const writeAudit = createAuditWriter({ ...DEFAULT_CONFIG, audit: true, auditPath })!
     await writeAudit(record({ requestID: "per_keep" }))
-    const info = await stat(auditPath)
-    expect(info.mode & 0o777).toBe(0o644)
-    const parsed = JSON.parse((await readFile(auditPath, "utf8")).trim()) as ReviewAuditRecord
-    expect(parsed.requestID).toBe("per_keep")
+    const handle = await open(auditPath, "r")
+    try {
+      const info = await handle.stat()
+      expect(info.mode & 0o777).toBe(0o644)
+      const parsed = JSON.parse((await readFile(handle, "utf8")).trim()) as ReviewAuditRecord
+      expect(parsed.requestID).toBe("per_keep")
+    } finally {
+      await handle.close()
+    }
   })
 
   test("expandHome handles ~ and ~/ paths without throwing", async () => {

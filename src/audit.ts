@@ -291,6 +291,10 @@ function appendAuditLine(path: string, line: string): void {
       // Anything but "already exists" (notably ELOOP from O_NOFOLLOW on a
       // symlink) is a genuine failure for the caller to log.
       if ((error as { code?: unknown }).code !== "EEXIST") throw error
+      // The re-open after EEXIST is refused, not raced: O_NOFOLLOW rejects a
+      // swapped-in symlink with ELOOP, the descriptor must pass the regular-file
+      // check below, and the caller logs and swallows any failure.
+      // codeql[js/file-system-race]
       fd = openSync(path, O_WRONLY | O_APPEND | O_NOFOLLOW)
     }
     if (!fstatSync(fd).isFile()) {

@@ -12,6 +12,8 @@ import { decision, request } from "./helpers.ts"
 import type { OpenCodeClientLike } from "../src/opencode/types.ts"
 
 const root = await mkdtemp(join(tmpdir(), "reviewer-host-regression-"))
+// Unique directory for the host output so concurrent runs never share a path.
+const logDirectory = await mkdtemp(join(tmpdir(), "reviewer-host-regression-log-"))
 const captured: Array<{ tools?: Array<{ function: { name: string } }>; messages: unknown }> = []
 const provider = Bun.serve({
   hostname: "127.0.0.1",
@@ -244,7 +246,11 @@ try {
   host.kill()
   await host.exited
   const logs = (await stdout) + (await stderr)
-  await writeFile("/tmp/reviewer-host-regressions.log", logs)
+  // Keep the host output for debugging; the path goes to stderr so the
+  // success JSON on stdout stays machine-readable.
+  const logPath = join(logDirectory, "host.log")
+  await writeFile(logPath, logs)
+  console.error("host regression logs:", logPath)
   provider.stop(true)
   await rm(root, { recursive: true, force: true })
 }

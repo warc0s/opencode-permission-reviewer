@@ -2,6 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { applyPlannedWrites, planFileChange, writeBackup, writeEntry } from "../src/cli/init.ts"
+import type { PackageInfo, PluginEntry } from "../src/cli/init.ts"
 
 async function run(
   args: string[],
@@ -135,6 +137,89 @@ describe("cli init", () => {
     expect(report.package.name).toBe("opencode-permission-reviewer")
     expect(report.versionChecks.length).toBeGreaterThanOrEqual(1)
     expect(report.targets[0].action).toBe("create")
+  })
+})
+
+describe("cli init apply guards", () => {
+  const pkg: PackageInfo = {
+    name: "test-plugin",
+    version: "9.9.9",
+    engines: {},
+    root: "/nonexistent-plugin-root",
+  }
+  const entry: PluginEntry = "test-plugin@^9.9.9"
+
+  let dir: string
+
+  afterEach(() => {
+    if (dir) rmSync(dir, { recursive: true, force: true })
+  })
+
+  function freshDir(): string {
+    dir = mkdtempSync(join(tmpdir(), "init-guard-"))
+    return dir
+  }
+
+  test("refuses a create write when the file appeared after planning", () => {
+    const directory = freshDir()
+    const path = join(directory, "opencode.json")
+    const stale = planFileChange(path, pkg)
+    expect(stale.action).toBe("create")
+    // Another process creates the file before the apply step runs.
+    const arrived = '{"plugin":["other@1.0.0"]}'
+    writeFileSync(path, arrived)
+    expect(applyPlannedWrites([stale], entry, pkg)).toBe(1)
+    // Nothing was clobbered or merged; the late file is untouched.
+    expect(readFileSync(path, "utf8")).toBe(arrived)
+  })
+
+  test("refuses an append write when the file turned malformed after planning", () => {
+    const directory = freshDir()
+    const path = join(directory, "opencode.json")
+    writeFileSync(path, '{"plugin":["other@1.0.0"]}')
+    const stale = planFileChange(path, pkg)
+    expect(stale.action).toBe("append")
+    writeFileSync(path, '{ "plugin": [')
+    expect(applyPlannedWrites([stale], entry, pkg)).toBe(1)
+    // No backup of the malformed file and no rewrite happened.
+    expect(readFileSync(path, "utf8")).toBe('{ "plugin": [')
+    expect(readdirSync(directory).filter((f) => f.includes(".bak-"))).toHaveLength(0)
+  })
+
+  test("applies a clean create plan", () => {
+    const directory = freshDir()
+    const path = join(directory, "opencode.json")
+    const plan = planFileChange(path, pkg)
+    expect(applyPlannedWrites([plan], entry, pkg)).toBe(0)
+    const cfg = JSON.parse(readFileSync(path, "utf8")) as { plugin: unknown[] }
+    expect(cfg.plugin).toEqual([entry])
+  })
+
+  test("writeEntry with create refuses to clobber an existing file", () => {
+    const directory = freshDir()
+    const path = join(directory, "opencode.json")
+    const original = '{"plugin":["other@1.0.0"]}'
+    writeFileSync(path, original)
+    let code: unknown
+    try {
+      writeEntry(path, entry, true)
+    } catch (error) {
+      code = (error as { code?: unknown }).code
+    }
+    expect(code).toBe("EEXIST")
+    expect(readFileSync(path, "utf8")).toBe(original)
+  })
+
+  test("writeBackup never overwrites a colliding backup name", () => {
+    const directory = freshDir()
+    const source = join(directory, "opencode.json")
+    writeFileSync(source, '{"plugin":["other@1.0.0"]}')
+    const preferred = join(directory, "opencode.json.bak-taken")
+    writeFileSync(preferred, "unrelated backup")
+    const actual = writeBackup(source, preferred)
+    expect(actual).not.toBe(preferred)
+    expect(readFileSync(actual, "utf8")).toBe('{"plugin":["other@1.0.0"]}')
+    expect(readFileSync(preferred, "utf8")).toBe("unrelated backup")
   })
 })
 

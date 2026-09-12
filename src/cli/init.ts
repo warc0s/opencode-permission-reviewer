@@ -8,7 +8,14 @@
  */
 import { parseArgs } from "node:util"
 import { homedir } from "node:os"
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import {
+  constants as fsConstants,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs"
 import { dirname, join } from "node:path"
 import { stripCommentsAndTrailingCommas } from "../config/jsonc.ts"
 
@@ -136,21 +143,49 @@ export async function runInit(argv: string[]): Promise<number> {
 
   // --- write --------------------------------------------------------------
 
+  return applyPlannedWrites(plans, entry, pkg)
+}
+
+/** Apply precomputed file plans. Each plan is re-resolved against the current
+ *  file before its write: the filesystem may have changed between planning
+ *  and applying (concurrent edit, new file), and a drifted plan refuses that
+ *  file's write instead of acting on stale assumptions. Returns the process
+ *  exit code. Exported so unit tests can drive it with stale plans and cover
+ *  the drift guards without racing the CLI. */
+export function applyPlannedWrites(
+  plans: FilePlan[],
+  entry: PluginEntry,
+  pkg: PackageInfo,
+): number {
   const written: string[] = []
   for (const plan of plans) {
     if (plan.action === "noop") continue
-    if (plan.action === "error") {
+    const fresh = planFileChange(plan.path, pkg)
+    if (fresh.action !== plan.action) {
+      console.error(
+        `init: ${plan.path} changed since planning (was ${plan.action}, now ${fresh.action}); refusing to write`,
+      )
+      return 1
+    }
+    if (fresh.action === "error") {
       console.error(
         `init: ${plan.path} is malformed or has a non-array "plugin" key; refusing to write`,
       )
       return 1
     }
     // append or create
-    if (plan.backup !== undefined && existsSync(plan.path)) {
-      copyFileSync(plan.path, plan.backup)
-      console.error(`  backup: ${plan.backup}`)
+    if (fresh.backup !== undefined && existsSync(plan.path)) {
+      console.error(`  backup: ${writeBackup(plan.path, fresh.backup)}`)
     }
-    writeEntry(plan.path, entry, plan.action === "create")
+    try {
+      writeEntry(plan.path, entry, fresh.action === "create")
+    } catch (error) {
+      // A file created in the residual race between re-planning and writing
+      // must never be clobbered; anything else is unexpected and propagates.
+      if ((error as { code?: unknown }).code !== "EEXIST") throw error
+      console.error(`init: ${plan.path} was created concurrently; refusing to overwrite`)
+      return 1
+    }
     written.push(plan.path)
   }
 
@@ -164,6 +199,23 @@ export async function runInit(argv: string[]): Promise<number> {
   }
 
   return 0
+}
+
+/** Copy the current file to a backup name, claiming the destination
+ *  atomically: when the planned name was taken concurrently, the next free
+ *  rotation name is used instead of overwriting the collision. Returns the
+ *  backup path actually written. Exported for unit tests. */
+export function writeBackup(source: string, preferred: string): string {
+  let dest = preferred
+  for (;;) {
+    try {
+      copyFileSync(source, dest, fsConstants.COPYFILE_EXCL)
+      return dest
+    } catch (error) {
+      if ((error as { code?: unknown }).code !== "EEXIST") throw error
+      dest = backupPath(source)
+    }
+  }
 }
 
 // --- internals ----------------------------------------------------------------
@@ -284,7 +336,9 @@ interface FilePlan {
   backup?: string
 }
 
-function planFileChange(path: string, pkg: PackageInfo): FilePlan {
+export type { FilePlan, PackageInfo, PluginEntry }
+
+export function planFileChange(path: string, pkg: PackageInfo): FilePlan {
   if (!existsSync(path)) {
     return { path, action: "create" }
   }
@@ -314,7 +368,7 @@ function backupPath(path: string): string {
   return bak
 }
 
-function writeEntry(path: string, entry: PluginEntry, create: boolean): void {
+export function writeEntry(path: string, entry: PluginEntry, create: boolean): void {
   if (create) {
     mkdirSync(dirname(path), { recursive: true })
     const schema =
@@ -322,7 +376,9 @@ function writeEntry(path: string, entry: PluginEntry, create: boolean): void {
         ? "https://opencode.ai/tui.json"
         : "https://opencode.ai/config.json"
     const fresh: Record<string, unknown> = { $schema: schema, plugin: [entry] }
-    writeFileSync(path, `${JSON.stringify(fresh, null, 2)}\n`, "utf8")
+    // Exclusive create: a file that appeared after planning is never
+    // clobbered; the EEXIST failure maps to a refusal in the caller.
+    writeFileSync(path, `${JSON.stringify(fresh, null, 2)}\n`, { encoding: "utf8", flag: "wx" })
     return
   }
   const cfg = parseConfigFile(path) ?? {}

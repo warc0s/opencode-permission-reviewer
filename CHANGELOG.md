@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.3] - 2026-09-13
+
+### Changed
+
+- Bumped `@opencode-ai/plugin` to 1.18.30 and `@opentui/core`/`@opentui/solid`
+  to 0.5.11, with `bun.lock` synchronized (dependency bumps only; no behavior
+  change). `solid-js` stays pinned at 1.9.12, matching the exact peer
+  requirement of `@opentui/solid`.
+
+### Fixed
+
+- The audit report reader no longer drops a complete line at the start of its
+  bounded tail window: when the file exceeds the 64 MiB read cap, the reader
+  peeks at the byte before the window and only strips the first line when it
+  may be partial (no preceding newline). A window that starts at a line
+  boundary now summarizes every line it read.
+- A failed audit directory creation degrades the same way an append failure
+  does: the record is lost, the failure is logged, and the writer never
+  throws. Previously the mkdir rejection propagated to the caller and stuck
+  to the cached promise; the writer now logs, drops the record, and retries
+  the mkdir on the next record.
+
 ## [1.3.2] - 2026-09-12
 
 ### Added

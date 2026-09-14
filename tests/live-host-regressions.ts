@@ -1,6 +1,9 @@
 /** Run manually with `bun tests/live-host-regressions.ts` after building.
  * Uses a fresh OpenCode host and a local deterministic provider to inspect the
- * actual provider request after host tool filtering, without paid inference. */
+ * actual provider request after host tool filtering, without paid inference.
+ * The host binary resolves from OPENCODE_V1_1_18_30 (printed by
+ * `HOST_GENERATION=v1 bun tests/compatibility/install-hosts.ts`) with fallback
+ * to `opencode` on PATH; authentication uses REVIEWER_LIVE_PASSWORD. */
 import { strict as assert } from "node:assert"
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -84,18 +87,37 @@ await writeFile(
 const portReservation = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() })
 const port = portReservation.port
 portReservation.stop(true)
-const host = Bun.spawn(["opencode", "serve", "--hostname", "127.0.0.1", "--port", String(port)], {
+// Resolve the host the same way the compatibility matrix does: a pinned
+// opencode-ai binary via OPENCODE_V1_1_18_30, falling back to PATH. The
+// desktop runtime on PATH serves only the web SPA and cannot run this file.
+const hostBinary = process.env.OPENCODE_V1_1_18_30 ?? "opencode"
+// The pinned host honors a known server password; the client sends it back as
+// Basic auth on every request, including the readiness poll below.
+const hostPassword = process.env.REVIEWER_LIVE_PASSWORD ?? "synthetic-local-host-password"
+const hostHeaders: Record<string, string> =
+  hostPassword === ""
+    ? {}
+    : { Authorization: `Basic ${Buffer.from(`opencode:${hostPassword}`).toString("base64")}` }
+const hostEnv: Record<string, string | undefined> = {
+  ...process.env,
+  // Isolate HOME like the compatibility harness does: the host resolves
+  // user config below the home directory, which must not leak into the run.
+  HOME: join(root, "home"),
+  XDG_CONFIG_HOME: configHome,
+  XDG_DATA_HOME: join(root, "data"),
+  XDG_CACHE_HOME: join(root, "cache"),
+  XDG_STATE_HOME: join(root, "state"),
+  OPENCODE_CONFIG: join(configHome, "opencode", "opencode.json"),
+  OPENCODE_CONFIG_CONTENT: "{}",
+  OPENCODE_SERVER_PASSWORD: hostPassword,
+}
+// A desktop shell may export a profile config dir for the V2 runtime; the
+// pinned host would load that user config instead of the isolated one, so
+// drop the variable and let XDG isolation apply.
+delete hostEnv.OPENCODE_CONFIG_DIR
+const host = Bun.spawn([hostBinary, "serve", "--hostname", "127.0.0.1", "--port", String(port)], {
   cwd: project,
-  env: {
-    ...process.env,
-    XDG_CONFIG_HOME: configHome,
-    XDG_DATA_HOME: join(root, "data"),
-    XDG_CACHE_HOME: join(root, "cache"),
-    XDG_STATE_HOME: join(root, "state"),
-    OPENCODE_CONFIG: join(configHome, "opencode", "opencode.json"),
-    OPENCODE_CONFIG_CONTENT: "{}",
-    OPENCODE_SERVER_PASSWORD: "",
-  },
+  env: hostEnv,
   stdout: "pipe",
   stderr: "pipe",
 })
@@ -105,7 +127,10 @@ try {
   const baseUrl = `http://127.0.0.1:${port}`
   let ready = false
   for (let attempt = 0; attempt < 200; attempt++) {
-    ready = await fetch(`${baseUrl}/global/health`, { signal: AbortSignal.timeout(1000) })
+    ready = await fetch(`${baseUrl}/global/health`, {
+      headers: hostHeaders,
+      signal: AbortSignal.timeout(1000),
+    })
       .then((r) => r.ok)
       .catch(() => false)
     if (ready) break
@@ -114,6 +139,7 @@ try {
   assert(ready, "fresh host did not start")
   const sdk = createOpencodeClient({
     baseUrl,
+    headers: hostHeaders,
     fetch: (req) => fetch(req, { signal: AbortSignal.timeout(45000) }),
   })
   const session = await sdk.session.create({
@@ -164,6 +190,7 @@ try {
     )
   const mcp = (await fetch(
     `${baseUrl}/mcp?directory=${encodeURIComponent(ctx.reviewerDirectoryBase)}`,
+    { headers: hostHeaders },
   ).then((r) => r.json())) as Record<string, { status: string }>
   assert.equal(
     mcp.synthetic?.status,

@@ -63,22 +63,33 @@ bun run check   # typecheck + tests — must pass before any push
 ## Live (end-to-end) testing
 
 `tests/live-harness.ts` runs against a real OpenCode server and model and is
-**not** part of `bun test`. Run it manually only when you have a local server
-and a configured reviewer model:
+**not** part of `bun test`. It speaks the opencode-ai API, so on a machine
+where `opencode` on PATH is the desktop runtime (which serves only the web
+SPA), start a pinned opencode-ai host from the compatibility tooling instead:
 
 ```bash
-opencode serve &   # then point the harness at it
-bun run tests/live-harness.ts http://127.0.0.1:41973 --smoke
+HOST_GENERATION=v1 bun tests/compatibility/install-hosts.ts
+# Note the printed OPENCODE_V1_1_18_30 path, then serve with a known password:
+OPENCODE_SERVER_PASSWORD=synthetic-local-host-password \
+  "$OPENCODE_V1_1_18_30" serve --hostname 127.0.0.1 --port 41973 &
+REVIEWER_LIVE_PASSWORD=synthetic-local-host-password \
+  bun run tests/live-harness.ts http://127.0.0.1:41973 --smoke
 ```
 
-The smoke requires completed tool execution and matching audit decisions;
-provider failures cannot count as successful denials. Set
+The harness reads the server password from `REVIEWER_LIVE_PASSWORD` and sends
+it as Basic auth; when the variable is absent the client behaves exactly as
+before. The smoke requires completed tool execution and matching audit
+decisions; provider failures cannot count as successful denials. Set
 `REVIEWER_LIVE_DIRECTORY` to run against a separate synthetic fixture directory.
 
 After building, `bun tests/live-host-regressions.ts` starts its own fresh
 OpenCode server, a synthetic MCP tool, and a local deterministic provider. It
 checks the actual provider tool list after host filtering and the regression
-cases without paid inference. It complements the live model smoke above.
+cases without paid inference. It complements the live model smoke above. It
+resolves the server binary from `OPENCODE_V1_1_18_30` (printed by the installer
+above) with fallback to `opencode` on PATH, and authenticates with
+`REVIEWER_LIVE_PASSWORD` (default `synthetic-local-host-password`), so no
+manual serve is needed.
 
 The dual-host matrix is in `tests/compatibility`. Set the pinned binary paths
 documented there, then run `python -m pytest tests/compatibility -q`. Each host

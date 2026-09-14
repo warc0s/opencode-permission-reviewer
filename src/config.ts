@@ -272,6 +272,9 @@ export function resolveConfig(options: Record<string, unknown> | undefined): Rev
     variant,
     outputFormat,
     timeoutMs: boundedInteger(source.timeoutMs, DEFAULT_CONFIG.timeoutMs, 5_000, 600_000),
+    ...(source.reviewBudgetMs === undefined
+      ? {}
+      : { reviewBudgetMs: boundedInteger(source.reviewBudgetMs, 180_000, 5_000, 900_000) }),
     maxContextChars: boundedInteger(
       source.maxContextChars,
       DEFAULT_CONFIG.maxContextChars,

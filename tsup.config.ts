@@ -7,6 +7,7 @@ export default defineConfig({
   entry: {
     index: "src/index.ts",
     explain: "src/cli/explain.ts",
+    rpc: "src/ui/rpc.ts",
   },
   format: ["esm"],
   platform: "node",

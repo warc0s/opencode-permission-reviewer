@@ -36,7 +36,12 @@ bun run check   # typecheck + tests — must pass before any push
   (`src/opencode/v1-adapter.ts`, `src/opencode/reply-transport.ts`) reach into
   OpenCode's authenticated SDK transport; changes there must keep the graceful
   "refusing unsafe partial startup" behavior.
-- The reviewer runs **tool-free**; never add tool access to reviewer sessions.
+- The reviewer has no operational tools. V2 exposes only its schema-validated
+  result tool in its isolated location; never add operational or MCP access.
+- Maintain both real-host pytest harnesses under `tests/compatibility`. Their
+  profiles and synthetic model providers must not inherit user configuration
+  or credentials. Pin host versions and integrity, and verify server and TUI
+  loading after a fresh build. See [Migration](./MIGRATION.md).
 - The TUI entry must stay **raw TSX** (see [Build output](#build-output-dist)
   below). Do not reintroduce a prebundled `dist/tui.js`.
 
@@ -74,3 +79,16 @@ After building, `bun tests/live-host-regressions.ts` starts its own fresh
 OpenCode server, a synthetic MCP tool, and a local deterministic provider. It
 checks the actual provider tool list after host filtering and the regression
 cases without paid inference. It complements the live model smoke above.
+
+The dual-host matrix is in `tests/compatibility`. Set the pinned binary paths
+documented there, then run `python -m pytest tests/compatibility -q`. Each host
+uses an isolated home, configuration, provider and audit file; no personal
+OpenCode installation is changed. V1 and V2 have independent pytest modules.
+
+To exercise the distributed artifact, build first and run
+`PACKAGE_MANAGER=npm bun tests/compatibility/install-package.ts` (or `bun` as
+the manager). Set `PLUGIN_PACKAGE_PATH` to the returned `packagePath` before
+running pytest. Both installation modes disable lifecycle scripts. CI runs
+both managers against every pinned host, including real PTY rendering.
+The separate weekly host advisory only reports registry drift and does not
+change the supported-version contract.

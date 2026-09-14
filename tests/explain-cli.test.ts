@@ -1,6 +1,26 @@
 import { describe, expect, test } from "bun:test"
 
 describe("explain CLI", () => {
+  test("native inputs preserve evidence completeness without treating resources as shell commands", async () => {
+    for (const input of [
+      { action: "shell", resources: ["printf *"] },
+      { action: "read", resources: ["file.txt"], input: { path: "file.txt" } },
+    ]) {
+      const proc = Bun.spawn({
+        cmd: ["bun", "run", "src/cli/explain.ts", "--defaults"],
+        cwd: import.meta.dir + "/..",
+        stdin: new TextEncoder().encode(JSON.stringify(input)),
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+      expect(await proc.exited).toBe(0)
+      const result = JSON.parse(await new Response(proc.stdout).text())
+      expect(result.command).toBe("")
+      expect(result.nativeAction).toBe(input.action)
+      expect(result.actionEvidenceComplete).toBe(input.action === "read")
+    }
+  })
+
   test("parses a bash fixture and prints capability + policyTrace", async () => {
     const proc = Bun.spawn({
       cmd: ["bun", "run", "src/cli/explain.ts"],

@@ -1,0 +1,37 @@
+{
+  "session": { "location": "/workspace/fixture", "parent": null },
+  "context": [
+    { "type": "user", "text": "Read-only contract fixture.", "matchesAdmission": true },
+    { "type": "assistant" },
+    { "type": "idle" }
+  ],
+  "fork": {
+    "sourceMatches": true,
+    "normalized": [
+      {
+        "role": "assistant",
+        "synthetic": true,
+        "originMatches": true,
+        "parts": [{ "type": "text", "synthetic": true }]
+      },
+      {
+        "role": "assistant",
+        "synthetic": false,
+        "originMatches": false,
+        "parts": [{ "type": "text", "synthetic": false }]
+      }
+    ]
+  },
+  "formCreated": {
+    "type": "form.created",
+    "fields": [
+      {
+        "key": "scope",
+        "title": "Allowed scope",
+        "type": "string",
+        "options": [{ "value": "read", "label": "Read only" }]
+      }
+    ]
+  },
+  "formReplied": { "type": "form.replied", "answer": { "scope": "read" } }
+}

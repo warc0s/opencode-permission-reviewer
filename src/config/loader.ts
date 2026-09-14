@@ -9,6 +9,7 @@ import {
   DEFAULT_RISK_POLICY,
 } from "../config.ts"
 import type { PolicyRule, ReviewerConfig } from "../types.ts"
+import type { InlineOptionsTrust } from "./sources.ts"
 
 const O_RDONLY = typeof fsConstants.O_RDONLY === "number" ? fsConstants.O_RDONLY : 0
 const O_NOFOLLOW = typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0
@@ -168,6 +169,7 @@ const TRUST_BOUNDARY_KEYS = new Set([
 export function loadResolvedConfig(
   inlineOptions: Record<string, unknown> | undefined,
   directory?: string,
+  inlineTrust: InlineOptionsTrust = "trusted",
 ): ReviewerConfig {
   const globalLayer = readConfigLayer(globalConfigPath())
   const projectLayer: ConfigLayer =
@@ -212,15 +214,22 @@ export function loadResolvedConfig(
   const trusted: Record<string, unknown> = {
     ...DEFAULT_CONFIG,
     ...globalLayer.raw,
-    ...(inlineOptions ?? {}),
+    ...(inlineTrust === "trusted" ? (inlineOptions ?? {}) : {}),
   }
-  const merged = mergeWithTrustBoundary(trusted, projectLayer.raw)
+  let merged = mergeWithTrustBoundary(trusted, projectLayer.raw)
+  if (inlineTrust !== "trusted") {
+    // Unknown-origin options may only contribute boundary-controlled hardening.
+    const restrictions = Object.fromEntries(
+      Object.entries(inlineOptions ?? {}).filter(([key]) => TRUST_BOUNDARY_KEYS.has(key)),
+    )
+    merged = mergeWithTrustBoundary(merged, restrictions)
+  }
   // Inline keeps documented precedence over the project layer for every
   // non-security field (the boundary's own keys are exempt: re-applying inline
   // there could undo project hardening clamped against it).
   const out: Record<string, unknown> = { ...merged }
   for (const [key, value] of Object.entries(inlineOptions ?? {})) {
-    if (!TRUST_BOUNDARY_KEYS.has(key)) out[key] = value
+    if (inlineTrust === "trusted" && !TRUST_BOUNDARY_KEYS.has(key)) out[key] = value
   }
   if (degraded.length > 0) out.configDegraded = degraded
   return resolveConfig(out)

@@ -353,7 +353,7 @@ describe("runtime decisions", () => {
     expect(output.output).toBe("tool should not normally complete")
   })
 
-  test("turns an approved review back into manual if OpenCode cannot accept the reply", async () => {
+  test("shows unknown application if OpenCode cannot acknowledge the reply", async () => {
     const client = new MockClient()
     client.replyError = { message: "request still pending" }
     const harness = runtime(client)
@@ -361,8 +361,8 @@ describe("runtime decisions", () => {
     await harness.runtime.waitForIdle()
     // The terminal "approved" phase is published only after OpenCode accepts
     // the reply, so a rejected reply goes straight from "reviewing" to the
-    // escalated "manual" state without ever claiming approval.
-    expect(client.uiStatuses.map((status) => status.phase)).toEqual(["reviewing", "manual"])
+    // Unknown transport state must not claim approval or a pending human request.
+    expect(client.uiStatuses.map((status) => status.phase)).toEqual(["reviewing", "unknown"])
   })
 
   test("a broken TUI status channel never changes the safety decision", async () => {
@@ -559,6 +559,10 @@ describe("event boundary", () => {
   test("plugin uses OpenCode V1's authenticated raw transport to reply", async () => {
     const client = new MockClient()
     const rawPosts: unknown[] = []
+    let completed!: () => void
+    const completion = new Promise<void>((resolve) => {
+      completed = resolve
+    })
     const input = {
       client: {
         session: client.session,
@@ -566,6 +570,11 @@ describe("event boundary", () => {
         _client: {
           post: async (options: unknown) => {
             rawPosts.push(options)
+            if (
+              rawPosts.filter((post) => (post as { url?: string }).url === "/tui/publish")
+                .length === 2
+            )
+              completed()
             return { data: true }
           },
         },
@@ -575,6 +584,7 @@ describe("event boundary", () => {
     }
     const hooks = await server(input as never, { retainReviewSessions: false, audit: false })
     await hooks.event?.({ event: { type: "permission.asked", properties: request() } as never })
+    await completion
     await hooks.dispose?.()
     expect(
       rawPosts.filter((post) => (post as { url?: string }).url === "/tui/publish"),

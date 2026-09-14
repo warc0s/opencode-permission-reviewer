@@ -1,0 +1,30 @@
+{
+  "v1": {
+    "package": "opencode-ai",
+    "minimum": "1.18.29",
+    "reference": "1.18.30",
+    "integrities": {
+      "1.18.29": "sha512-syIDVwlrYTgTOXzZe9SkInJWethbq6l3SNC762UeXyO0a9V0wGfd+U4yACvppwNBnhIsl0j2QPYYCyLpNaSomg==",
+      "1.18.30": "sha512-oLcOLQE4XzDKy6T5L5d1RdVJvXHXwVlD4hRF5V317JbUQorrl2EyDdGZk5kbgv675J9FXp8usg92MZbEWhh6gQ=="
+    },
+    "sdk": {
+      "package": "@opencode-ai/plugin",
+      "version": "1.18.30",
+      "integrity": "sha512-bXWcA2VD478PXXke1qAYANTq58fCcbgY0GAUqZIFZqPpo48FoG8RH37nNZ78eHtz+ddiKIhFTBZJRaHF3IgFqw=="
+    },
+    "entrypoint": "server",
+    "permission": "permission.asked"
+  },
+  "v2": {
+    "package": "@opencode/cli",
+    "version": "2.0.3",
+    "integrity": "sha512-FC4+2a5kwdKS2o/pIcGCscpSQB7PuhBObwGMfqnx/2XtoaZBMtSq/99nuEdeDNAFvy1qyK6mp2hwvoiMWsiI4w==",
+    "sdk": {
+      "package": "@opencode/plugin",
+      "version": "2.0.3",
+      "integrity": "sha512-4xLLwi9PnUXHtfvsxVe7oVhRl/q8VRIFQS4Lfh3yjClfymIfyfX5/jCSwSbgTf5NgdrNGr20OPcjONZvCTPznA=="
+    },
+    "entrypoint": "setup",
+    "permission": "permission.hook.evaluate"
+  }
+}

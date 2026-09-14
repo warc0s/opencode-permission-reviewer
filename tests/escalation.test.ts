@@ -306,7 +306,7 @@ describe("runtime escalationMode deny", () => {
     // Final outcome is deny; flattened fields keep the ORIGINAL structured
     // decision (not a synthetic high/1.0 deny). reviewerOutcome stays escalate.
     expect(audits[0]).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       outcome: "deny",
       reviewerOutcome: "escalate",
       escalationDisposition: "deny",
@@ -324,7 +324,7 @@ describe("runtime escalationMode deny", () => {
     const audits = (harness.ctx as unknown as { auditRecords: Array<Record<string, unknown>> })
       .auditRecords
     expect(audits[0]).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       outcome: "deny",
       escalationDisposition: "deny",
       decisionSource: "failure-safe",
@@ -343,7 +343,7 @@ describe("runtime escalationMode deny", () => {
     const audits = (harness.ctx as unknown as { auditRecords: Array<Record<string, unknown>> })
       .auditRecords
     expect(audits[0]).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       outcome: "escalate",
       reviewerOutcome: "escalate",
       escalationDisposition: "manual",
@@ -356,7 +356,7 @@ describe("runtime escalationMode deny", () => {
     const audits = (harness.ctx as unknown as { auditRecords: Array<Record<string, unknown>> })
       .auditRecords
     expect(audits[0]).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       outcome: "allow",
       reviewerOutcome: "allow",
     })

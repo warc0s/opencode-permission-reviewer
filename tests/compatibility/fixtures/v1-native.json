@@ -1,0 +1,13 @@
+{
+  "permission": "bash",
+  "contextRoles": ["assistant", "user"],
+  "tool": {
+    "name": "bash",
+    "callID": "call_operation",
+    "input": {
+      "command": "printf COMPATIBILITY_EXECUTED",
+      "description": "Print a synthetic fixture marker"
+    },
+    "status": "completed"
+  }
+}

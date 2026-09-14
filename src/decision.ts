@@ -101,7 +101,12 @@ export function enforceDecision(
 ): ReviewExecutionResult {
   const reviewerOutcome = decision.outcome
 
-  if (decision.risk_level === "critical" && decision.outcome !== "deny") {
+  // Confidence limits automatic approval; a validated denial stays a denial.
+  if (decision.outcome === "deny") {
+    return { kind: "deny", decision, reason: decision.rationale, reviewerOutcome }
+  }
+
+  if (decision.risk_level === "critical") {
     return {
       kind: "escalate",
       decision,
@@ -156,7 +161,7 @@ export function enforceDecision(
     // Schema v2 gate: for medium-or-higher risk, insufficient evidence
     // prevents auto-allow (the reviewer cannot confidently judge).
     if (
-      (risk === "medium" || risk === "high" || risk === "critical") &&
+      (risk === "medium" || risk === "high") &&
       decision.evidence_completeness === "insufficient"
     ) {
       return {
@@ -168,9 +173,6 @@ export function enforceDecision(
     }
 
     return { kind: "allow", decision, reason: decision.rationale, reviewerOutcome }
-  }
-  if (decision.outcome === "deny") {
-    return { kind: "deny", decision, reason: decision.rationale, reviewerOutcome }
   }
   return { kind: "escalate", decision, reason: decision.rationale, reviewerOutcome }
 }

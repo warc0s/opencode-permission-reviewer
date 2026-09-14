@@ -32,9 +32,19 @@ describe("decision parsing and invariants", () => {
     expect(result.kind).toBe("escalate")
   })
 
-  test("low confidence always goes to a human", () => {
+  test("low confidence approval goes to a human", () => {
     const result = enforceDecision(decision("allow", { confidence: 0.69 }), DEFAULT_CONFIG)
     expect(result.kind).toBe("escalate")
+  })
+
+  test("preserves a validated denial below the approval confidence floor", () => {
+    const denied = decision("deny", { confidence: 0.01 })
+    expect(enforceDecision(denied, DEFAULT_CONFIG)).toMatchObject({
+      kind: "deny",
+      decision: denied,
+      reason: denied.rationale,
+      reviewerOutcome: "deny",
+    })
   })
 
   test("preserves valid allow, deny, and escalate outcomes", () => {

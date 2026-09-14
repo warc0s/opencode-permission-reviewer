@@ -18,6 +18,9 @@ const out = join(root, "dist", "tui")
 
 const files = [
   ["src/tui.tsx", "tui.tsx"],
+  ["src/ui/components.tsx", "ui/components.tsx"],
+  ["src/ui/v2.tsx", "ui/v2.tsx"],
+  ["src/ui/rpc.ts", "ui/rpc.ts"],
   ["src/config.ts", "config.ts"],
   ["src/ui-protocol.ts", "ui-protocol.ts"],
   ["src/ui-state.ts", "ui-state.ts"],

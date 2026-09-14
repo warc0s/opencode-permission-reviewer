@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import type { TuiPlugin, TuiPluginModule, TuiPluginApi } from "@opencode-ai/plugin/tui"
+import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import { createSignal, Show } from "solid-js"
 import { DEFAULT_CONFIG, resolveConfig } from "./config.ts"
 // Import the normalizer directly. Going through ./runtime.ts would evaluate the
@@ -8,8 +8,9 @@ import { DEFAULT_CONFIG, resolveConfig } from "./config.ts"
 import { extractPermissionRequest } from "./opencode/event-normalizer.ts"
 import { decodeUiStatus, type ReviewUiStatus } from "./ui-protocol.ts"
 import { ReviewUiState } from "./ui-state.ts"
+import { ReviewOverlay, ReviewResult, SPINNER } from "./ui/components.tsx"
+import { setupTuiV2 } from "./ui/v2.tsx"
 
-const SPINNER = ["◐", "◓", "◑", "◒"] as const
 const REVIEW_MODE = "permission-reviewer"
 
 function routeSessionID(api: TuiPluginApi): string | undefined {
@@ -97,7 +98,6 @@ export const tui: TuiPlugin = async (api, options) => {
   const ticker = setInterval(() => {
     if (active()?.phase === "reviewing") setFrame((value) => (value + 1) % SPINNER.length)
     const expired = state.expire()
-    for (const status of expired) notifyManual(api, status)
     const dismissed = state.dismissResults()
     if (expired.length > 0 || dismissed.length > 0) touch()
   }, 250)
@@ -122,7 +122,9 @@ export const tui: TuiPlugin = async (api, options) => {
         syncMode()
         return (
           <Show when={status?.phase === "reviewing" ? status : undefined} keyed>
-            {(current) => <ReviewOverlay api={api} status={current} frame={frame} />}
+            {(current) => (
+              <ReviewOverlay theme={() => api.theme.current} status={current} frame={frame} />
+            )}
           </Show>
         )
       },
@@ -132,10 +134,16 @@ export const tui: TuiPlugin = async (api, options) => {
         syncMode()
         return (
           <Show
-            when={status?.phase === "approved" || status?.phase === "denied" ? status : undefined}
+            when={
+              status?.phase === "approved" ||
+              status?.phase === "denied" ||
+              status?.phase === "unknown"
+                ? status
+                : undefined
+            }
             keyed
           >
-            {(current) => <ReviewResult api={api} status={current} />}
+            {(current) => <ReviewResult theme={() => api.theme.current} status={current} />}
           </Show>
         )
       },
@@ -143,119 +151,10 @@ export const tui: TuiPlugin = async (api, options) => {
   })
 }
 
-function ReviewOverlay(props: {
-  api: TuiPluginApi
-  status: ReviewUiStatus
-  /** Spinner signal, read inside text children so only those update per tick. */
-  frame: () => number
-}) {
-  const theme = () => props.api.theme.current
-  const elapsed = () => {
-    // Reading the tick signal inside the text child is what re-renders it every
-    // 250ms: Date.now() and status.emittedAt are plain values, so a text that
-    // reads no signal is evaluated once at mount and freezes.
-    props.frame()
-    const elapsedMs = Math.max(0, Date.now() - props.status.emittedAt)
-    return `${(elapsedMs / 1_000).toFixed(1)}s`
-  }
-
-  return (
-    <box
-      position="absolute"
-      left={0}
-      right={0}
-      bottom={0}
-      height="auto"
-      maxHeight={12}
-      overflow="hidden"
-      backgroundColor={theme().backgroundPanel}
-      border={["left"]}
-      borderColor={theme().info}
-      flexDirection="column"
-      onMouseDown={(event) => {
-        event.preventDefault()
-        event.stopPropagation()
-      }}
-      onMouseUp={(event) => {
-        event.preventDefault()
-        event.stopPropagation()
-      }}
-    >
-      <box
-        flexDirection="column"
-        gap={1}
-        paddingTop={1}
-        paddingBottom={1}
-        paddingLeft={2}
-        paddingRight={3}
-      >
-        <box flexDirection="row" gap={1}>
-          <text fg={theme().info}>{SPINNER[props.frame() % SPINNER.length] ?? "◐"}</text>
-          <text fg={theme().text}>Reviewing this permission</text>
-          <box flexGrow={1} />
-          <text fg={theme().textMuted}>{elapsed()}</text>
-        </box>
-        <box flexDirection="row" gap={1} paddingLeft={2}>
-          <text fg={theme().textMuted}>{props.status.permission}</text>
-          <text fg={theme().text} wrapMode="word">
-            {props.status.action}
-          </text>
-          <Show when={props.status.actorName}>
-            <text fg={theme().textMuted}>· actor {props.status.actorName}</text>
-          </Show>
-        </box>
-        <box paddingLeft={2} flexDirection="row" gap={1}>
-          <text fg={theme().textMuted}>
-            {props.status.model} · reasoning {props.status.variant}
-          </text>
-          <box flexGrow={1} />
-          <text fg={theme().textMuted}>No action needed</text>
-        </box>
-      </box>
-    </box>
-  )
-}
-
-function ReviewResult(props: { api: TuiPluginApi; status: ReviewUiStatus }) {
-  const theme = () => props.api.theme.current
-  const appearance = () => {
-    if (props.status.phase === "approved") {
-      return { color: theme().success, icon: "✓", title: "Review approved" }
-    }
-    // Fail-closed escalate→deny is distinct from an explicit reviewer/policy deny.
-    if (props.status.escalationDisposition === "deny") {
-      return { color: theme().error, icon: "✕", title: "Review blocked (fail-closed)" }
-    }
-    return { color: theme().error, icon: "✕", title: "Review blocked" }
-  }
-  const singleLine = (value: string) => value.replace(/[\r\n\t]+/g, " ")
-
-  return (
-    <box
-      height={props.status.reason ? 2 : 1}
-      flexShrink={0}
-      overflow="hidden"
-      backgroundColor={theme().backgroundPanel}
-      flexDirection="column"
-      paddingLeft={1}
-      paddingRight={1}
-    >
-      <text fg={appearance().color} wrapMode="none" truncate>
-        {appearance().icon} {appearance().title} · {props.status.permission} ·{" "}
-        {singleLine(props.status.action)}
-      </text>
-      <Show when={props.status.reason}>
-        <text fg={theme().textMuted} wrapMode="none" truncate>
-          {singleLine(props.status.reason ?? "")}
-        </text>
-      </Show>
-    </box>
-  )
-}
-
-const module: TuiPluginModule = {
+const module = {
   id: "opencode-permission-reviewer",
   tui,
+  setup: setupTuiV2,
 }
 
 export default module

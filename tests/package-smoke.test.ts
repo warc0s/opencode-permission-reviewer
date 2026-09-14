@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test"
 import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
 import { tmpdir } from "node:os"
 
 const CWD = import.meta.dir + "/.."
@@ -20,6 +20,11 @@ let installDir: string | undefined
 
 function packOnce(): string {
   if (tgzPath !== undefined) return tgzPath
+  if (process.env.REVIEWER_TEST_TARBALL) {
+    tgzPath = resolve(process.env.REVIEWER_TEST_TARBALL)
+    expect(existsSync(tgzPath)).toBe(true)
+    return tgzPath
+  }
   tmpDir = mkdtempSync(join(tmpdir(), "reviewer-pkg-"))
   const pack = Bun.spawnSync({
     cmd: ["npm", "pack", "--pack-destination", tmpDir],
@@ -74,6 +79,11 @@ describe("npm pack ship set", () => {
       "SECURITY.md",
       "dist/index.js",
       "dist/index.d.ts",
+      "server.js",
+      "tui.tsx",
+      "rpc.js",
+      "dist/rpc.js",
+      "MIGRATION.md",
       "dist/explain.js",
       // TUI ships as raw TSX so the host compiles it with its Solid pipeline.
       "dist/tui/tui.tsx",
@@ -172,9 +182,18 @@ describe("npm install dedupe shape", () => {
     const pluginDir = join(installDir, "node_modules", "opencode-permission-reviewer")
     expect(existsSync(pluginDir)).toBe(true)
 
-    // A nested node_modules inside the installed plugin means arborist had to
-    // isolate some conflicting version — exactly the silent-render failure mode.
-    expect(existsSync(join(pluginDir, "node_modules"))).toBe(false)
+    // Host SDK dependencies may be nested; only the rendering runtime must be shared.
+    const imported = Bun.spawnSync({
+      cmd: [
+        "bun",
+        "-e",
+        'const plugin = (await import("opencode-permission-reviewer")).default; if (typeof plugin.server !== "function" || typeof plugin.setup !== "function") process.exit(1)',
+      ],
+      cwd: installDir,
+      stdout: "ignore",
+      stderr: "pipe",
+    })
+    expect(imported.exitCode).toBe(0)
 
     // Tree-wide scan: exactly one solid-js package directory anywhere.
     const solidDirs: string[] = []

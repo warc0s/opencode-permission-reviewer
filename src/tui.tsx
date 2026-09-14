@@ -7,6 +7,7 @@ import { DEFAULT_CONFIG, resolveConfig } from "./config.ts"
 // the TUI process for a single unused re-export.
 import { extractPermissionRequest } from "./opencode/event-normalizer.ts"
 import { decodeUiStatus, type ReviewUiStatus } from "./ui-protocol.ts"
+import { reviewBudgetMs } from "./core/review-attempt.ts"
 import { ReviewUiState } from "./ui-state.ts"
 import { ReviewOverlay, ReviewResult, SPINNER } from "./ui/components.tsx"
 import { setupTuiV2 } from "./ui/v2.tsx"
@@ -40,7 +41,7 @@ export const tui: TuiPlugin = async (api, options) => {
   const state = new ReviewUiState({
     model: config.model,
     variant: config.variant,
-    timeoutMs: config.timeoutMs,
+    timeoutMs: reviewBudgetMs(config),
   })
 
   // Signal bumps whenever the UI state changes. Both slot factories read it

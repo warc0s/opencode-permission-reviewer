@@ -83,6 +83,18 @@ describe("runtime decisions", () => {
     expect(client.uiStatuses.map((status) => status.phase)).toEqual(["reviewing", "denied"])
   })
 
+  test("published reviewing status carries the derived review budget as its timeout", async () => {
+    const harness = runtime(new MockClient(), { timeoutMs: 30_000 })
+    await harness.runtime.process(request())
+    expect(harness.client.uiStatuses[0]?.timeoutMs).toBe(120_000)
+  })
+
+  test("published reviewing status carries an explicit reviewBudgetMs as its timeout", async () => {
+    const harness = runtime(new MockClient(), { timeoutMs: 30_000, reviewBudgetMs: 90_000 })
+    await harness.runtime.process(request())
+    expect(harness.client.uiStatuses[0]?.timeoutMs).toBe(90_000)
+  })
+
   test("persists a sanitized decision audit with SSH summaries", async () => {
     const harness = runtime()
     const result = await harness.runtime.process(

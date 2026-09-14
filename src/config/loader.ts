@@ -199,12 +199,77 @@ export function loadResolvedConfig(
         `permission-reviewer: ${invalidRules} policy rule(s) in the global config are invalid and were dropped; automatic approval stays disabled until they are fixed`,
       )
     }
+    // A mistyped mode silently falls back to the less restrictive default in
+    // resolveConfig, so it gets the same fail-closed treatment as a dropped
+    // rule: visible degradation instead of a quiet downgrade.
+    const globalEnforcement = globalLayer.raw.enforcementMode
+    if (
+      globalEnforcement !== undefined &&
+      globalEnforcement !== "enforce" &&
+      globalEnforcement !== "observe"
+    ) {
+      degraded.push(
+        `global config enforcementMode ${JSON.stringify(globalEnforcement)} is invalid and was ignored`,
+      )
+      console.warn(
+        `permission-reviewer: global config enforcementMode ${JSON.stringify(globalEnforcement)} is invalid and was ignored; automatic approval stays disabled until it is fixed`,
+      )
+    }
+    const globalEscalation = globalLayer.raw.escalationMode
+    if (
+      globalEscalation !== undefined &&
+      globalEscalation !== "manual" &&
+      globalEscalation !== "deny"
+    ) {
+      degraded.push(
+        `global config escalationMode ${JSON.stringify(globalEscalation)} is invalid and was ignored`,
+      )
+      console.warn(
+        `permission-reviewer: global config escalationMode ${JSON.stringify(globalEscalation)} is invalid and was ignored; automatic approval stays disabled until it is fixed`,
+      )
+    }
   }
 
   const invalidInlineRules = countInvalidPolicyRules(inlineOptions?.policyRules)
   if (invalidInlineRules > 0) {
     degraded.push(
       `${invalidInlineRules} policy rule(s) from inline config were dropped by validation`,
+    )
+  }
+
+  // Same visibility for trusted inline modes (no console.warn, matching the
+  // inline policyRules treatment above). resolveConfig still clamps the value
+  // to the safe default; this only records that the trusted input was lost.
+  if (inlineTrust === "trusted" && inlineOptions !== undefined) {
+    const inlineEnforcement = inlineOptions.enforcementMode
+    if (
+      inlineEnforcement !== undefined &&
+      inlineEnforcement !== "enforce" &&
+      inlineEnforcement !== "observe"
+    ) {
+      degraded.push(
+        `inline config enforcementMode ${JSON.stringify(inlineEnforcement)} is invalid and was ignored`,
+      )
+    }
+    const inlineEscalation = inlineOptions.escalationMode
+    if (
+      inlineEscalation !== undefined &&
+      inlineEscalation !== "manual" &&
+      inlineEscalation !== "deny"
+    ) {
+      degraded.push(
+        `inline config escalationMode ${JSON.stringify(inlineEscalation)} is invalid and was ignored`,
+      )
+    }
+  }
+
+  // Dropped project rules are warned about but never degrade the config:
+  // configDegraded describes trusted sources only, and project rules cannot
+  // weaken trusted restrictions anyway.
+  const invalidProjectRules = countInvalidPolicyRules(projectLayer.raw.policyRules)
+  if (invalidProjectRules > 0) {
+    console.warn(
+      `permission-reviewer: ${invalidProjectRules} policy rule(s) in the project config are invalid and were dropped`,
     )
   }
 

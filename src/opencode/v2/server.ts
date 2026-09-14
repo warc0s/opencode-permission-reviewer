@@ -4,7 +4,7 @@ import { loadResolvedConfig } from "../../config/loader.ts"
 import { createAuditWriter } from "../../audit.ts"
 import { applyEscalationDisposition } from "../../escalation.ts"
 import { assembleEvidence, defaultEvidenceProviders } from "../../context/evidence-assembler.ts"
-import { ReviewAttempt } from "../../core/review-attempt.ts"
+import { ReviewAttempt, reviewBudgetMs } from "../../core/review-attempt.ts"
 import { evaluateReview } from "../../core/review-engine.ts"
 import { createUiStatus, type ReviewUiStatus } from "../../ui-protocol.ts"
 import { ReviewerRpc } from "../../ui/rpc.ts"
@@ -178,7 +178,7 @@ export async function setupWithServices(
         )
       return
     }
-    const budget = config.reviewBudgetMs ?? config.timeoutMs * 2 + 60_000
+    const budget = reviewBudgetMs(config)
     const attempt = new ReviewAttempt(generation, budget)
     const pending: { attempt: ReviewAttempt; sessionID: string; work?: Promise<void> } = {
       attempt,

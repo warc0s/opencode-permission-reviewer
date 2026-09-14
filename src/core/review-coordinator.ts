@@ -11,7 +11,7 @@ import type {
 import { DECISION_SCHEMA_VERSION } from "../decision.ts"
 import { REVIEWER_PROMPT_VERSION } from "../policy.ts"
 import { evaluateReview } from "./review-engine.ts"
-import { ReviewAttempt } from "./review-attempt.ts"
+import { ReviewAttempt, reviewBudgetMs } from "./review-attempt.ts"
 import { ReviewLimiter } from "./review-limiter.ts"
 import { createV1ContextReader } from "../opencode/v1/context-reader.ts"
 import { V1ReviewerBackend } from "../opencode/v1/reviewer-backend.ts"
@@ -122,10 +122,7 @@ export class ReviewCoordinator {
 
   async process(request: PermissionRequest): Promise<ReviewExecutionResult> {
     const startedAt = Date.now()
-    const attempt = new ReviewAttempt(
-      this.generation,
-      this.config.reviewBudgetMs ?? this.config.timeoutMs * 2 + 60_000,
-    )
+    const attempt = new ReviewAttempt(this.generation, reviewBudgetMs(this.config))
     this.attempts.set(request.id, attempt)
     let release: (() => void) | undefined
     try {
@@ -533,7 +530,7 @@ export class ReviewCoordinator {
     const status = createUiStatus(request, phase, {
       model: this.config.model,
       variant: this.config.variant,
-      timeoutMs: this.config.timeoutMs,
+      timeoutMs: reviewBudgetMs(this.config),
       ...(reason === undefined ? {} : { reason }),
       ...(decision === undefined ? {} : { decision }),
       ...(escalationDisposition === undefined ? {} : { escalationDisposition }),

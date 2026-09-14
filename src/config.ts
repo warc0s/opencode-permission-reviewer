@@ -1,5 +1,6 @@
 import type {
   ActorProfile,
+  CapabilityActionClass,
   EscalationMode,
   PolicyCondition,
   PolicyRule,
@@ -69,6 +70,30 @@ const ACTOR_PROFILES: ReadonlySet<ActorProfile> = new Set([
   "reviewer",
   "unknown",
 ])
+
+/** Every action class the capability analyzer can produce. The `satisfies`
+ *  clause keeps this list in sync with the union type: adding a member to
+ *  `CapabilityActionClass` without listing it here is a compile error. */
+const ACTION_CLASS_MEMBERS = {
+  "read-only": true,
+  "workspace-write": true,
+  "temporary-write": true,
+  "external-write": true,
+  destruction: true,
+  "code-execution": true,
+  "package-management": true,
+  "git-mutation": true,
+  network: true,
+  "remote-operation": true,
+  "service-management": true,
+  persistence: true,
+  "privilege-escalation": true,
+  unknown: true,
+} satisfies Record<CapabilityActionClass, true>
+
+const VALID_ACTION_CLASS: ReadonlySet<string> = new Set(Object.keys(ACTION_CLASS_MEMBERS))
+
+const VALID_REPOSITORY_TRUST: ReadonlySet<string> = new Set(["trusted", "untrusted", "unknown"])
 
 /** Parse a trusted name→profile mapping. Invalid entries are dropped. */
 function resolveActorProfiles(value: unknown): Record<string, ActorProfile> {
@@ -214,16 +239,23 @@ function validateCondition(value: Record<string, unknown>): PolicyCondition | nu
     return { always: true }
   }
   const out: Record<string, unknown> = {}
+  // List conditions are matched with `includes()` at match time, so a member
+  // outside the closed set (usually a typo) would never match and would
+  // silently disable the rule. Rejecting it drops the rule through the normal
+  // path, which degrades trusted configs fail-closed instead of losing a
+  // restriction quietly. Empty lists never match either, so they are rejected
+  // for the same reason.
   if (value.actionClass !== undefined) {
-    if (!isStringArray(value.actionClass)) return null
+    if (!isClosedSetMemberArray(value.actionClass, VALID_ACTION_CLASS)) return null
     out.actionClass = value.actionClass
   }
   if (value.actorProfile !== undefined) {
-    if (!isStringArray(value.actorProfile)) return null
+    if (!isClosedSetMemberArray(value.actorProfile, ACTOR_PROFILES as ReadonlySet<string>))
+      return null
     out.actorProfile = value.actorProfile
   }
   if (value.repositoryTrust !== undefined) {
-    if (!isStringArray(value.repositoryTrust)) return null
+    if (!isClosedSetMemberArray(value.repositoryTrust, VALID_REPOSITORY_TRUST)) return null
     out.repositoryTrust = value.repositoryTrust
   }
   for (const flag of CONDITION_FLAG_KEYS) {
@@ -245,6 +277,15 @@ function validateCondition(value: Record<string, unknown>): PolicyCondition | nu
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((v) => typeof v === "string")
+}
+
+/** A non-empty string array whose members all belong to the closed set. */
+function isClosedSetMemberArray(value: unknown, valid: ReadonlySet<string>): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((v) => typeof v === "string" && valid.has(v))
+  )
 }
 
 export function resolveConfig(options: Record<string, unknown> | undefined): ReviewerConfig {

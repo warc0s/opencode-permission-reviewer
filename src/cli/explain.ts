@@ -247,7 +247,12 @@ async function runDoctor(argv: string[]): Promise<number> {
   console.error(`  global:     ${fmtSource(sources.global)}`)
   console.error(`  project:    ${fmtSource(sources.project)}`)
   console.error(`  model:      ${report.config.model}`)
-  console.error(`  mode:       ${report.config.enforcementMode}`)
+  // The mode gates declarative rules only; the reviewer still auto-allows or denies.
+  const modeNote =
+    report.config.enforcementMode === "observe"
+      ? "declarative rules audited only; reviewer auto-allow/deny remains active"
+      : "declarative rules enforced; reviewer decisions unchanged"
+  console.error(`  mode:       ${report.config.enforcementMode} (${modeNote})`)
   console.error(`  trust:      ${report.config.repositoryTrust}`)
   console.error(
     `  rules:      ${report.config.policyRuleCount} (effectivePolicyHash: ${effectiveHash})`,

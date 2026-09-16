@@ -10,13 +10,19 @@ import { requestOpenCodeV1 } from "../lib/opencode-v1.mjs"
 const binary = process.env.OPENCODE_V1_BIN
 assert(binary, "Set OPENCODE_V1_BIN to an installed OpenCode V1 executable.")
 const hostPassword = "synthetic-local-password"
+const parallel = process.argv.includes("--parallel")
 process.env.PRB_TEST_HOST_PASSWORD = hostPassword
 const root = await mkdtemp(join(tmpdir(), "prb-live-host-"))
 const providerCalls = []
+let activeProviderCalls = 0
+let peakProviderCalls = 0
 const provider = createServer(async (request, response) => {
   const chunks = []
   for await (const chunk of request) chunks.push(chunk)
   providerCalls.push(JSON.parse(Buffer.concat(chunks).toString("utf8")))
+  activeProviderCalls++
+  peakProviderCalls = Math.max(peakProviderCalls, activeProviderCalls)
+  await new Promise((resolve) => setTimeout(resolve, 100))
   const decision = {
     version: 2,
     outcome: "deny",
@@ -39,6 +45,7 @@ const provider = createServer(async (request, response) => {
   response.end(
     `data: ${event({ content: JSON.stringify(decision) }, null)}\n\ndata: ${event({}, "stop")}\n\ndata: [DONE]\n\n`,
   )
+  activeProviderCalls--
 })
 let host
 try {
@@ -107,22 +114,29 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 100))
   }
   assert(ready, "Isolated OpenCode V1 host did not start.")
-  const response = await requestOpenCodeV1(
-    {
-      id: "synthetic-low",
-      model: "synthetic/reviewer",
-      endpoint: baseUrl,
-      transport: "opencode-v1",
-      hostPasswordEnv: "PRB_TEST_HOST_PASSWORD",
-      variant: "low",
-      format: "text",
-    },
-    { system: "SYSTEM TEST", user: "BENCHMARK EVIDENCE" },
-    { timeoutMs: 45000 },
+  const responses = await Promise.all(
+    Array.from({ length: parallel ? 2 : 1 }, () =>
+      requestOpenCodeV1(
+        {
+          id: "synthetic-low",
+          model: "synthetic/reviewer",
+          endpoint: baseUrl,
+          transport: "opencode-v1",
+          hostPasswordEnv: "PRB_TEST_HOST_PASSWORD",
+          variant: "low",
+          format: "text",
+        },
+        { system: "SYSTEM TEST", user: "BENCHMARK EVIDENCE" },
+        { timeoutMs: 45000 },
+      ),
+    ),
   )
-  assert(response.ok, response.error)
-  assert.equal(JSON.parse(response.extracted.text).outcome, "deny")
-  assert.equal(providerCalls.length, 1)
+  for (const response of responses) {
+    assert(response.ok, response.error)
+    assert.equal(JSON.parse(response.extracted.text).outcome, "deny")
+  }
+  assert.equal(providerCalls.length, parallel ? 2 : 1)
+  if (parallel) assert.equal(peakProviderCalls, 2)
   const request = JSON.stringify(providerCalls[0])
   assert(request.includes("SYSTEM TEST"))
   assert(request.includes("BENCHMARK EVIDENCE"))
@@ -133,6 +147,7 @@ try {
       host: "opencode-v1",
       variant: "low",
       providerCalls: providerCalls.length,
+      peakProviderCalls,
       operationalTools: providerCalls[0].tools?.length ?? 0,
     }),
   )

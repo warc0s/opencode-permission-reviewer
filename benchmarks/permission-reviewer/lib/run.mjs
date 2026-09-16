@@ -134,7 +134,7 @@ export async function runBenchmark({
   assert(new Set(safeModels.map((m) => m.id)).size === safeModels.length, "Duplicate model id.")
   assert(safeModels.length > 0, "No models configured.")
   if (safeModels.some((model) => model.transport === "opencode-v1"))
-    assert(cfg.concurrency === 1, "OpenCode subscription runs require --concurrency 1.")
+    assert(cfg.concurrency <= 2, "OpenCode subscription runs permit at most two workers.")
   for (const m of safeModels)
     if (m.apiKeyEnv)
       assert(process.env[m.apiKeyEnv], `Missing credential environment variable ${m.apiKeyEnv}`)

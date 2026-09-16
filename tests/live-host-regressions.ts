@@ -1,9 +1,9 @@
 /** Run manually with `bun tests/live-host-regressions.ts` after building.
  * Uses a fresh OpenCode host and a local deterministic provider to inspect the
  * actual provider request after host tool filtering, without paid inference.
- * The host binary resolves from OPENCODE_V1_1_18_30 (printed by
- * `HOST_GENERATION=v1 bun tests/compatibility/install-hosts.ts`) with fallback
- * to `opencode` on PATH; authentication uses REVIEWER_LIVE_PASSWORD. */
+ * The host binary resolves from the pinned V1 host path printed by the
+ * compatibility installer, with fallback to `opencode` on PATH;
+ * authentication uses REVIEWER_LIVE_PASSWORD. */
 import { strict as assert } from "node:assert"
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -88,9 +88,9 @@ const portReservation = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () =>
 const port = portReservation.port
 portReservation.stop(true)
 // Resolve the host the same way the compatibility matrix does: a pinned
-// opencode-ai binary via OPENCODE_V1_1_18_30, falling back to PATH. The
+// opencode-ai binary, falling back to PATH. The
 // desktop runtime on PATH serves only the web SPA and cannot run this file.
-const hostBinary = process.env.OPENCODE_V1_1_18_30 ?? "opencode"
+const hostBinary = process.env.OPENCODE_V1_1_18_31 ?? "opencode"
 // The pinned host honors a known server password; the client sends it back as
 // Basic auth on every request, including the readiness poll below.
 const hostPassword = process.env.REVIEWER_LIVE_PASSWORD ?? "synthetic-local-host-password"

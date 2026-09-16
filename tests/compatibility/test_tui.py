@@ -62,7 +62,7 @@ def terminal(arguments, env):
         reader.join(timeout=1)
         os.close(master)
 
-@pytest.mark.parametrize("generation,version", [("v1", "1.18.29"), ("v1", "1.18.30"), ("v2", "2.0.3")])
+@pytest.mark.parametrize("generation,version", [("v1", "1.18.29"), ("v1", "1.18.30"), ("v1", "1.18.31"), ("v2", "2.0.3")])
 def test_tui_renders_review_state(launch_host, activate_host, model_server, generation, version):
     binary = os.environ[f"OPENCODE_{generation.upper()}_{version.replace('.', '_')}"]
     package = os.environ.get("PLUGIN_PACKAGE_PATH", str(Path(__file__).resolve().parents[2]))

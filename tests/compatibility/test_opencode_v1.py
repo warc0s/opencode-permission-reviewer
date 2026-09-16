@@ -11,7 +11,7 @@ from test_v2_reviewer import model_server  # noqa: F401, shared synthetic HTTP p
 import pytest
 
 
-@pytest.mark.parametrize("version", ["1.18.29", "1.18.30"])
+@pytest.mark.parametrize("version", ["1.18.29", "1.18.30", "1.18.31"])
 def test_v1_isolated_server(launch_host, activate_host, probe_package, version):
     key = "OPENCODE_V1_" + version.replace(".", "_")
     binary = os.environ.get(key)
@@ -22,7 +22,7 @@ def test_v1_isolated_server(launch_host, activate_host, probe_package, version):
     assert (host["project"] / "host-probe.txt").read_text() == "server:v1\n"
 
 
-@pytest.mark.parametrize("version", ["1.18.29", "1.18.30"])
+@pytest.mark.parametrize("version", ["1.18.29", "1.18.30", "1.18.31"])
 @pytest.mark.parametrize("outcome", ["allow", "deny", "brake"])
 def test_v1_reviewer_applies_decision(launch_host, version, model_server, outcome, tmp_path):
     model_server["decision"]["outcome"] = "allow" if outcome == "brake" else outcome

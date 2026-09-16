@@ -41,6 +41,24 @@ jobs:
           path: coverage/lcov.info
           if-no-files-found: error
 
+  benchmark:
+    name: benchmark
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.5"
+      - run: bun install --frozen-lockfile
+      - working-directory: benchmarks/permission-reviewer
+        run: |
+          node cli.mjs validate
+          node --test tests/*.test.mjs
+          bun tests/plugin-parity.mjs --repo ../..
+
   hosts:
     name: hosts (${{ matrix.host }}, ${{ matrix.package-manager }})
     runs-on: ubuntu-latest
@@ -90,7 +108,7 @@ jobs:
   ci:
     name: ci
     if: always()
-    needs: [check, coverage, hosts]
+    needs: [check, coverage, hosts, benchmark]
     runs-on: ubuntu-latest
     steps:
       - name: All CI checks green
@@ -98,3 +116,4 @@ jobs:
           [ "${{ needs.check.result }}" = "success" ] || { echo "check failed: ${{ needs.check.result }}"; exit 1; }
           [ "${{ needs.coverage.result }}" = "success" ] || { echo "coverage failed: ${{ needs.coverage.result }}"; exit 1; }
           [ "${{ needs.hosts.result }}" = "success" ] || { echo "hosts failed: ${{ needs.hosts.result }}"; exit 1; }
+          [ "${{ needs.benchmark.result }}" = "success" ] || { echo "benchmark failed: ${{ needs.benchmark.result }}"; exit 1; }

@@ -1,0 +1,21 @@
+{
+  "models": [
+    {
+      "id": "candidate-a-text",
+      "model": "REPLACE_WITH_EXACT_MODEL_ID",
+      "endpoint": "https://api.your-provider.invalid/v1/chat/completions",
+      "apiKeyEnv": "BENCH_API_KEY",
+      "format": "text",
+      "parameters": { "temperature": 0, "max_tokens": 1600 },
+      "notes": "Replace provider and model. Remove unsupported parameters rather than silently changing format."
+    },
+    {
+      "id": "candidate-b-text",
+      "model": "REPLACE_WITH_ANOTHER_MODEL_ID",
+      "endpoint": "https://api.your-provider.invalid/v1/chat/completions",
+      "apiKeyEnv": "BENCH_API_KEY",
+      "format": "text",
+      "parameters": { "temperature": 0, "max_tokens": 1600 }
+    }
+  ]
+}

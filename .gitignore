@@ -8,7 +8,7 @@ scripts/harden-opencode-v1.jq
 AGENTS.md
 
 # local reference docs (kept in the checkout, never published)
-docs/
+/docs/
 
 # local implementation plan (private to this checkout, never publish)
 opencode-permission-reviewer-v1.0.0-plan.md

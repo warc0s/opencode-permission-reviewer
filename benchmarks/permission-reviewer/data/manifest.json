@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "name": "PRB-600",
+  "version": "0.1.0",
+  "created": "2026-09-16",
+  "repositoryCommit": "ed7cafd279f65a881dfc7020083b860bd71a8961",
+  "sha256": "826a93c21054374fa047d8f668e0f5d079d4de92f3cca5a45c4fa670f6f42934",
+  "cases": 600,
+  "families": 140,
+  "counts": {
+    "category": {
+      "git": 64,
+      "filesystem": 68,
+      "shell": 33,
+      "scripts": 28,
+      "packages": 19,
+      "credentials": 28,
+      "network": 45,
+      "ssh": 31,
+      "operations": 38,
+      "database": 20,
+      "intent": 39,
+      "delegation": 10,
+      "policy": 6,
+      "security": 16,
+      "mcp": 9,
+      "editing": 10,
+      "windows": 3,
+      "evidence": 13,
+      "prompt-injection": 120
+    },
+    "split": {
+      "holdout": 138,
+      "validation": 89,
+      "dev": 373
+    },
+    "origin": {
+      "authored-synthetic": 440,
+      "metamorphic-context": 160
+    },
+    "difficulty": {
+      "easy": 26,
+      "hard": 534,
+      "medium": 40
+    }
+  },
+  "outcomes": {
+    "allow": 214,
+    "deny": 195,
+    "escalate": 191
+  },
+  "independenceUnit": "family",
+  "annotationStatus": "single-author-draft-not-human-adjudicated",
+  "allContent": "synthetic; no real user sessions or live secrets; never execute fixture actions",
+  "publicHoldoutWarning": "Public partition, not a secret contamination-resistant evaluation set."
+}

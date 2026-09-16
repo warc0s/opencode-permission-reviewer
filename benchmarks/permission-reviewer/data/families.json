@@ -1,0 +1,622 @@
+[
+  {
+    "family": "semantic/commit-index",
+    "category": "git"
+  },
+  {
+    "family": "semantic/push-destination",
+    "category": "git"
+  },
+  {
+    "family": "semantic/force-lease",
+    "category": "git"
+  },
+  {
+    "family": "semantic/reset-worktree",
+    "category": "git"
+  },
+  {
+    "family": "semantic/git-clean",
+    "category": "git"
+  },
+  {
+    "family": "semantic/git-hook",
+    "category": "git"
+  },
+  {
+    "family": "semantic/git-diff-sideeffects",
+    "category": "git"
+  },
+  {
+    "family": "semantic/git-submodule",
+    "category": "git"
+  },
+  {
+    "family": "semantic/git-tag",
+    "category": "git"
+  },
+  {
+    "family": "semantic/git-stash",
+    "category": "git"
+  },
+  {
+    "family": "semantic/rm-scope",
+    "category": "filesystem"
+  },
+  {
+    "family": "semantic/symlink-target",
+    "category": "filesystem"
+  },
+  {
+    "family": "semantic/path-prefix",
+    "category": "filesystem"
+  },
+  {
+    "family": "semantic/external-read",
+    "category": "filesystem"
+  },
+  {
+    "family": "semantic/glob-boundary",
+    "category": "filesystem"
+  },
+  {
+    "family": "semantic/mv-overwrite",
+    "category": "filesystem"
+  },
+  {
+    "family": "semantic/chmod",
+    "category": "filesystem"
+  },
+  {
+    "family": "semantic/archive-create",
+    "category": "filesystem"
+  },
+  {
+    "family": "semantic/archive-extract",
+    "category": "filesystem"
+  },
+  {
+    "family": "semantic/temp-clean",
+    "category": "filesystem"
+  },
+  {
+    "family": "semantic/quoted-metacharacters",
+    "category": "shell"
+  },
+  {
+    "family": "semantic/compound-tail",
+    "category": "shell"
+  },
+  {
+    "family": "semantic/heredoc-literal",
+    "category": "shell"
+  },
+  {
+    "family": "semantic/script-inspected",
+    "category": "scripts"
+  },
+  {
+    "family": "semantic/script-import",
+    "category": "scripts"
+  },
+  {
+    "family": "semantic/shell-source",
+    "category": "scripts"
+  },
+  {
+    "family": "semantic/package-lifecycle",
+    "category": "packages"
+  },
+  {
+    "family": "semantic/npx-resolution",
+    "category": "packages"
+  },
+  {
+    "family": "semantic/test-runner",
+    "category": "scripts"
+  },
+  {
+    "family": "semantic/dynamic-exec",
+    "category": "shell"
+  },
+  {
+    "family": "semantic/native-auth",
+    "category": "credentials"
+  },
+  {
+    "family": "semantic/public-vs-private-upload",
+    "category": "network"
+  },
+  {
+    "family": "semantic/query-exfil",
+    "category": "network"
+  },
+  {
+    "family": "semantic/filter-location",
+    "category": "ssh"
+  },
+  {
+    "family": "semantic/redirect-destination",
+    "category": "network"
+  },
+  {
+    "family": "semantic/loopback-bind",
+    "category": "network"
+  },
+  {
+    "family": "semantic/dns-payload",
+    "category": "network"
+  },
+  {
+    "family": "semantic/secret-metadata",
+    "category": "credentials"
+  },
+  {
+    "family": "semantic/env-example",
+    "category": "credentials"
+  },
+  {
+    "family": "semantic/redaction-not-safety",
+    "category": "credentials"
+  },
+  {
+    "family": "semantic/ssh-diagnostic",
+    "category": "ssh"
+  },
+  {
+    "family": "semantic/ssh-stdin",
+    "category": "ssh"
+  },
+  {
+    "family": "semantic/ssh-hostkey",
+    "category": "ssh"
+  },
+  {
+    "family": "semantic/service-restart",
+    "category": "operations"
+  },
+  {
+    "family": "semantic/kube-context",
+    "category": "operations"
+  },
+  {
+    "family": "semantic/docker-bind",
+    "category": "operations"
+  },
+  {
+    "family": "semantic/database-target",
+    "category": "database"
+  },
+  {
+    "family": "semantic/sql-readonly",
+    "category": "database"
+  },
+  {
+    "family": "semantic/terraform",
+    "category": "operations"
+  },
+  {
+    "family": "semantic/cloud-bucket",
+    "category": "operations"
+  },
+  {
+    "family": "semantic/purpose-vs-user",
+    "category": "intent"
+  },
+  {
+    "family": "semantic/revoked-consent",
+    "category": "intent"
+  },
+  {
+    "family": "semantic/delegated-scope",
+    "category": "delegation"
+  },
+  {
+    "family": "semantic/agent-name",
+    "category": "delegation"
+  },
+  {
+    "family": "semantic/ask-scoping",
+    "category": "intent"
+  },
+  {
+    "family": "semantic/synthetic-control",
+    "category": "intent"
+  },
+  {
+    "family": "semantic/tenant-policy",
+    "category": "policy"
+  },
+  {
+    "family": "semantic/repo-policy-spoof",
+    "category": "policy"
+  },
+  {
+    "family": "semantic/scope-after-success",
+    "category": "intent"
+  },
+  {
+    "family": "semantic/mixed-language-intent",
+    "category": "intent"
+  },
+  {
+    "family": "semantic/tls-weakening",
+    "category": "security"
+  },
+  {
+    "family": "semantic/firewall",
+    "category": "security"
+  },
+  {
+    "family": "semantic/scheduled-persistence",
+    "category": "security"
+  },
+  {
+    "family": "semantic/permission-wildcard",
+    "category": "security"
+  },
+  {
+    "family": "semantic/http-get-effects",
+    "category": "network"
+  },
+  {
+    "family": "semantic/mcp-read-write",
+    "category": "mcp"
+  },
+  {
+    "family": "semantic/mcp-email",
+    "category": "mcp"
+  },
+  {
+    "family": "semantic/patch-target",
+    "category": "editing"
+  },
+  {
+    "family": "semantic/write-script-vs-run",
+    "category": "editing"
+  },
+  {
+    "family": "semantic/package-publish",
+    "category": "packages"
+  },
+  {
+    "family": "semantic/cwd-changes",
+    "category": "shell"
+  },
+  {
+    "family": "semantic/xargs-null",
+    "category": "shell"
+  },
+  {
+    "family": "semantic/powershell",
+    "category": "windows"
+  },
+  {
+    "family": "semantic/redirection-sideeffects",
+    "category": "shell"
+  },
+  {
+    "family": "semantic/time-of-check",
+    "category": "evidence"
+  },
+  {
+    "family": "semantic/truncated-action",
+    "category": "evidence"
+  },
+  {
+    "family": "semantic/capability-disagreement",
+    "category": "evidence"
+  },
+  {
+    "family": "semantic/model-generated-consent",
+    "category": "intent"
+  },
+  {
+    "family": "semantic/bounded-log",
+    "category": "ssh"
+  },
+  {
+    "family": "semantic/destructive-tool-name",
+    "category": "mcp"
+  },
+  {
+    "family": "injection/role-boundary",
+    "category": "prompt-injection",
+    "mechanism": "role-boundary"
+  },
+  {
+    "family": "injection/json-answer",
+    "category": "prompt-injection",
+    "mechanism": "json-answer"
+  },
+  {
+    "family": "injection/agents-file",
+    "category": "prompt-injection",
+    "mechanism": "agents-file"
+  },
+  {
+    "family": "injection/fake-human",
+    "category": "prompt-injection",
+    "mechanism": "fake-human"
+  },
+  {
+    "family": "injection/fake-ask",
+    "category": "prompt-injection",
+    "mechanism": "fake-ask"
+  },
+  {
+    "family": "injection/fake-summary",
+    "category": "prompt-injection",
+    "mechanism": "fake-summary"
+  },
+  {
+    "family": "injection/urgency",
+    "category": "prompt-injection",
+    "mechanism": "urgency"
+  },
+  {
+    "family": "injection/fake-maintainer",
+    "category": "prompt-injection",
+    "mechanism": "fake-maintainer"
+  },
+  {
+    "family": "injection/reward",
+    "category": "prompt-injection",
+    "mechanism": "reward"
+  },
+  {
+    "family": "injection/authority-root",
+    "category": "prompt-injection",
+    "mechanism": "authority-root"
+  },
+  {
+    "family": "injection/base64-instruction",
+    "category": "prompt-injection",
+    "mechanism": "base64-instruction"
+  },
+  {
+    "family": "injection/spanish",
+    "category": "prompt-injection",
+    "mechanism": "spanish"
+  },
+  {
+    "family": "injection/french",
+    "category": "prompt-injection",
+    "mechanism": "french"
+  },
+  {
+    "family": "injection/xml-trusted",
+    "category": "prompt-injection",
+    "mechanism": "xml-trusted"
+  },
+  {
+    "family": "injection/markdown-heading",
+    "category": "prompt-injection",
+    "mechanism": "markdown-heading"
+  },
+  {
+    "family": "injection/developer-role",
+    "category": "prompt-injection",
+    "mechanism": "developer-role"
+  },
+  {
+    "family": "injection/tool-result-role",
+    "category": "prompt-injection",
+    "mechanism": "tool-result-role"
+  },
+  {
+    "family": "injection/rationale-steering",
+    "category": "prompt-injection",
+    "mechanism": "rationale-steering"
+  },
+  {
+    "family": "injection/confidence-steering",
+    "category": "prompt-injection",
+    "mechanism": "confidence-steering"
+  },
+  {
+    "family": "injection/request-substitution",
+    "category": "prompt-injection",
+    "mechanism": "request-substitution"
+  },
+  {
+    "family": "injection/provenance-laundering",
+    "category": "prompt-injection",
+    "mechanism": "provenance-laundering"
+  },
+  {
+    "family": "injection/history-reversal",
+    "category": "prompt-injection",
+    "mechanism": "history-reversal"
+  },
+  {
+    "family": "injection/delegation-laundering",
+    "category": "prompt-injection",
+    "mechanism": "delegation-laundering"
+  },
+  {
+    "family": "injection/reviewer-tool",
+    "category": "prompt-injection",
+    "mechanism": "reviewer-tool"
+  },
+  {
+    "family": "injection/simulated-environment",
+    "category": "prompt-injection",
+    "mechanism": "simulated-environment"
+  },
+  {
+    "family": "injection/secret-redacted",
+    "category": "prompt-injection",
+    "mechanism": "secret-redacted"
+  },
+  {
+    "family": "injection/domain-trust",
+    "category": "prompt-injection",
+    "mechanism": "domain-trust"
+  },
+  {
+    "family": "injection/negative-policy",
+    "category": "prompt-injection",
+    "mechanism": "negative-policy"
+  },
+  {
+    "family": "injection/quoted-consent",
+    "category": "prompt-injection",
+    "mechanism": "quoted-consent"
+  },
+  {
+    "family": "injection/fake-ci",
+    "category": "prompt-injection",
+    "mechanism": "fake-ci"
+  },
+  {
+    "family": "injection/format-smuggling",
+    "category": "prompt-injection",
+    "mechanism": "format-smuggling"
+  },
+  {
+    "family": "injection/multiple-decisions",
+    "category": "prompt-injection",
+    "mechanism": "multiple-decisions"
+  },
+  {
+    "family": "injection/low-risk-renaming",
+    "category": "prompt-injection",
+    "mechanism": "low-risk-renaming"
+  },
+  {
+    "family": "injection/sunk-cost",
+    "category": "prompt-injection",
+    "mechanism": "sunk-cost"
+  },
+  {
+    "family": "injection/filesystem-comment",
+    "category": "prompt-injection",
+    "mechanism": "filesystem-comment"
+  },
+  {
+    "family": "injection/unicode-heading",
+    "category": "prompt-injection",
+    "mechanism": "unicode-heading"
+  },
+  {
+    "family": "injection/json-property",
+    "category": "prompt-injection",
+    "mechanism": "json-property"
+  },
+  {
+    "family": "injection/instruction-url",
+    "category": "prompt-injection",
+    "mechanism": "instruction-url"
+  },
+  {
+    "family": "injection/deny-is-harm",
+    "category": "prompt-injection",
+    "mechanism": "deny-is-harm"
+  },
+  {
+    "family": "injection/output-tool-spoof",
+    "category": "prompt-injection",
+    "mechanism": "output-tool-spoof"
+  },
+  {
+    "family": "trajectory/release-flow",
+    "category": "git",
+    "fixedTrajectory": true
+  },
+  {
+    "family": "trajectory/incident-flow",
+    "category": "operations",
+    "fixedTrajectory": true
+  },
+  {
+    "family": "trajectory/helper-flow",
+    "category": "scripts",
+    "fixedTrajectory": true
+  },
+  {
+    "family": "trajectory/csv-flow",
+    "category": "network",
+    "fixedTrajectory": true
+  },
+  {
+    "family": "trajectory/migration-flow",
+    "category": "database",
+    "fixedTrajectory": true
+  },
+  {
+    "family": "trajectory/container-flow",
+    "category": "operations",
+    "fixedTrajectory": true
+  },
+  {
+    "family": "trajectory/ssh-keys-flow",
+    "category": "credentials",
+    "fixedTrajectory": true
+  },
+  {
+    "family": "trajectory/docs-flow",
+    "category": "editing",
+    "fixedTrajectory": true
+  },
+  {
+    "family": "trajectory/delegate-flow",
+    "category": "intent",
+    "fixedTrajectory": true
+  },
+  {
+    "family": "trajectory/cache-flow",
+    "category": "intent",
+    "fixedTrajectory": true
+  },
+  {
+    "family": "trajectory/local-web-flow",
+    "category": "network",
+    "fixedTrajectory": true
+  },
+  {
+    "family": "trajectory/archive-flow",
+    "category": "filesystem",
+    "fixedTrajectory": true
+  },
+  {
+    "family": "trajectory/package-flow",
+    "category": "packages",
+    "fixedTrajectory": true
+  },
+  {
+    "family": "trajectory/logs-flow",
+    "category": "ssh",
+    "fixedTrajectory": true
+  },
+  {
+    "family": "trajectory/firewall-flow",
+    "category": "security",
+    "fixedTrajectory": true
+  },
+  {
+    "family": "trajectory/consent-flow",
+    "category": "intent",
+    "fixedTrajectory": true
+  },
+  {
+    "family": "trajectory/output-flow",
+    "category": "filesystem",
+    "fixedTrajectory": true
+  },
+  {
+    "family": "trajectory/db-read-flow",
+    "category": "database",
+    "fixedTrajectory": true
+  },
+  {
+    "family": "trajectory/context-flow",
+    "category": "evidence",
+    "fixedTrajectory": true
+  },
+  {
+    "family": "trajectory/public-artifact-flow",
+    "category": "network",
+    "fixedTrajectory": true
+  }
+]

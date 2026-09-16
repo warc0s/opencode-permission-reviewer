@@ -594,6 +594,11 @@ The live end-to-end harness in `tests/live-harness.ts` runs against a real
 OpenCode server + model and is **not** part of `bun test`; see
 [`CONTRIBUTING.md`](./CONTRIBUTING.md).
 
+The [synthetic model benchmark](./benchmarks/permission-reviewer/README.md)
+evaluates 600 permission-review cases against the current reviewer prompt and
+core. It is a separate development tool, not part of the npm package or plugin
+runtime. It does not collect OpenCode conversations or execute fixture actions.
+
 ## Attribution
 
 The reviewer policy design is inspired by

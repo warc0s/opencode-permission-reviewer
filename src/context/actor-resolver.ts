@@ -13,7 +13,9 @@ import type {
   SessionNode,
 } from "../types.ts"
 import type { OpenCodeClientLike } from "../opencode/types.ts"
-import { responseData, withTimeout } from "../opencode/transport.ts"
+import type { ContextReader } from "../core/ports.ts"
+import { createV1ContextReader } from "../opencode/v1/context-reader.ts"
+import { withTimeout } from "../opencode/transport.ts"
 
 /** Bound for the resolver's metadata SDK calls: a hung session.get/messages
  *  must degrade to "unknown" instead of leaving the review pending forever. */
@@ -113,17 +115,12 @@ function readSession(id: string, raw: unknown): SessionMetadata {
 }
 
 async function fetchSession(
-  client: OpenCodeClientLike,
+  client: ContextReader,
   sessionID: string,
   directory: string,
 ): Promise<SessionMetadata | undefined> {
-  if (typeof client.session.get !== "function") return undefined
   try {
-    const response = await withTimeout(
-      client.session.get({ path: { id: sessionID }, query: { directory } }),
-      METADATA_TIMEOUT_MS,
-    )
-    const raw = responseData(response, "session.get")
+    const raw = await withTimeout(client.session(sessionID, directory), METADATA_TIMEOUT_MS)
     if (typeof raw !== "object" || raw === null) return undefined
     const data = raw as Record<string, unknown>
     if (data.id !== sessionID || (data.parentID !== undefined && typeof data.parentID !== "string"))
@@ -142,7 +139,7 @@ async function fetchSession(
  * parents are recorded explicitly rather than aborting the walk.
  */
 async function walkLineage(
-  client: OpenCodeClientLike,
+  client: ContextReader,
   sessionID: string,
   directory: string,
   config: ReviewerConfig,
@@ -231,20 +228,17 @@ function finalize(
 // --- parent/root message fetch for intent extraction ------------------------
 
 async function fetchMessagesBounded(
-  client: OpenCodeClientLike,
+  client: ContextReader,
   sessionID: string,
   directory: string,
   limit: number,
 ): Promise<MessageWithParts[]> {
   try {
     const response = await withTimeout(
-      client.session.messages({
-        path: { id: sessionID },
-        query: { directory, limit },
-      }),
+      client.messages(sessionID, directory, limit),
       METADATA_TIMEOUT_MS,
     )
-    return normalizeFetched(responseData(response, "session.messages"))
+    return normalizeFetched(response)
   } catch {
     return []
   }
@@ -381,7 +375,7 @@ async function resolveIntent(
   request: PermissionRequest,
   currentMessages: MessageWithParts[],
   lineage: SessionLineage,
-  client: OpenCodeClientLike,
+  client: ContextReader,
   directory: string,
   config: ReviewerConfig,
 ): Promise<IntentContext> {
@@ -599,14 +593,15 @@ function assessCompleteness(
 export async function resolveActorContext(
   request: PermissionRequest,
   messages: MessageWithParts[],
-  client: OpenCodeClientLike,
+  client: OpenCodeClientLike | ContextReader,
   directory: string,
   config: ReviewerConfig,
 ): Promise<ActorResolution> {
   try {
+    const reader = "messages" in client ? client : createV1ContextReader(client)
     const current = resolveCurrentActor(request, messages)
-    const lineage = await walkLineage(client, request.sessionID, directory, config)
-    const intent = await resolveIntent(request, messages, lineage, client, directory, config)
+    const lineage = await walkLineage(reader, request.sessionID, directory, config)
+    const intent = await resolveIntent(request, messages, lineage, reader, directory, config)
     const actor = assembleActorContext(request, current, lineage, config)
     const completeness = assessCompleteness(actor, lineage, intent)
     return { actor, lineage, intent, completeness }

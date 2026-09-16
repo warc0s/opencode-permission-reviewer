@@ -112,16 +112,16 @@ export class ReviewUiState {
         ? status.emittedAt + status.timeoutMs + UI_WATCHDOG_GRACE_MS
         : status.emittedAt + UI_START_GRACE_MS
       if (now < deadline) continue
-      const manual: ReviewUiStatus = {
+      const unknown: ReviewUiStatus = {
         ...status,
-        phase: "manual",
+        phase: "unknown",
         emittedAt: now,
         reason: acknowledged
           ? "The reviewer did not return a result within the expected time."
           : "The reviewer did not acknowledge the start of the review.",
       }
-      this.requests.set(requestID, manual)
-      expired.push(manual)
+      this.requests.set(requestID, unknown)
+      expired.push(unknown)
     }
     return expired
   }

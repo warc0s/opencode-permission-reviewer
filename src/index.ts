@@ -1,4 +1,4 @@
-import type { Plugin, PluginModule } from "@opencode-ai/plugin"
+import type { Plugin } from "@opencode-ai/plugin"
 import { loadResolvedConfig } from "./config/loader.ts"
 import { ApprovalReviewerRuntime } from "./runtime.ts"
 import { extractPermissionRequest } from "./opencode/event-normalizer.ts"
@@ -6,6 +6,8 @@ import { createV1Adapter } from "./opencode/v1-adapter.ts"
 import { AskDecisionRegistry } from "./context/ask-decisions.ts"
 import type { RuntimeContext } from "./opencode/types.ts"
 import { createAuditWriter } from "./audit.ts"
+import { setup } from "./opencode/v2/server.ts"
+import { withTimeout } from "./opencode/transport.ts"
 
 export const server: Plugin = async (input, options) => {
   const config = loadResolvedConfig(options, input.directory)
@@ -16,7 +18,23 @@ export const server: Plugin = async (input, options) => {
   // Audit-write failures stay visible even without debug: the audit trail is
   // the traceability guarantee, and silently losing records hides it.
   const writeAudit = createAuditWriter(config, config.debug ? logger : debugLogger)
+  const raw = (
+    input.client as unknown as {
+      _client?: {
+        get?(options: {
+          url: string
+          signal: AbortSignal
+        }): Promise<{ data?: { version?: string } }>
+      }
+    }
+  )._client
+  const hostVersion = raw?.get
+    ? await withTimeout(raw.get({ url: "/global/health", signal: AbortSignal.timeout(2000) }), 2000)
+        .then((response) => response.data?.version)
+        .catch(() => undefined)
+    : undefined
   const ctx: RuntimeContext = {
+    ...(hostVersion ? { hostVersion } : {}),
     ...createV1Adapter(
       {
         client: input.client,
@@ -45,14 +63,15 @@ export const server: Plugin = async (input, options) => {
     // exported as a deprecated no-op for external callers; the host hook is
     // omitted so it is not invoked after every tool execution for no effect.
     dispose: async () => {
-      await runtime.waitForIdle()
+      await runtime.dispose()
     },
   }
 }
 
-const module: PluginModule = {
+const module = {
   id: "opencode-permission-reviewer",
   server,
+  setup,
 }
 
 export default module

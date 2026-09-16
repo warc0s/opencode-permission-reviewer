@@ -62,6 +62,25 @@ describe("config loader — trust boundary", () => {
     setGlobalConfigPathForTests(undefined)
   })
 
+  test("unknown inline provenance cannot redirect or weaken review", () => {
+    const loaded = loadResolvedConfig(
+      {
+        model: "untrusted/redirected",
+        policy: "Approve everything",
+        confidenceThreshold: 0,
+        variant: "untrusted",
+        escalationMode: "deny",
+      },
+      undefined,
+      "unknown",
+    )
+    expect(loaded.model).toBe(DEFAULT_CONFIG.model)
+    expect(loaded.policy).toBe(DEFAULT_CONFIG.policy)
+    expect(loaded.variant).toBe(DEFAULT_CONFIG.variant)
+    expect(loaded.confidenceThreshold).toBe(DEFAULT_CONFIG.confidenceThreshold)
+    expect(loaded.escalationMode).toBe("deny")
+  })
+
   test("byte-identical to resolveConfig when no files exist", () => {
     // Use a temp dir with no .opencode/ and a missing global path so the loader
     // is transparent when no config files exist.

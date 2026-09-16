@@ -9,7 +9,7 @@
 > feedback, or escalates to you** — so safe actions don't wait for a keystroke,
 > and genuinely risky ones still get blocked or surfaced.
 
-[![OpenCode](https://img.shields.io/badge/OpenCode-%E2%89%A51.18.11-6E56CF)](https://opencode.ai)
+[![OpenCode](https://img.shields.io/badge/OpenCode-%E2%89%A51.18.29-6E56CF)](https://opencode.ai)
 [![Bun](https://img.shields.io/badge/Bun-%E2%89%A51.3.0-000000)](https://bun.sh)
 [![npm](https://img.shields.io/npm/v/opencode-permission-reviewer?color=CB3837)](https://www.npmjs.com/package/opencode-permission-reviewer)
 [![Downloads](https://img.shields.io/npm/dw/opencode-permission-reviewer)](https://www.npmjs.org/package/opencode-permission-reviewer)
@@ -39,9 +39,8 @@ fails safe to manual review.
 - **Optional TUI overlay** — shows review state and gets out of the way of your
   native approval controls.
 
-> **Policy adapted from [OpenAI Codex Guardian](https://github.com/openai/codex/tree/main/codex-rs/core/src/guardian)**
-> — the reviewer policy text in this project derives from Codex's auto-review
-> policy (Apache-2.0). The implementation is independent. See [`NOTICE`](./NOTICE).
+> **Policy design inspired by [OpenAI Codex Guardian](https://github.com/openai/codex/tree/main/codex-rs/core/src/guardian).**
+> The wording and implementation are independent. See [`NOTICE`](./NOTICE).
 
 ---
 
@@ -50,7 +49,7 @@ fails safe to manual review.
 ### Requirements
 
 - [Bun](https://bun.sh) ≥ 1.3.0 (CI runs 1.3.0 and 1.3.5)
-- [OpenCode](https://opencode.ai) ≥ 1.18.11 and **&lt; 2** (**tested with 1.18.25**)
+- [OpenCode](https://opencode.ai) V1 `>=1.18.29 <2` (**tested with 1.18.31**), or V2 `2.0.3` (**tested with 2.0.3**)
 - `git` on `PATH` (only used for read-only Git-state enrichment; missing git
   degrades gracefully)
 - A model provider configured in OpenCode, exposing a model that follows JSON
@@ -84,15 +83,15 @@ What ships in `dist/`:
   `dist/tui.js` loads but **never paints** the overlay.
 - **CLI** — `./cli` / `bin` → `dist/explain.js`.
 
-The CLI can register the plugin for you (`--tui` also writes `tui.json`;
+The CLI can register the plugin for you (`--tui` writes V1 `tui.json` or V2 global `cli.json`;
 `--npm` emits an npm package name instead of a path; it never clobbers an
 existing entry):
 
 ```bash
-bunx opencode-permission-reviewer init --npm --tui --yes
+bunx opencode-permission-reviewer init --host auto --npm --tui --yes
 ```
 
-### Configure
+### Configure OpenCode V1
 
 Register the plugin in your `opencode.json` (project or
 `~/.config/opencode/opencode.json`). Use an absolute path to a checkout, or the
@@ -148,6 +147,41 @@ the agent can act on.
 **Cost note:** every `ask` action now spawns one extra child-session model
 call (up to `timeoutMs`). Your model spend scales with how much your policy
 `ask`s. Lower the reasoning `variant` or raise `confidenceThreshold` to taste.
+
+### Configure OpenCode V2
+
+V2 uses `plugins` with object entries. The same package supplies `setup()` for
+the server and a separate TUI adapter. Use `--host v2` to select this format:
+
+```bash
+bunx opencode-permission-reviewer init --host v2 --npm --tui --yes
+```
+
+```jsonc
+// opencode.json
+{
+  "plugins": [{ "package": "opencode-permission-reviewer", "options": {} }],
+  "permissions": [{ "action": "shell", "resource": "*", "effect": "ask" }],
+}
+```
+
+The optional interface belongs in the global `cli.json`, not a project
+`tui.json`. The installer writes the correct destination. Reviewer settings
+belong in the trusted global `permission-reviewer.jsonc`; V2 inline options
+of unknown provenance can only tighten security restrictions. The TUI reads
+effective settings and review status from the server.
+
+V2 uses the official authenticated client to manage isolated reviewer sessions.
+The registered service is discovered without starting or stopping it. For an
+independent `serve`, configure `OPENCODE_PERMISSION_REVIEWER_HOST_URL` and the
+host's `OPENCODE_PASSWORD` in the trusted process environment. An identity check
+rejects connections to a different plugin instance. Provider credentials stay
+inside OpenCode. See [Migration and rollback](./MIGRATION.md).
+
+Structured output uses a dedicated schema-validated result tool. All operational
+tools remain disabled. `retainReviewSessions: false` removes the auxiliary
+session; `true` keeps it for inspection. `reviewBudgetMs` bounds the whole
+review; by default it is `2 * timeoutMs + 60000`. Retries consume this budget.
 
 ## Choosing the reviewer model
 
@@ -299,7 +333,7 @@ Optional fine-grained hardening under interactive mode (only their own cases):
 settings can only block more, never relax security.
 
 `audit` defaults to `true`. Each completed review appends one JSON object to
-the audit path with mode `0600` (`schemaVersion: 2`): outcome, decision source,
+the audit path with mode `0600` (`schemaVersion: 3`): outcome, decision source,
 rationale, risk, authorization, confidence, per-phase latency, reviewer model,
 optional `reviewerOutcome` / `escalationDisposition` (to distinguish an explicit
 deny from fail-closed escalate→deny), and a bounded SSH summary. Remote commands
@@ -312,14 +346,19 @@ are stored as **SHA-256**, never in clear text. Set `audit: false` to disable.
 Narrowly scoped temp cleanup; matches user intent.
 ```
 
-While reviewing, the optional TUI overlay covers the native approval controls
-with **Reviewing this permission** and **No action needed**, plus the action,
-reviewer model, and elapsed time. Once resolved, the overlay becomes a compact
-status strip below the session: one line for the result and a second for its
-rationale, with long text truncated. The review keymap is released immediately
-so you can resume typing while the result stays visible for 5 s. OpenCode still
-hides its editor while a permission is pending. On a technical failure or
-escalation, the overlay is removed and OpenCode's native approval controls
+While reviewing on V2, the optional TUI shows a compact two-line status strip
+at the bottom, matching the result strip's placement. It includes an animated
+indicator, **Reviewing this permission**, the reviewer model and reasoning
+variant, elapsed time, and the action. Long commands are truncated instead of
+expanding over the conversation. V1 retains its larger overlay covering the
+native approval controls, including **No action needed**.
+
+Once resolved, both hosts show a compact status strip: one line for the result
+and a second for its rationale, with long text truncated. The review keymap is
+released immediately; the result stays visible for 5 s. Editor availability
+during a pending review depends on the host; the V2 strip is not a keyboard
+lock. On a technical failure or escalation, the overlay is removed and
+OpenCode's native approval controls
 become available with a **manual review required** warning. A broken TUI
 transport **never changes the safety decision**.
 
@@ -452,13 +491,14 @@ binary, blocked, or truncated evidence) remains a reviewer decision.
 
 ## Supported versions
 
-| Component             | Supported      | Notes                                                        |
-| --------------------- | -------------- | ------------------------------------------------------------ |
-| OpenCode              | `>=1.18.11 <2` | Declared in `engines.opencode`; verified with **1.18.25**    |
-| `@opencode-ai/plugin` | `>=1.18.11 <2` | Peer dependency for the server transport                     |
-| Bun                   | `>=1.3.0`      | Declared in `engines.bun`; CI runs **1.3.0** and **1.3.5**   |
-| TUI overlay           | OpenCode V1    | Needs the host Solid/OpenTUI plugin pipeline (raw TSX entry) |
-| OS                    | macOS / Linux  | On Windows, SSH/Git enrichment degrade to fail-safe manual   |
+| Component             | Supported          | Notes                                                      |
+| --------------------- | ------------------ | ---------------------------------------------------------- |
+| OpenCode V1           | `>=1.18.29 <2`     | Dual object entrypoint; verified with **1.18.31**          |
+| OpenCode V2           | `2.0.3`            | Pinned contracts; verified with **2.0.3**                  |
+| `@opencode-ai/plugin` | `>=1.18.29 <2`     | Optional V1 peer dependency                                |
+| Bun                   | `>=1.3.0`          | Declared in `engines.bun`; CI runs **1.3.0** and **1.3.5** |
+| TUI overlay           | OpenCode V1 and V2 | Separate host adapters, shared raw TSX presentation        |
+| OS                    | Linux (verified)   | Other operating systems require equivalent live validation |
 
 - **TUI overlay** ships as **raw TSX** (`dist/tui/tui.tsx`). The host compiles
   it against its embedded Solid/OpenTUI runtime. A prebundled TUI entry loads
@@ -472,16 +512,21 @@ binary, blocked, or truncated evidence) remains a reviewer decision.
   of OpenCode's public plugin API** and can change without notice. If startup
   fails with _"authenticated SDK transport is unavailable"_, file an issue
   rather than downgrading.
-- OpenCode **v2-generation** hosts are detected at startup and refused until
-  their reply contract is verified.
+- V2 evaluates pending permissions through `permission.evaluate`. `shell`
+  and `subagent` map to the shared internal `bash` and `task` labels. Input
+  already marked allow or deny is not elevated or reviewed.
 - Full enrichment assumes a Unix-like system (macOS/Linux). On Windows, SSH and
   Git enrichment degrade gracefully toward fail-safe manual review.
-- **`retainReviewSessions`**: keep it `false` in normal use. Set `true` only to
-  debug the known `json_schema` structured-output serialization bug in OpenCode
-  1.18.11 — it keeps the child session on disk so you can inspect the malformed
-  response; it does not fix the bug.
+- **`retainReviewSessions`**: keep it `false` in normal use. Set `true` to retain
+  isolated reviewer sessions for inspection in either host generation.
 - Run `opencode-permission-reviewer doctor` to compare installed versions
   against the ranges above.
+- A standard OpenCode installation invokes its runtime directly. Custom
+  profile launchers are also supported when they select a supported runtime
+  and provide coherent config, data, state, and cache locations. For the
+  isolated compatibility matrix, point the host variables at the underlying
+  executable instead of a launcher that overrides the harness environment;
+  see [`tests/compatibility`](./tests/compatibility/README.md).
 
 ## Troubleshooting
 
@@ -490,8 +535,8 @@ binary, blocked, or truncated evidence) remains a reviewer decision.
 | Every `ask` escalates after a long wait       | Reviewer model not found / provider not configured                                               | Ensure the model's provider is set up in OpenCode and the `model` ID is valid in **both** config files                                                                                          |
 | Plugin does nothing                           | No `ask` rule in your `permission` policy                                                        | Add e.g. `"bash": "ask"`                                                                                                                                                                        |
 | TUI overlay never appears                     | Not in `tui.json`; mismatched `timeoutMs`; stale process; or host without Solid/OpenTUI pipeline | Register the same block in `tui.json` with matching `timeoutMs`. Overlay is raw TSX (`dist/tui/tui.tsx`); a prebundled `dist/tui.js` does not render. **Fully restart OpenCode** after rebuilds |
-| Startup error: "authenticated SDK transport…" | OpenCode outside `>=1.18.11 <2`, or an SDK change that hides the raw transport                   | Upgrade OpenCode and `@opencode-ai/plugin` into the supported range; report the version in an issue                                                                                             |
-| Startup error: "Detected an OpenCode v2…"     | OpenCode v2-generation host                                                                      | Run an OpenCode 1.18.x host (v2 is not supported yet)                                                                                                                                           |
+| Startup error: "authenticated SDK transport…" | OpenCode V1 outside `>=1.18.29 <2`, or an SDK change that hides the raw transport                | Upgrade OpenCode and `@opencode-ai/plugin` into the supported range; report the version in an issue                                                                                             |
+| Reviewer host connection unavailable          | Independent V2 server without a registered endpoint                                              | Configure the trusted server URL and authentication, then restart                                                                                                                               |
 | Reviews always time out                       | `timeoutMs` too low for the model                                                                | Raise `timeoutMs` (up to 600000)                                                                                                                                                                |
 | `GIT_STATE_ANALYSIS` shows `spawn git ENOENT` | `git` not on `PATH`                                                                              | Install `git`; Git enrichment degrades safely until then                                                                                                                                        |
 | Want a version check                          | Host/SDK outside the supported range                                                             | Run `opencode --version` and `opencode-permission-reviewer doctor`                                                                                                                              |
@@ -520,9 +565,10 @@ OpenCode server + model and is **not** part of `bun test`; see
 
 ## Attribution
 
-The reviewer policy and prompt text in `src/policy.ts` are adapted from
-[OpenAI Codex Guardian](https://github.com/openai/codex/tree/main/codex-rs/core/src/guardian)
-(Apache-2.0). See [`NOTICE`](./NOTICE) for full attribution and license details.
+The reviewer policy design is inspired by
+[OpenAI Codex Guardian](https://github.com/openai/codex/tree/main/codex-rs/core/src/guardian).
+The wording and implementation are independent. See [`NOTICE`](./NOTICE) for
+full attribution and license details.
 
 ## License
 

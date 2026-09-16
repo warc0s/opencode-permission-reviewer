@@ -9,9 +9,7 @@ name: release
 #   - Actions → General → "Workflow permissions" allows id-token writes
 #     (required for npm --provenance).
 #
-# Versioning: tags matching `vX.Y.Z` publish to the `latest` dist-tag; tags
-# matching `vX.Y.Z-<pre>` (e.g. `v1.0.0-rc.1`) publish to the `next`
-# dist-tag so prereleases do not replace the stable release.
+# Prereleases use next; legacy maintenance uses v1 without moving latest.
 
 on:
   push:
@@ -34,36 +32,25 @@ jobs:
           # Full history so the CHANGELOG extraction can locate the version.
           fetch-depth: 0
 
-      - name: Read tag metadata
-        id: meta
-        run: |
-          tag="${GITHUB_REF_NAME}"
-          version="${tag#v}"
-          # Prerelease if the version contains a hyphen (semver pre-release).
-          if [[ "$version" == *-* ]]; then
-            echo "prerelease=true" >> "$GITHUB_OUTPUT"
-            echo "dist_tag=next" >> "$GITHUB_OUTPUT"
-          else
-            echo "prerelease=false" >> "$GITHUB_OUTPUT"
-            echo "dist_tag=latest" >> "$GITHUB_OUTPUT"
-          fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-
-      # Guard against mistags: the tag version must match package.json.
-      - name: Verify tag matches package.json version
-        run: |
-          pkg_version=$(node -p "require('./package.json').version")
-          if [ "${{ steps.meta.outputs.version }}" != "$pkg_version" ]; then
-            echo "Tag version ${{ steps.meta.outputs.version }} != package.json version $pkg_version"
-            exit 1
-          fi
-
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3.5"
 
       - run: bun install --frozen-lockfile
+
+      - name: Read tag metadata
+        id: meta
+        run: bun scripts/release-metadata.ts
+
+      # Guard against mistags: the tag version must match package.json.
+      - name: Verify tag matches package.json version
+        run: |
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          pkg_version=$(node -p "require('./package.json').version")
+          if [ "${{ steps.meta.outputs.version }}" != "$pkg_version" ]; then
+            echo "Tag version ${{ steps.meta.outputs.version }} != package.json version $pkg_version"
+            exit 1
+          fi
 
       # Build must pass the same gate as CI before we cut an artifact.
       - name: Build
@@ -73,7 +60,10 @@ jobs:
       - name: Pack
         run: |
           mkdir -p artifacts
-          npm pack --pack-destination artifacts
+          npm pack --ignore-scripts --pack-destination artifacts
+          set -- artifacts/*.tgz
+          [ "$#" -eq 1 ] && [ -f "$1" ]
+          REVIEWER_TEST_TARBALL="$PWD/$1" bun run test:package
           echo "##[group]Tarball contents"
           tar -tzf artifacts/*.tgz | sort
           echo "##[endgroup]"
@@ -91,14 +81,14 @@ jobs:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
 
-      # Publish to npm with build provenance (signed OIDC attestation).
-      # Provenance requires publishing from the repo root (with .git present),
-      # so we do not pass the pre-packed tarball here; npm packs internally.
+      # Publish the exact checked artifact from the repository working directory.
       - name: Publish to npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          npm publish \
+          set -- artifacts/*.tgz
+          [ "$#" -eq 1 ]
+          npm publish "$1" \
             --provenance \
             --access public \
             --tag "${{ steps.meta.outputs.dist_tag }}"
@@ -132,7 +122,9 @@ jobs:
 
           tag="${{ steps.meta.outputs.tag }}"
           if [ "${{ steps.meta.outputs.prerelease }}" = "true" ]; then
-            gh release create "$tag" --title "$tag" --target main --prerelease
+            gh release create "$tag" --title "$tag" --target main --prerelease --latest=false
+          elif [ "${{ steps.meta.outputs.dist_tag }}" = "v1" ]; then
+            gh release create "$tag" --title "$tag" --target main --latest=false
           else
             gh release create "$tag" --title "$tag" --target main
           fi

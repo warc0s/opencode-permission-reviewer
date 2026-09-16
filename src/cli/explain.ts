@@ -27,7 +27,11 @@ import {
   hashEffectivePolicy,
 } from "../policy/policy-engine.ts"
 import { expandHome, resolveAuditPath, readAuditSummary, type AuditSummary } from "../audit.ts"
-import { runInit } from "./init.ts"
+import { runInit, probeOpencodeVersion } from "./init.ts"
+import { normalizeV2Permission } from "../opencode/v2/permission-codec.ts"
+import { validateHostEndpoint } from "../opencode/v2/connection.ts"
+import { ReviewerRpc } from "../ui/rpc.ts"
+import { OpenCode } from "@opencode/client"
 import type { PermissionRequest, PermissionToolSource, ReviewerConfig } from "../types.ts"
 
 // Guarded so importing the module (e.g. via the "./cli" export or in tests)
@@ -87,6 +91,7 @@ async function runExplain(argv: string[]): Promise<number> {
     args: argv,
     options: {
       event: { type: "string" },
+      defaults: { type: "boolean" },
       project: { type: "string" },
       help: { type: "boolean", short: "h" },
     },
@@ -115,21 +120,39 @@ Reads a permission request JSON, runs the capability analyzer and policy engine
     return 2
   }
 
-  const request = normalizeRequest(parsed)
-  if (request === undefined) {
+  const normalized = normalizeRequest(parsed)
+  if (normalized === undefined) {
     console.error('explain: input must have "permission" and "metadata.command" or "patterns"')
     return 2
   }
+  const request = normalized.request
 
-  const config = resolveConfig(undefined)
   const directory = values.project ?? process.cwd()
+  const config = values.defaults
+    ? resolveConfig(undefined)
+    : loadResolvedConfig(undefined, directory)
   const worktree = directory
+  const nativeResources = normalized.nativeAction !== undefined
   const command =
     typeof request.metadata?.command === "string"
       ? request.metadata.command
-      : (request.patterns ?? []).filter((p) => typeof p === "string").join("\n")
+      : nativeResources
+        ? ""
+        : (request.patterns ?? []).filter((p) => typeof p === "string").join("\n")
 
-  const result: Record<string, unknown> = { permission: request.permission, command }
+  const result: Record<string, unknown> = {
+    permission: request.permission,
+    command,
+    configuration: values.defaults ? "defaults" : "effective",
+    model: config.model,
+    ...(nativeResources
+      ? {
+          resources: request.patterns,
+          actionEvidenceComplete: normalized.actionEvidenceComplete,
+          nativeAction: normalized.nativeAction,
+        }
+      : {}),
+  }
   if (request.permission === "bash" && command.trim()) {
     const parsedCmd = parseCommand(command)
     const capability = analyzeCapability(parsedCmd, directory, worktree)
@@ -151,6 +174,8 @@ async function runDoctor(argv: string[]): Promise<number> {
     args: argv,
     options: {
       project: { type: "string" },
+      binary: { type: "string" },
+      endpoint: { type: "string" },
       json: { type: "boolean" },
       help: { type: "boolean", short: "h" },
     },
@@ -168,8 +193,25 @@ async function runDoctor(argv: string[]): Promise<number> {
   const effectiveHash = hashEffectivePolicy(filterProjectAllowRules(config.policyRules), config)
   const auditPath = resolveAuditPath(config)
   const auditWritable = await checkWritable(auditPath)
+  let connected: unknown
+  if (values.endpoint) {
+    const password = process.env.OPENCODE_PASSWORD ?? process.env.OPENCODE_SERVER_PASSWORD
+    if (!password) throw new Error("Connected doctor requires OPENCODE_PASSWORD")
+    const client = OpenCode.make({
+      baseUrl: validateHostEndpoint(values.endpoint).href,
+      headers: { authorization: `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}` },
+    })
+    connected = await client
+      .rpc(ReviewerRpc)
+      .status({}, { location: { directory }, signal: AbortSignal.timeout(5000) })
+  }
 
   const report = {
+    mode: values.endpoint ? "connected" : "local-only",
+    host: {
+      binaryVersion: values.binary ? ((await probeOpencodeVersion(values.binary)) ?? null) : null,
+      runtime: connected ?? null,
+    },
     version: {
       package: pkg.version,
       opencodeRange: pkg.engines.opencode ?? "(unstated)",
@@ -196,6 +238,7 @@ async function runDoctor(argv: string[]): Promise<number> {
     return 0
   }
   console.error(`opencode-permission-reviewer doctor ${pkg.version}`)
+  console.error(`diagnostic mode: ${report.mode}`)
   console.error(`version`)
   console.error(`  package:    ${report.version.package}`)
   console.error(`  opencode:   ${report.version.opencodeRange} (engines.opencode)`)
@@ -204,7 +247,12 @@ async function runDoctor(argv: string[]): Promise<number> {
   console.error(`  global:     ${fmtSource(sources.global)}`)
   console.error(`  project:    ${fmtSource(sources.project)}`)
   console.error(`  model:      ${report.config.model}`)
-  console.error(`  mode:       ${report.config.enforcementMode}`)
+  // The mode gates declarative rules only; the reviewer still auto-allows or denies.
+  const modeNote =
+    report.config.enforcementMode === "observe"
+      ? "declarative rules audited only; reviewer auto-allow/deny remains active"
+      : "declarative rules enforced; reviewer decisions unchanged"
+  console.error(`  mode:       ${report.config.enforcementMode} (${modeNote})`)
   console.error(`  trust:      ${report.config.repositoryTrust}`)
   console.error(
     `  rules:      ${report.config.policyRuleCount} (effectivePolicyHash: ${effectiveHash})`,
@@ -289,6 +337,8 @@ function printAuditHuman(s: AuditSummary): void {
   }
   console.log(`  valid records:     ${s.validRecords} (invalid lines: ${s.invalidLines})`)
   console.log(`  schema versions:   ${fmtCounts(s.bySchemaVersion)}`)
+  console.log(`  host generations:  ${fmtCounts(s.byHostGeneration)}`)
+  console.log(`  application states:${fmtCounts(s.byApplication)}`)
   if (s.firstTimestamp || s.lastTimestamp) {
     console.log(`  time range:        ${s.firstTimestamp ?? "?"} → ${s.lastTimestamp ?? "?"}`)
   }
@@ -403,9 +453,34 @@ function readStdin(): Promise<string> {
   })
 }
 
-function normalizeRequest(value: unknown): PermissionRequest | undefined {
+function normalizeRequest(
+  value: unknown,
+):
+  | { request: PermissionRequest; nativeAction?: string; actionEvidenceComplete?: boolean }
+  | undefined {
   if (typeof value !== "object" || value === null) return
   const v = value as Record<string, unknown>
+  if (
+    typeof v.action === "string" &&
+    Array.isArray(v.resources) &&
+    v.resources.every((resource) => typeof resource === "string")
+  ) {
+    return normalizeV2Permission(
+      {
+        sessionID: typeof v.sessionID === "string" ? v.sessionID : "explain-session",
+        action: v.action,
+        resources: v.resources,
+        effect: "ask",
+        ...(typeof v.agent === "string" ? { agent: v.agent } : {}),
+        metadata:
+          typeof v.metadata === "object" && v.metadata !== null
+            ? (v.metadata as Record<string, unknown>)
+            : {},
+      },
+      { reviewID: "explain-dry-run", generation: "explain", directory: "", hostVersion: "2.0.3" },
+      v.input,
+    )
+  }
   if (typeof v.permission !== "string") return
   const req: PermissionRequest = {
     id: typeof v.id === "string" ? v.id : "explain-dry-run",
@@ -425,5 +500,5 @@ function normalizeRequest(value: unknown): PermissionRequest | undefined {
   ) {
     req.tool = v.tool as PermissionToolSource
   }
-  return req
+  return { request: req }
 }

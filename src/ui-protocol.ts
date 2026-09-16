@@ -12,7 +12,7 @@ export const UI_COMMAND_PREFIX = "opencode-permission-reviewer.status."
 export const UI_START_GRACE_MS = 15_000
 export const UI_WATCHDOG_GRACE_MS = 5_000
 
-export type ReviewUiPhase = "reviewing" | "approved" | "denied" | "manual"
+export type ReviewUiPhase = "reviewing" | "approved" | "denied" | "manual" | "unknown"
 
 export interface ReviewUiStatus {
   version: 1
@@ -128,7 +128,8 @@ export function parseUiStatus(value: unknown): ReviewUiStatus | undefined {
     value.phase !== "reviewing" &&
     value.phase !== "approved" &&
     value.phase !== "denied" &&
-    value.phase !== "manual"
+    value.phase !== "manual" &&
+    value.phase !== "unknown"
   ) {
     return
   }

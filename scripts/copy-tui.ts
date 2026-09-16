@@ -10,14 +10,17 @@
  *
  * Only the slim TUI graph is copied (no server engine, no node builtins).
  */
-import { cpSync, mkdirSync, rmSync } from "node:fs"
-import { dirname, join } from "node:path"
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs"
+import { dirname, join, resolve } from "node:path"
 
 const root = join(import.meta.dir, "..")
 const out = join(root, "dist", "tui")
 
 const files = [
   ["src/tui.tsx", "tui.tsx"],
+  ["src/ui/components.tsx", "ui/components.tsx"],
+  ["src/ui/v2.tsx", "ui/v2.tsx"],
+  ["src/ui/rpc.ts", "ui/rpc.ts"],
   ["src/config.ts", "config.ts"],
   ["src/ui-protocol.ts", "ui-protocol.ts"],
   ["src/ui-state.ts", "ui-state.ts"],
@@ -31,4 +34,22 @@ for (const [from, to] of files) {
   const dest = join(out, to)
   mkdirSync(dirname(dest), { recursive: true })
   cpSync(join(root, from), dest)
+}
+
+// Fail the build when the curated graph omits a runtime dependency. The host
+// compiles these sources at runtime, so a missing file would otherwise escape
+// the build and surface only when OpenCode starts. Bun's scanner deliberately
+// excludes type-only imports, which do not need a shipped runtime module.
+const ts = new Bun.Transpiler({ loader: "ts" })
+const tsx = new Bun.Transpiler({ loader: "tsx" })
+for (const [, to] of files) {
+  const source = readFileSync(join(out, to), "utf8")
+  const imports = (to.endsWith(".tsx") ? tsx : ts).scan(source).imports
+  for (const imported of imports) {
+    if (!imported.path.startsWith(".")) continue
+    const dependency = resolve(dirname(join(out, to)), imported.path)
+    if (!existsSync(dependency)) {
+      throw new Error(`Missing TUI dependency ${imported.path} imported by ${to}`)
+    }
+  }
 }

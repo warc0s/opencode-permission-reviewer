@@ -5,3 +5,4 @@ bun.lock
 tests/live-fixture/
 *.lock
 *.log
+plan_*.md

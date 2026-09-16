@@ -9,6 +9,24 @@ beforeAll(async () => {
 })
 
 describe("characterization gaps (baseline prereq)", () => {
+  test("a reply event preceding our transport acknowledgement does not supersede our review", async () => {
+    const harness = runtime()
+    const permission = request()
+    const reply = harness.ctx.permissionReply
+    harness.ctx.permissionReply = async (options) => {
+      harness.runtime.handlePermissionReply({
+        type: "permission.replied",
+        properties: { requestID: permission.id, sessionID: permission.sessionID, reply: "once" },
+      })
+      return reply(options)
+    }
+    harness.runtime.handle(permission)
+    await harness.runtime.waitForIdle()
+    const audits = (harness.ctx as unknown as { auditRecords: ReviewAuditRecord[] }).auditRecords
+    expect(audits).toHaveLength(1)
+    expect(audits[0]).toMatchObject({ outcome: "allow", application: "reply-accepted" })
+  })
+
   test("session.create transport failure escalates without reviewer call", async () => {
     const client = new MockClient()
     client.createError = { message: "database unavailable" }
@@ -220,18 +238,21 @@ describe("characterization gaps (baseline prereq)", () => {
     expect(audits).toHaveLength(1)
     expect(audits[0]).toMatchObject({
       outcome: "escalate",
-      schemaVersion: 2,
+      schemaVersion: 3,
       decisionSource: "failure-safe",
       ssh: [{ destination: "ubuntu@203.0.113.8", port: "2222" }],
     })
   })
 
-  test("audit records carry schemaVersion 2 and the v2 fields on the success path", async () => {
+  test("audit records carry host identity and accepted application on the success path", async () => {
     const harness = runtime()
     await harness.runtime.process(request())
     const audits = (harness.ctx as unknown as { auditRecords: ReviewAuditRecord[] }).auditRecords
     expect(audits).toHaveLength(1)
-    expect(audits[0]!.schemaVersion).toBe(2)
+    expect(audits[0]!.schemaVersion).toBe(3)
+    expect(audits[0]!.hostGeneration).toBe("v1")
+    expect(audits[0]!.application).toBe("reply-accepted")
+    expect(audits[0]!.reviewID).not.toBe(audits[0]!.hostRequestID)
     expect(audits[0]!.decisionSchemaVersion).toBe(2)
     expect(audits[0]!.promptVersion).toBe("2.3.0")
     expect(audits[0]!.decisionSource).toBe("llm-reviewer")

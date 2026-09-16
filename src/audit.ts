@@ -60,6 +60,8 @@ export interface AuditSummary {
   validRecords: number
   invalidLines: number
   bySchemaVersion: Record<string, number>
+  byHostGeneration: Record<string, number>
+  byApplication: Record<string, number>
   byOutcome: Record<string, number>
   byRiskLevel: Record<string, number>
   byDecisionSource: Record<string, number>
@@ -156,6 +158,8 @@ export function readAuditSummary(path: string): AuditSummary {
     validRecords: 0,
     invalidLines: 0,
     bySchemaVersion: {},
+    byHostGeneration: {},
+    byApplication: {},
     byOutcome: {},
     byRiskLevel: {},
     byDecisionSource: {},
@@ -190,6 +194,24 @@ export function readAuditSummary(path: string): AuditSummary {
     const record = parsed as Record<string, unknown>
     summary.validRecords++
     bump(summary.bySchemaVersion, String(record.schemaVersion ?? 1))
+    bump(
+      summary.byHostGeneration,
+      record.hostGeneration === "v1" || record.hostGeneration === "v2"
+        ? record.hostGeneration
+        : "legacy-unspecified",
+    )
+    if (
+      typeof record.application === "string" &&
+      [
+        "evaluation-returned",
+        "reply-accepted",
+        "human-pending",
+        "superseded",
+        "cancelled",
+        "unknown",
+      ].includes(record.application)
+    )
+      bump(summary.byApplication, record.application)
     if (typeof record.outcome === "string") bump(summary.byOutcome, record.outcome)
     bump(summary.byRiskLevel, typeof record.riskLevel === "string" ? record.riskLevel : "(none)")
     if (typeof record.decisionSource === "string")

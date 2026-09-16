@@ -41,15 +41,60 @@ jobs:
           path: coverage/lcov.info
           if-no-files-found: error
 
+  hosts:
+    name: hosts (${{ matrix.host }}, ${{ matrix.package-manager }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        host: [v1, v2]
+        package-manager: [npm, bun]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.5"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - run: bun install --frozen-lockfile
+      - run: bun run build
+      - run: python -m pip install pytest==9.1.1
+      - name: Install pinned hosts in scratch directories
+        env:
+          HOST_GENERATION: ${{ matrix.host }}
+        run: |
+          bun tests/compatibility/install-hosts.ts
+          if [ "$HOST_GENERATION" = v2 ]; then
+            HOST_GENERATION=v1 bun tests/compatibility/install-hosts.ts
+          fi
+      - name: Install the packed plugin without lifecycle scripts
+        env:
+          PACKAGE_MANAGER: ${{ matrix.package-manager }}
+        run: bun tests/compatibility/install-package.ts
+      - name: Exercise real hosts with isolated config and synthetic models
+        env:
+          HOST_GENERATION: ${{ matrix.host }}
+        run: |
+          if [ "$HOST_GENERATION" = v1 ]; then
+            python -m pytest tests/compatibility/test_opencode_v1.py -q
+            python -m pytest tests/compatibility/test_tui.py -k v1 -q
+          else
+            python -m pytest tests/compatibility/test_opencode_v2.py tests/compatibility/test_v2_reviewer.py tests/compatibility/test_rollback.py -q
+            python -m pytest tests/compatibility/test_tui.py -k v2 -q
+          fi
+
   # Stable required-check name for branch protection. Matrix leg names change
   # when Bun versions drift; this gate does not.
   ci:
     name: ci
     if: always()
-    needs: [check, coverage]
+    needs: [check, coverage, hosts]
     runs-on: ubuntu-latest
     steps:
       - name: All CI checks green
         run: |
           [ "${{ needs.check.result }}" = "success" ] || { echo "check failed: ${{ needs.check.result }}"; exit 1; }
           [ "${{ needs.coverage.result }}" = "success" ] || { echo "coverage failed: ${{ needs.coverage.result }}"; exit 1; }
+          [ "${{ needs.hosts.result }}" = "success" ] || { echo "hosts failed: ${{ needs.hosts.result }}"; exit 1; }

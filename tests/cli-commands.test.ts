@@ -36,6 +36,8 @@ describe("doctor", () => {
       expect(stderr).toContain("opencode")
       expect(stderr).toContain("model:")
       expect(stderr).toContain("mode:       observe")
+      expect(stderr).toContain("declarative rules audited only")
+      expect(stderr).toContain("reviewer auto-allow/deny remains active")
       expect(stderr).toContain("writable:   yes")
     } finally {
       rmSync(home, { recursive: true })

@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-09-16
+
+### Added
+
+- Separate OpenCode V1 and V2 server adapters with a shared evaluation engine.
+- Isolated V2 reviewer sessions, validated structured output, authenticated
+  cleanup, total review deadlines, and generation-aware status RPC.
+- Dual raw TSX interface, host-aware installation, and separate pytest host harnesses.
+- Compact V2 review progress strip with model, action, and elapsed time.
+
+### Changed
+
+- Require OpenCode V1 1.18.29 or newer, or the pinned V2 2.0.3 release.
+- Preserve JSONC comments during installation and distinguish planned writes.
+- Record independent review identity and application state for both hosts with audit schema 3.
+- Verify compatibility with OpenCode V1 1.18.31 and reject missing TUI runtime
+  dependencies during the build.
+
+### Fixed
+
+- Preserve valid denials below the automatic approval confidence threshold.
+- Show unknown UI status after a watchdog timeout instead of inventing a manual request.
+- Preserve reply acknowledgement ordering and bounded failure handling during shutdown or overload.
+- Reject misspelled trusted policy condition values without allowing an unsafe
+  fallback, and align UI review deadlines with the server budget.
+
 ## [1.3.3] - 2026-09-13
 
 ### Changed
@@ -247,8 +273,7 @@ the default interactive behavior.
 ## [1.0.0] - 2026-08-07
 
 The first stable release. The public configuration schema, the audit schema
-(v2), and the OpenCode 1.x adapter contract are frozen for the 1.x line. See
-[`docs/migration-guide.md`](./docs/migration-guide.md) for the upgrade path.
+(v2), and the OpenCode 1.x adapter contract are frozen for the 1.x line.
 
 ### Added
 

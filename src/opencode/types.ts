@@ -13,6 +13,7 @@ export interface OpenCodeClientLike {
     messages(options: unknown): Promise<ClientResponse<unknown>>
     prompt(options: unknown): Promise<ClientResponse<Record<string, unknown>>>
     delete?(options: unknown): Promise<ClientResponse<unknown>>
+    abort?(options: unknown): Promise<ClientResponse<unknown>>
     /** Fetch session metadata (parentID, title, …). Optional: the actor resolver
      *  degrades to "lineage unavailable" when the host client does not expose it. */
     get?(options: unknown): Promise<ClientResponse<unknown>>
@@ -23,6 +24,7 @@ export interface OpenCodeClientLike {
 }
 
 export interface RuntimeContext {
+  hostVersion?: string
   client: OpenCodeClientLike
   /** What the plugin learned about the host client at startup (probe result).
    *  Surfaced to diagnostics and available to any future adapter consumer. */

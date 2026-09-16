@@ -2,7 +2,7 @@ import { encodeUiStatus } from "../ui-protocol.ts"
 import type { OpenCodeCapabilities, PermissionReplyInput, RawTransport } from "./adapter.ts"
 import { probeCapabilities } from "./capability-detection.ts"
 import { createReplyTransport } from "./reply-transport.ts"
-import { assertV1Host } from "./v2-adapter.ts"
+import { assertV1Host } from "./host-guard.ts"
 import type { OpenCodeClientLike, RuntimeContext } from "./types.ts"
 
 interface V1ServerInput {

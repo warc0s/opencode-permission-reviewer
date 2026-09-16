@@ -1,65 +1,31 @@
-import { createHash } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import type {
-  ActorContext,
-  AskDecision,
-  CapabilityAssessment,
   DecisionSource,
-  EvidenceCompleteness,
   PermissionRequest,
-  PolicyTrace,
   ReviewDecision,
   ReviewEnvelope,
   ReviewExecutionResult,
   ReviewAuditRecord,
   ReviewerConfig,
 } from "../types.ts"
-import { buildEvidenceResult } from "../context.ts"
-import {
-  DECISION_SCHEMA,
-  DECISION_SCHEMA_VERSION,
-  enforceDecision,
-  parseDecision,
-  parseDecisionFromText,
-} from "../decision.ts"
-import {
-  DEFAULT_TENANT_POLICY,
-  REVIEWER_PROMPT_VERSION,
-  REVIEWER_SYSTEM_PROMPT,
-  buildReviewerPrompt,
-} from "../policy.ts"
-import { emergencyBrakeReason } from "../emergency-brake.ts"
-import { evaluatePolicy } from "../policy/policy-engine.ts"
-import { splitModel } from "../config.ts"
+import { DECISION_SCHEMA_VERSION } from "../decision.ts"
+import { REVIEWER_PROMPT_VERSION } from "../policy.ts"
+import { reviewBudgetMs } from "../config.ts"
+import { evaluateReview } from "./review-engine.ts"
+import { ReviewAttempt } from "./review-attempt.ts"
+import { ReviewLimiter } from "./review-limiter.ts"
+import { createV1ContextReader } from "../opencode/v1/context-reader.ts"
+import { V1ReviewerBackend } from "../opencode/v1/reviewer-backend.ts"
 import { createUiStatus, type ReviewUiStatus } from "../ui-protocol.ts"
-import type { SshAuditSummary } from "../ssh-evidence.ts"
-import { redactSecrets } from "../redact.ts"
 import type { RuntimeContext } from "../opencode/types.ts"
-import type { ClientResponse } from "../opencode/types.ts"
-import {
-  extractStructured,
-  extractText,
-  isAlreadyResolvedError,
-  responseData,
-  withTimeout,
-} from "../opencode/transport.ts"
+import { isAlreadyResolvedError, withTimeout } from "../opencode/transport.ts"
 import type { EvidenceProvider } from "../evidence/provider.ts"
 import { assembleEvidence, defaultEvidenceProviders } from "../context/evidence-assembler.ts"
 import type { AskDecisionSource } from "../context/ask-decisions.ts"
-import { applyEscalationDisposition, type EscalationCategory } from "../escalation.ts"
+import { applyEscalationDisposition } from "../escalation.ts"
+import packageInfo from "../../package.json"
 
 type Logger = (message: string, details?: unknown) => void
-
-/**
- * Corrective instruction appended to a text-mode parse-failure retry. Text mode
- * has no host-side schema enforcement, so instead of loosening the strict
- * fail-closed extractor (which could auto-approve a draft decision the model
- * later reversed in prose) the coordinator re-prompts once with this note and
- * parses the retry with the same extractor.
- */
-const TEXT_MODE_RETRY_NOTE =
-  "Your previous response could not be parsed as a decision. Respond again with " +
-  "exactly one JSON object conforming to the schema and nothing else — no prose, " +
-  "no Markdown code fences, no commentary, and no copy of the schema."
 
 /** Stable hash of the canonical request so audit records for the same action
  *  correlate across runs. Patterns are sorted so event order does not matter.
@@ -81,30 +47,12 @@ function actionHash(request: PermissionRequest): string {
  * races.
  */
 export class ReviewCoordinator {
+  private readonly generation = randomUUID()
+  private readonly attempts = new Map<string, ReviewAttempt>()
+  private stopped = false
+  private readonly limiter = new ReviewLimiter()
   private readonly pending = new Map<string, Promise<unknown>>()
-  private readonly reviewerSessions = new Set<string>()
-  private readonly sshAuditByRequest = new Map<string, SshAuditSummary[]>()
-  // Bridge for the resolved actor context, mirroring sshAuditByRequest: the
-  // envelope holds it for the reviewer prompt, audit() runs after the model
-  // call and reads the per-request bridge so both paths observe the same actor.
-  private readonly actorByRequest = new Map<string, ActorContext>()
-  // Bridge for the capability assessment: same lifecycle as the actor/sshAudit
-  // bridges (set in collectEnvelope, read in audit(), cleared in process).
-  private readonly capabilityByRequest = new Map<string, CapabilityAssessment>()
-  // Bridge for the policy trace (same lifecycle as the other bridges).
-  private readonly policyTraceByRequest = new Map<string, PolicyTrace>()
-  // Bridge for the ask decisions surfaced to the reviewer prompt (same
-  // lifecycle: set in collectEnvelope, read in audit, cleared in process).
-  private readonly askDecisionsByRequest = new Map<string, AskDecision[]>()
-  // Per-phase timings captured during the review (context/enrichment from the
-  // assembler, reviewer/reply from the coordinator). audit() runs last and reads
-  // the per-request map so deterministic paths simply omit a phase they skipped.
-  private readonly timingsByRequest = new Map<
-    string,
-    { contextMs?: number; enrichmentMs?: number; reviewerMs?: number; replyMs?: number }
-  >()
-  // Overall evidence completeness resolved during context assembly.
-  private readonly evidenceCompletenessByRequest = new Map<string, EvidenceCompleteness>()
+  private readonly backend: V1ReviewerBackend
   /**
    * Request IDs that a human (or any other reply source) resolved while the
    * automatic review was still in flight. The in-flight review must then give
@@ -121,11 +69,6 @@ export class ReviewCoordinator {
    *  status publishing): a hung call must never leave a review pending
    *  forever; the reviewer prompt keeps its own full timeout budget. */
   private readonly metadataCallTimeoutMs: number
-  /** Directory the reviewer session runs in, once initialized. Sessions are
-   *  created OUTSIDE the project directory so host-loaded project context
-   *  (AGENTS.md, project config instructions and their remote URLs, project
-   *  MCP servers) never becomes part of the reviewer's system prompt. */
-  private isolatedReviewerDirectory: string | undefined
 
   constructor(
     private readonly ctx: RuntimeContext,
@@ -135,6 +78,9 @@ export class ReviewCoordinator {
     askDecisions?: AskDecisionSource,
   ) {
     this.log = logger ?? (() => {})
+    this.backend = new V1ReviewerBackend(ctx, config, this.log, (envelope, ms) =>
+      this.recordReviewerMs(envelope, ms),
+    )
     this.providers = providers ?? defaultEvidenceProviders()
     this.askDecisions = askDecisions
     this.metadataCallTimeoutMs = Math.min(this.config.timeoutMs, 10_000)
@@ -148,30 +94,23 @@ export class ReviewCoordinator {
     await Promise.allSettled([...this.pending.values()])
   }
 
+  async dispose(): Promise<void> {
+    this.stopped = true
+    for (const attempt of this.attempts.values()) attempt.close("cancelled")
+    await withTimeout(Promise.all([this.waitForIdle(), this.backend.waitForIdle()]), 12_000).catch(
+      (error) => this.log("Reviewer shutdown timed out", String(error)),
+    )
+  }
+
   handle(request: PermissionRequest): void {
+    if (this.stopped) return
     if (this.pending.has(request.id)) return
 
     const task = this.process(request)
-      .catch(async (error) => {
-        // If the request was answered manually while we were gathering context
-        // (or racing with the model), do not resurrect it as "manual" — that
-        // would re-prompt the user for a request the server has already closed.
-        if (this.isSuperseded(request)) return
-        const reason = error instanceof Error ? error.message : String(error)
-        const disposed = applyEscalationDisposition(
-          {
-            kind: "escalate",
-            reason,
-            decisionSource: "failure-safe",
-          },
-          this.config,
-          "general",
-        )
-        await this.applyDisposition(request, disposed)
-        this.log("review failed; leaving request for manual approval or fail-closed deny", {
+      .catch((error) => {
+        this.log("review failed; the attempt recorded its failure disposition", {
           requestID: request.id,
-          error: reason,
-          kind: disposed.kind,
+          error: error instanceof Error ? error.message : String(error),
         })
       })
       .finally(() => {
@@ -184,11 +123,20 @@ export class ReviewCoordinator {
 
   async process(request: PermissionRequest): Promise<ReviewExecutionResult> {
     const startedAt = Date.now()
+    const attempt = new ReviewAttempt(this.generation, reviewBudgetMs(this.config))
+    this.attempts.set(request.id, attempt)
+    let release: (() => void) | undefined
     try {
-      const result = await this.processRequest(request)
+      release = await this.limiter.acquire(attempt.signal)
+      const result = await attempt.wait(this.processRequest(request))
       await this.audit(request, result, startedAt)
       return result
     } catch (error) {
+      if (this.isSuperseded(request)) {
+        const result = this.supersedeResult()
+        await this.audit(request, result, startedAt)
+        return result
+      }
       const disposed = applyEscalationDisposition(
         {
           kind: "escalate",
@@ -198,16 +146,19 @@ export class ReviewCoordinator {
         this.config,
         "general",
       )
+      try {
+        if (attempt.application === "unknown" || !attempt.active())
+          await this.emit(request, "unknown", disposed.reason)
+        else await this.applyDisposition(request, disposed)
+      } catch (applicationError) {
+        this.log("failure disposition could not be confirmed", String(applicationError))
+      }
       await this.audit(request, disposed, startedAt)
       throw error
     } finally {
-      this.sshAuditByRequest.delete(request.id)
-      this.actorByRequest.delete(request.id)
-      this.capabilityByRequest.delete(request.id)
-      this.policyTraceByRequest.delete(request.id)
-      this.timingsByRequest.delete(request.id)
-      this.evidenceCompletenessByRequest.delete(request.id)
-      this.askDecisionsByRequest.delete(request.id)
+      attempt.close("finished")
+      this.attempts.delete(request.id)
+      release?.()
     }
   }
 
@@ -220,7 +171,7 @@ export class ReviewCoordinator {
   }
 
   private isSuperseded(request: PermissionRequest): boolean {
-    return this.resolvedManually.has(request.id)
+    return this.stopped || this.resolvedManually.has(request.id)
   }
 
   /**
@@ -288,168 +239,21 @@ export class ReviewCoordinator {
     return result
   }
 
-  private disposeEscalate(
-    result: ReviewExecutionResult,
-    category: EscalationCategory = "general",
-  ): ReviewExecutionResult {
-    return applyEscalationDisposition(result, this.config, category)
-  }
-
   private async processRequest(request: PermissionRequest): Promise<ReviewExecutionResult> {
+    const attempt = this.attempts.get(request.id)!
     await this.emit(request, "reviewing")
-
-    if (this.reviewerSessions.has(request.sessionID)) {
-      const reason = "Automatic reviewer sessions may not request additional permissions."
-      const decision: ReviewDecision = {
-        version: 2,
-        outcome: "deny",
-        risk_level: "critical",
-        user_authorization: "unknown",
-        scope_alignment: "unknown",
-        evidence_completeness: "unknown",
-        rationale: reason,
-        confidence: 1,
-      }
-      return await this.applyDisposition(request, {
-        kind: "deny",
-        reason,
-        decision,
-        decisionSource: "emergency-brake",
-      })
-    }
-
-    const brake = emergencyBrakeReason(request)
-    if (brake) {
-      const decision: ReviewDecision = {
-        version: 2,
-        outcome: "deny",
-        risk_level: "critical",
-        user_authorization: "unknown",
-        scope_alignment: "unknown",
-        evidence_completeness: "unknown",
-        rationale: brake,
-        confidence: 1,
-      }
-      return await this.applyDisposition(request, {
-        kind: "deny",
-        reason: brake,
-        decision,
-        decisionSource: "emergency-brake",
-      })
-    }
-
-    const envelope = await this.collectEnvelope(request)
-    if (envelope.preflightDenial) {
-      const decision: ReviewDecision = {
-        version: 2,
-        outcome: "deny",
-        risk_level: "high",
-        user_authorization: "unknown",
-        scope_alignment: "unknown",
-        evidence_completeness: "unknown",
-        rationale: envelope.preflightDenial,
-        confidence: 1,
-      }
-      return await this.applyDisposition(request, {
-        kind: "deny",
-        reason: envelope.preflightDenial,
-        decision,
-        decisionSource: "deterministic-policy",
-      })
-    }
-    // A manual reply arriving during context collection (transcript, git, ssh)
-    // supersedes the review before we spend a model call on it.
-    if (this.isSuperseded(request)) return this.supersedeResult()
-
-    // Evaluate the declarative policy (deterministic rules, no LLM). In observe
-    // mode this produces a trace for audit only; in enforce mode a manual/deny
-    // route skips the LLM.
-    const policyTrace = evaluatePolicy(
-      envelope.capability,
-      envelope.actor,
-      this.config,
-      this.config.policyRules,
-    )
-    this.policyTraceByRequest.set(request.id, policyTrace)
-    envelope.policyTrace = policyTrace
-    if (this.config.enforcementMode === "enforce") {
-      if (policyTrace.finalRoute === "manual") {
-        const reason = `Declarative policy route: manual. ${policyTrace.matchedRules.map((m) => m.reason).join("; ")}`
-        const disposed = this.disposeEscalate({
-          kind: "escalate",
-          reason,
-          decisionSource: "deterministic-policy",
-        })
-        return await this.applyDisposition(request, disposed)
-      }
-      if (policyTrace.finalRoute === "deny") {
-        const reason = `Declarative policy route: deny. ${policyTrace.matchedRules.map((m) => m.reason).join("; ")}`
-        const decision: ReviewDecision = {
-          version: 2,
-          outcome: "deny",
-          risk_level: "high",
-          user_authorization: "unknown",
-          scope_alignment: "unknown",
-          evidence_completeness: "unknown",
-          rationale: reason,
-          confidence: 1,
+    const result = await evaluateReview(request, this.config, {
+      collect: (pending) => this.collectEnvelope(pending),
+      review: (envelope) => this.runReviewer(envelope),
+      active: () => attempt.active() && !this.isSuperseded(request),
+      auxiliarySession: (sessionID) => this.backend.owns(sessionID),
+      observe: (envelope) => {
+        if (envelope.policyTrace !== undefined) {
+          this.remember(request.id, { policyTrace: envelope.policyTrace })
         }
-        return await this.applyDisposition(request, {
-          kind: "deny",
-          reason,
-          decision,
-          decisionSource: "deterministic-policy",
-        })
-      }
-    }
-
-    if (this.isSuperseded(request)) return this.supersedeResult()
-    let reviewed = await this.runReviewer(envelope)
-    if (this.isSuperseded(request)) return this.supersedeResult()
-
-    // Deterministic blocks on automatic approval. The reviewer model's
-    // confidence is irrelevant here: a degraded trusted config may have lost
-    // the restrictions it was supposed to carry, and elided evidence means the
-    // model judged an action it could not see in full. Both escalate.
-    if (reviewed.kind === "allow") {
-      const block = this.autoApprovalBlockReason(envelope)
-      if (block !== undefined) {
-        reviewed = this.disposeEscalate(
-          {
-            kind: "escalate",
-            reason: block,
-            ...(reviewed.decision === undefined ? {} : { decision: reviewed.decision }),
-            ...(reviewed.reviewSessionID === undefined
-              ? {}
-              : { reviewSessionID: reviewed.reviewSessionID }),
-            decisionSource: "deterministic-policy",
-          },
-          "general",
-        )
-      }
-    }
-
-    // runReviewer already applied category-specific knobs (invalid-decision /
-    // reviewer-failure) and stamps escalationDisposition when it does. Remaining
-    // escalate results (LLM escalate, gates) get the general disposition here.
-    const disposed =
-      reviewed.kind === "escalate" && reviewed.escalationDisposition === undefined
-        ? this.disposeEscalate(reviewed, "general")
-        : reviewed
-
-    return await this.applyDisposition(request, disposed)
-  }
-
-  /** Why an LLM "allow" must not auto-approve, or undefined when it may. */
-  private autoApprovalBlockReason(envelope: ReviewEnvelope): string | undefined {
-    const degraded = this.config.configDegraded
-    if (degraded !== undefined && degraded.length > 0) {
-      return `Automatic approval is disabled: the reviewer configuration is degraded (${degraded.join("; ")}). Fix the trusted config to restore auto-approval.`
-    }
-    if (envelope.actionEvidenceComplete === false) {
-      return "Automatic approval is blocked: a material part of the pending action was elided or truncated in the reviewer evidence, so the model judged an incomplete view of the action."
-    }
-    return undefined
+      },
+    })
+    return attempt.active() ? this.applyDisposition(request, result) : this.supersedeResult()
   }
 
   handlePermissionReply(event: unknown): void {
@@ -462,12 +266,14 @@ export class ReviewCoordinator {
         : undefined
     if (!properties || typeof properties.sessionID !== "string") return
 
-    // Any terminal reply (once | always | reject) to a request we are still
-    // reviewing means the in-flight review is now superseded. OpenCode always
-    // carries requestID (verified against the SDK V2 contract), so we key off
-    // it and never fall back to the session (which could cancel sibling reviews).
+    // While our reply is in transport, its event can precede its acknowledgement.
+    // Only the transport can distinguish our accepted reply from a competing
+    // human reply. Before that phase, a terminal event supersedes the review.
     if (typeof properties.requestID === "string" && this.pending.has(properties.requestID)) {
+      const attempt = this.attempts.get(properties.requestID)
+      if (attempt?.application === "unknown" || attempt?.application === "reply-accepted") return
       this.resolvedManually.add(properties.requestID)
+      attempt?.close("cancelled")
     }
   }
 
@@ -484,27 +290,28 @@ export class ReviewCoordinator {
 
   private async collectEnvelope(request: PermissionRequest): Promise<ReviewEnvelope> {
     const envelope = await assembleEvidence(request, this.providers, {
-      client: this.ctx.client,
+      client: createV1ContextReader(this.ctx.client, this.attempts.get(request.id)?.signal),
       directory: this.ctx.directory,
       worktree: this.ctx.worktree,
       config: this.config,
       ...(this.askDecisions === undefined ? {} : { askDecisions: this.askDecisions }),
     })
+    if (!this.attempts.get(request.id)?.active()) return envelope
     // Bridge the ssh audit summary from the envelope to the audit() call. The
     // envelope carries sshAudit for the reviewer prompt; audit() runs after the
     // model call and reads the per-request bridge so both the success and the
     // error-path audits observe the same ssh summary.
-    this.sshAuditByRequest.set(request.id, envelope.sshAudit)
-    if (envelope.actor !== undefined) this.actorByRequest.set(request.id, envelope.actor)
+    this.remember(request.id, { sshAudit: envelope.sshAudit })
+    if (envelope.actor !== undefined) this.remember(request.id, { actor: envelope.actor })
     if (envelope.capability !== undefined) {
-      this.capabilityByRequest.set(request.id, envelope.capability)
+      this.remember(request.id, { capability: envelope.capability })
     }
-    if (envelope.timings !== undefined) this.timingsByRequest.set(request.id, envelope.timings)
+    if (envelope.timings !== undefined) this.remember(request.id, { timings: envelope.timings })
     if (envelope.evidenceCompleteness !== undefined) {
-      this.evidenceCompletenessByRequest.set(request.id, envelope.evidenceCompleteness)
+      this.remember(request.id, { evidenceCompleteness: envelope.evidenceCompleteness })
     }
     if (envelope.askDecisions !== undefined && envelope.askDecisions.length > 0) {
-      this.askDecisionsByRequest.set(request.id, envelope.askDecisions)
+      this.remember(request.id, { askDecisions: envelope.askDecisions })
     }
     return envelope
   }
@@ -516,13 +323,13 @@ export class ReviewCoordinator {
   ): Promise<void> {
     if (!this.ctx.writeAudit) return
     const decision = result.decision
-    const ssh = this.sshAuditByRequest.get(request.id)
-    const actor = this.actorByRequest.get(request.id)
-    const capability = this.capabilityByRequest.get(request.id)
-    const policyTrace = this.policyTraceByRequest.get(request.id)
-    const timings = this.timingsByRequest.get(request.id)
-    const evidence = this.evidenceCompletenessByRequest.get(request.id)
-    const askDecisions = this.askDecisionsByRequest.get(request.id)
+    const ssh = this.attempts.get(request.id)?.evidence.sshAudit
+    const actor = this.attempts.get(request.id)?.evidence.actor
+    const capability = this.attempts.get(request.id)?.evidence.capability
+    const policyTrace = this.attempts.get(request.id)?.evidence.policyTrace
+    const timings = this.attempts.get(request.id)?.evidence.timings
+    const evidence = this.attempts.get(request.id)?.evidence.evidenceCompleteness
+    const askDecisions = this.attempts.get(request.id)?.evidence.askDecisions
     // Infer the source when a path did not set it explicitly (the process()
     // catch builds an escalate with no decision): a result still carrying a
     // reviewer decision is an LLM outcome; everything else without an explicit
@@ -533,7 +340,20 @@ export class ReviewCoordinator {
     if (evidence !== undefined) warnings.push(...evidence.reasons)
     if (capability !== undefined) warnings.push(...capability.analysisWarnings)
     const record: ReviewAuditRecord = {
-      schemaVersion: 2,
+      schemaVersion: 3,
+      reviewID: this.attempts.get(request.id)!.id,
+      hostRequestID: request.id,
+      hostGeneration: "v1",
+      hostVersion: this.ctx.hostVersion ?? "unknown",
+      generation: this.generation,
+      directory: this.ctx.directory,
+      nativeAction: request.permission,
+      pluginVersion: packageInfo.version,
+      effectiveConfigHash: createHash("sha256").update(JSON.stringify(this.config)).digest("hex"),
+      actionFingerprint: "v1:" + actionHash(request),
+      application: this.isSuperseded(request)
+        ? "superseded"
+        : (this.attempts.get(request.id)?.application ?? "unknown"),
       decisionSchemaVersion: DECISION_SCHEMA_VERSION,
       promptVersion: REVIEWER_PROMPT_VERSION,
       decisionSource,
@@ -638,249 +458,20 @@ export class ReviewCoordinator {
     })
   }
 
-  /**
-   * Resolve (and create once) the scratch directory reviewer sessions run in.
-   * The directory has no AGENTS.md/CLAUDE.md and no project config, so the
-   * host only loads the user's trusted global instructions for the reviewer
-   * session. Returns undefined when the directory cannot be created so the
-   * caller fails into the configured reviewer-error disposition.
-   */
-  private async reviewerSessionDirectory(): Promise<string | undefined> {
-    if (this.isolatedReviewerDirectory !== undefined) return this.isolatedReviewerDirectory
-    try {
-      const { mkdir } = await import("node:fs/promises")
-      const { expandHome } = await import("../audit.ts")
-      const base =
-        this.ctx.reviewerDirectoryBase ?? "~/.local/share/opencode/permission-reviewer-isolated"
-      const directory = expandHome(base)
-      await mkdir(directory, { recursive: true, mode: 0o700 })
-      this.isolatedReviewerDirectory = directory
-      return directory
-    } catch (error) {
-      this.log("could not create the isolated reviewer directory", {
-        error: error instanceof Error ? error.message : String(error),
-      })
-      return undefined
-    }
+  private runReviewer(envelope: ReviewEnvelope): Promise<ReviewExecutionResult> {
+    return this.backend.review(envelope, this.attempts.get(envelope.request.id)!)
   }
 
-  /** Create an instruction-isolated session or fail into the configured error route. */
-  private async createReviewerSession(
-    envelope: ReviewEnvelope,
-    isolated: string | undefined,
-  ): Promise<{ id: string; directory: string }> {
-    if (isolated === undefined) throw new Error("reviewer isolation unavailable")
-    const title = `[permission-review] ${envelope.request.permission}: ${redactSecrets(
-      envelope.request.patterns.join(", "),
-    ).slice(0, 120)}`
-    const create = async (directory: string) => {
-      const created = responseData(
-        await withTimeout(
-          this.ctx.client.session.create({
-            body: {
-              title,
-            },
-            query: { directory },
-          }),
-          this.metadataCallTimeoutMs,
-        ),
-        "session.create",
-      )
-      if (typeof created.id !== "string")
-        throw new Error("session.create returned an invalid session ID")
-      return created.id
-    }
-
-    return { id: await create(isolated), directory: isolated }
-  }
-
-  private async runReviewer(envelope: ReviewEnvelope): Promise<ReviewExecutionResult> {
-    const { providerID, modelID } = splitModel(this.config.model)
-    const model = { providerID, modelID }
-    let reviewSessionID: string | undefined
-    let sessionDirectory: string | undefined
-
-    try {
-      // Never review inside the project if instruction isolation fails.
-      const isolated = await this.reviewerSessionDirectory()
-      const created = await this.createReviewerSession(envelope, isolated)
-      sessionDirectory = created.directory
-      reviewSessionID = created.id
-      this.reviewerSessions.add(reviewSessionID)
-
-      const toolIDs = responseData(
-        await withTimeout(
-          this.ctx.client.tool.ids({ query: { directory: sessionDirectory } }),
-          this.metadataCallTimeoutMs,
-        ),
-        "tool.ids",
-      )
-      // Deny every named tool AND everything else via the wildcard: the host
-      // turns each entry into a session permission rule, and session rules
-      // take precedence over agent-config allows. A plain name list is not
-      // enough — MCP tools (registered outside the tool registry) and the MCP
-      // resource tools would keep executing under host-configured allows. The
-      // wildcard key covers unknown operational tools, including MCP tools.
-      // The host filters StructuredOutput through the same permission rules.
-      const tools: Record<string, boolean> = { "*": false }
-      for (const id of toolIDs) tools[id] = false
-      if (this.config.outputFormat === "json_schema") {
-        delete tools.StructuredOutput
-        tools.StructuredOutput = true
-      }
-      const policy = this.config.policy ?? DEFAULT_TENANT_POLICY
-      const evidence = buildEvidenceResult(envelope, this.config)
-      envelope.actionEvidenceComplete = evidence.actionEvidenceComplete
-      const prompt = buildReviewerPrompt(policy, evidence.text, this.config.outputFormat)
-
-      const first = await this.promptReviewer(
-        reviewSessionID,
-        sessionDirectory,
-        model,
-        tools,
-        prompt,
-      )
-      let reviewerMs = first.ms
-      // Record the elapsed time as soon as the reviewer returns, so a response
-      // that turns out to be invalid (no data / transport error) still carries
-      // reviewerMs in the audit before responseData throws below.
-      this.recordReviewerMs(envelope, reviewerMs)
-      const data = responseData(first.response, "session.prompt")
-      const parsed =
-        this.config.outputFormat === "text"
-          ? parseDecisionFromText(extractText(data) ?? "")
-          : parseDecision(extractStructured(data))
-
-      // Text mode has no host-side schema enforcement or retry (unlike
-      // json_schema's `retryCount: 2`), so a single flaky response would
-      // escalate. Re-prompt once with a corrective note. The retry still goes
-      // through the same strict extractor and enforceDecision invariants, so it
-      // can never approve anything the first parse would not; it only reduces
-      // spurious escalations from weaker models. Structured mode is left alone
-      // because OpenCode already retries it.
-      if (!parsed && this.config.outputFormat === "text") {
-        const retry = await this.promptReviewer(
-          reviewSessionID,
-          sessionDirectory,
-          model,
-          tools,
-          prompt,
-          TEXT_MODE_RETRY_NOTE,
-        )
-        reviewerMs += retry.ms
-        this.recordReviewerMs(envelope, reviewerMs)
-        const retryData = responseData(retry.response, "session.prompt")
-        const retryParsed = parseDecisionFromText(extractText(retryData) ?? "")
-        // The retry output is authoritative for the escalation decision: if it
-        // parsed, use it; otherwise fall through to the manual-review path.
-        if (retryParsed !== undefined) {
-          return {
-            ...enforceDecision(retryParsed, this.config),
-            reviewSessionID,
-            decisionSource: "llm-reviewer",
-          }
-        }
-      }
-
-      if (!parsed) {
-        return applyEscalationDisposition(
-          {
-            kind: "escalate",
-            reason:
-              this.config.outputFormat === "text"
-                ? "Reviewer returned missing, invalid, or unparseable text output."
-                : "Reviewer returned missing or invalid structured output.",
-            reviewSessionID,
-            decisionSource: "failure-safe",
-          },
-          this.config,
-          "invalid-decision",
-        )
-      }
-      return {
-        ...enforceDecision(parsed, this.config),
-        reviewSessionID,
-        decisionSource: "llm-reviewer",
-      }
-    } catch (error) {
-      return applyEscalationDisposition(
-        {
-          kind: "escalate",
-          reason: error instanceof Error ? error.message : String(error),
-          ...(reviewSessionID === undefined ? {} : { reviewSessionID }),
-          decisionSource: "failure-safe",
-        },
-        this.config,
-        "reviewer-failure",
-      )
-    } finally {
-      if (reviewSessionID !== undefined) {
-        this.reviewerSessions.delete(reviewSessionID)
-        if (!this.config.retainReviewSessions && this.ctx.client.session.delete) {
-          await withTimeout(
-            this.ctx.client.session.delete({
-              path: { id: reviewSessionID },
-              query: { directory: sessionDirectory ?? this.ctx.directory },
-            }),
-            Math.min(this.config.timeoutMs, 5_000),
-          ).catch(() => {})
-        }
-      }
-    }
-  }
-
-  /**
-   * Issue a single reviewer prompt in the review session and return the raw
-   * response plus its elapsed time. `responseData` is applied by the caller so
-   * the caller can record the elapsed time even when the response is invalid.
-   * The role/safety rules live in the system prompt so they carry system-level
-   * priority over the untrusted evidence; the per-request part (and an optional
-   * corrective retry note) is appended as user content.
-   */
-  private async promptReviewer(
-    reviewSessionID: string,
-    sessionDirectory: string,
-    model: { providerID: string; modelID: string },
-    tools: Record<string, boolean>,
-    prompt: string,
-    retryNote?: string,
-  ): Promise<{ response: ClientResponse<Record<string, unknown>>; ms: number }> {
-    const start = performance.now()
-    const response = await withTimeout(
-      this.ctx.client.session.prompt({
-        path: { id: reviewSessionID },
-        query: { directory: sessionDirectory },
-        body: {
-          model,
-          variant: this.config.variant,
-          tools,
-          system: REVIEWER_SYSTEM_PROMPT,
-          format:
-            this.config.outputFormat === "text"
-              ? { type: "text" }
-              : {
-                  type: "json_schema",
-                  schema: DECISION_SCHEMA,
-                  retryCount: 2,
-                },
-          parts:
-            retryNote === undefined
-              ? [{ type: "text", text: prompt }]
-              : [
-                  { type: "text", text: prompt },
-                  { type: "text", text: retryNote },
-                ],
-        },
-      }),
-      this.config.timeoutMs,
-    )
-    return { response, ms: performance.now() - start }
+  private remember(requestID: string, evidence: ReviewAttempt["evidence"]): void {
+    const attempt = this.attempts.get(requestID)
+    if (attempt?.active()) Object.assign(attempt.evidence, evidence)
   }
 
   /** Fold the reviewer phase's elapsed time into the request's timing record. */
   private recordReviewerMs(envelope: ReviewEnvelope, reviewerMs: number): void {
-    const currentTimings = this.timingsByRequest.get(envelope.request.id) ?? {}
-    this.timingsByRequest.set(envelope.request.id, { ...currentTimings, reviewerMs })
+    if (!this.attempts.get(envelope.request.id)?.active()) return
+    const currentTimings = this.attempts.get(envelope.request.id)?.evidence.timings ?? {}
+    this.remember(envelope.request.id, { timings: { ...currentTimings, reviewerMs } })
   }
 
   /**
@@ -895,6 +486,9 @@ export class ReviewCoordinator {
     message?: string,
   ): Promise<boolean> {
     const replyStart = performance.now()
+    const attempt = this.attempts.get(request.id)
+    if (!attempt?.active()) return false
+    attempt.application = "unknown"
     const response = await withTimeout(
       this.ctx.permissionReply({
         path: { requestID: request.id },
@@ -907,10 +501,11 @@ export class ReviewCoordinator {
       this.metadataCallTimeoutMs,
     )
     const replyMs = performance.now() - replyStart
-    const currentTimings = this.timingsByRequest.get(request.id) ?? {}
-    this.timingsByRequest.set(request.id, { ...currentTimings, replyMs })
+    const currentTimings = this.attempts.get(request.id)?.evidence.timings ?? {}
+    this.remember(request.id, { timings: { ...currentTimings, replyMs } })
     if (response.error !== undefined) {
       if (isAlreadyResolvedError(response.error)) {
+        attempt.application = "superseded"
         this.resolvedManually.add(request.id)
         this.log("review reply rejected because the request was already resolved", {
           requestID: request.id,
@@ -920,6 +515,7 @@ export class ReviewCoordinator {
       }
       throw new Error(`permission.reply failed: ${JSON.stringify(response.error)}`)
     }
+    attempt.application = "reply-accepted"
     return true
   }
 
@@ -931,11 +527,11 @@ export class ReviewCoordinator {
     escalationDisposition?: ReviewExecutionResult["escalationDisposition"],
   ): Promise<void> {
     if (!this.ctx.publishUiStatus) return
-    const actor = this.actorByRequest.get(request.id)
+    const actor = this.attempts.get(request.id)?.evidence.actor
     const status = createUiStatus(request, phase, {
       model: this.config.model,
       variant: this.config.variant,
-      timeoutMs: this.config.timeoutMs,
+      timeoutMs: reviewBudgetMs(this.config),
       ...(reason === undefined ? {} : { reason }),
       ...(decision === undefined ? {} : { decision }),
       ...(escalationDisposition === undefined ? {} : { escalationDisposition }),

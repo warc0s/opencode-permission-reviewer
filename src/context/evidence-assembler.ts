@@ -7,7 +7,9 @@ import {
 } from "../context.ts"
 import type { AskDecisionSource } from "./ask-decisions.ts"
 import type { OpenCodeClientLike } from "../opencode/types.ts"
-import { responseData, withTimeout } from "../opencode/transport.ts"
+import type { ContextReader } from "../core/ports.ts"
+import { createV1ContextReader } from "../opencode/v1/context-reader.ts"
+import { withTimeout } from "../opencode/transport.ts"
 import { resolveActorContext } from "./actor-resolver.ts"
 import { resolveActionPurpose } from "./action-purpose.ts"
 import { parseCommand } from "../capability/command-parser.ts"
@@ -19,7 +21,7 @@ import { LocalScriptEvidenceProvider } from "../evidence/local-script-provider.t
 import { GitEvidenceProvider } from "../evidence/git-provider.ts"
 
 export interface EvidenceAssemblyContext {
-  client: OpenCodeClientLike
+  client: OpenCodeClientLike | ContextReader
   directory: string
   worktree: string
   config: ReviewerConfig
@@ -39,23 +41,22 @@ export async function assembleEvidence(
   ctx: EvidenceAssemblyContext,
 ): Promise<ReviewEnvelope> {
   const contextStart = performance.now()
+  const reader = "messages" in ctx.client ? ctx.client : createV1ContextReader(ctx.client)
   // A transcript fetch that never settles would leave the review pending
   // forever; bound it well above any realistic fetch time.
   const response = await withTimeout(
-    ctx.client.session.messages({
-      path: { id: request.sessionID },
-      query: {
-        directory: ctx.directory,
-        limit: Math.max(ctx.config.historyMessages, ctx.config.transcriptMessages * 2, 20),
-      },
-    }),
+    reader.messages(
+      request.sessionID,
+      ctx.directory,
+      Math.max(ctx.config.historyMessages, ctx.config.transcriptMessages * 2, 20),
+    ),
     Math.min(ctx.config.timeoutMs, 15_000),
   )
-  const messages = normalizeMessages(responseData(response, "session.messages"))
+  const messages = normalizeMessages(response)
 
   // Resolve actor/lineage/intent. The resolver is resilient — it never throws,
   // degrading to "unknown" — so this cannot block a review.
-  const actor = await resolveActorContext(request, messages, ctx.client, ctx.directory, ctx.config)
+  const actor = await resolveActorContext(request, messages, reader, ctx.directory, ctx.config)
 
   // Parse the bash command and derive capability facts. Only computed for bash
   // requests; non-bash permissions have no command surface to analyze. Wrapped in

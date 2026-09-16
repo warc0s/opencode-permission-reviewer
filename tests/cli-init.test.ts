@@ -9,12 +9,24 @@ async function run(
   args: string[],
   env: Record<string, string>,
 ): Promise<{ code: number; stdout: string; stderr: string }> {
+  const isolatedArgs =
+    args.includes("--host") || args.includes("--binary") ? [...args] : ["--host", "v1", ...args]
+  if (!isolatedArgs.includes("--binary")) isolatedArgs.push("--binary", "/missing/opencode")
+  // The host session (this suite often runs inside OpenCode) may export
+  // XDG_CONFIG_HOME or OPENCODE_CONFIG* pointing at a real config where this
+  // plugin is already registered; init would resolve that config instead of
+  // the isolated HOME and plan phantom "noop" writes.
+  const inherited: Record<string, string | undefined> = { ...process.env }
+  delete inherited.XDG_CONFIG_HOME
+  delete inherited.OPENCODE_CONFIG
+  delete inherited.OPENCODE_CONFIG_DIR
+  delete inherited.OPENCODE_CONFIG_CONTENT
   const proc = Bun.spawn({
-    cmd: ["bun", "run", "src/cli/explain.ts", "init", ...args],
+    cmd: ["bun", "run", "src/cli/explain.ts", "init", ...isolatedArgs],
     cwd: import.meta.dir + "/..",
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...process.env, ...env },
+    env: { ...inherited, ...env },
   })
   const [code, stdout, stderr] = await Promise.all([
     proc.exited,
@@ -31,6 +43,64 @@ describe("cli init", () => {
   afterEach(() => {
     if (home) rmSync(home, { recursive: true, force: true })
     if (project) rmSync(project, { recursive: true, force: true })
+  })
+
+  test("V2 writes object entries and global cli config idempotently", async () => {
+    home = mkdtempSync(join(tmpdir(), "init-home-"))
+    project = mkdtempSync(join(tmpdir(), "init-proj-"))
+    const env = { HOME: home, XDG_CONFIG_HOME: join(home, ".config") }
+    const args = [
+      "--host",
+      "v2",
+      "--binary",
+      "/missing/opencode",
+      "--yes",
+      "--tui",
+      "--project",
+      project,
+    ]
+    expect((await run(args, env)).code).toBe(0)
+    expect((await run(args, env)).code).toBe(0)
+    const config = JSON.parse(readFileSync(join(project, "opencode.json"), "utf8"))
+    expect(config.plugins).toHaveLength(1)
+    expect(typeof config.plugins[0].package).toBe("string")
+    expect(config.plugin).toBeUndefined()
+    const cli = JSON.parse(readFileSync(join(home, ".config", "opencode", "cli.json"), "utf8"))
+    expect(cli.plugins).toHaveLength(1)
+    expect(existsSync(join(project, "tui.json"))).toBe(false)
+  })
+
+  test("auto refuses unknown hosts and JSON reports never claim unapplied writes", async () => {
+    home = mkdtempSync(join(tmpdir(), "init-home-"))
+    project = mkdtempSync(join(tmpdir(), "init-proj-"))
+    const env = { HOME: home }
+    expect(
+      (await run(["--binary", "/missing/opencode", "--yes", "--project", project], env)).code,
+    ).toBe(2)
+    const result = await run(["--host", "v2", "--json", "--project", project], env)
+    expect(JSON.parse(result.stdout).writes).toEqual([])
+    expect(JSON.parse(result.stdout).plannedWrites).toHaveLength(1)
+    expect(existsSync(join(project, "opencode.json"))).toBe(false)
+  })
+
+  test("auto accepts supported versions and refuses unsupported versions without writes", async () => {
+    home = mkdtempSync(join(tmpdir(), "init-home-"))
+    project = mkdtempSync(join(tmpdir(), "init-proj-"))
+    const binary = join(home, "fixture-opencode")
+    for (const [version, supported] of [
+      ["1.18.28", false],
+      ["1.18.29", true],
+      ["2.0.3", true],
+      ["2.0.4", false],
+      ["2.0.3-beta.1", false],
+    ] as const) {
+      writeFileSync(binary, `#!/bin/sh\nprintf '${version}\\n'\n`, { mode: 0o700 })
+      const result = await run(["--binary", binary, "--dry-run", "--project", project], {
+        HOME: home,
+      })
+      expect(result.code).toBe(supported ? 0 : 2)
+      expect(existsSync(join(project, "opencode.json"))).toBe(false)
+    }
   })
 
   test("--dry-run writes nothing", async () => {
@@ -159,6 +229,18 @@ describe("cli init apply guards", () => {
     dir = mkdtempSync(join(tmpdir(), "init-guard-"))
     return dir
   }
+
+  test("incompatible entry shapes, versions, and duplicates require explicit migration", () => {
+    const path = join(freshDir(), "opencode.json")
+    for (const entry of [pkg.name, [pkg.name, {}], { package: `${pkg.name}@1.0.0` }]) {
+      writeFileSync(path, JSON.stringify({ plugins: [entry] }))
+      expect(planFileChange(path, pkg, "v2").action).toBe("error")
+    }
+    writeFileSync(path, JSON.stringify({ plugins: [{ package: pkg.name }, { package: pkg.name }] }))
+    expect(planFileChange(path, pkg, "v2").action).toBe("error")
+    writeFileSync(path, JSON.stringify({ plugin: [{ package: pkg.name }] }))
+    expect(planFileChange(path, pkg, "v1").action).toBe("error")
+  })
 
   test("refuses a create write when the file appeared after planning", () => {
     const directory = freshDir()

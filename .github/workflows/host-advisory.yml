@@ -1,0 +1,21 @@
+name: host compatibility advisory
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "19 8 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  newer-hosts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.5"
+      - name: Report releases outside the verified matrix
+        run: bun tests/compatibility/host-advisory.ts

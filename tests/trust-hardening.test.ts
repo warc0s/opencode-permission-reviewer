@@ -1317,3 +1317,185 @@ describe("review regression boundaries", () => {
     expect(Object.values(prompt.body.tools).every((value) => value === false)).toBe(true)
   })
 })
+
+// --- condition enum validation fails closed -------------------------------------
+
+describe("trust hardening - condition enum typos fail closed", () => {
+  const badConditions: Array<[string, Record<string, unknown>]> = [
+    ["repositoryTrust", { repositoryTrust: ["untrustd"] }],
+    ["actorProfile", { actorProfile: ["opeator"] }],
+    ["actionClass", { actionClass: ["netwrk"] }],
+  ]
+
+  for (const layer of ["global", "inline"] as const) {
+    for (const [name, when] of badConditions) {
+      test(`misspelled trusted ${layer} ${name} drops the rule and blocks model allow`, async () => {
+        const dir = tempDir("reviewer-enum-")
+        const path = join(dir, "config.json")
+        try {
+          const rule = {
+            id: `bad-${name}`,
+            source: layer,
+            effect: "deny",
+            reason: "enum typo",
+            when,
+          }
+          writeFileSync(path, JSON.stringify(layer === "global" ? { policyRules: [rule] } : {}))
+          setGlobalConfigPathForTests(path)
+          const config = loadResolvedConfig(layer === "inline" ? { policyRules: [rule] } : {})
+          expect(config.configDegraded?.length).toBeGreaterThan(0)
+          expect(config.policyRules).toHaveLength(0)
+          const client = new MockClient()
+          expect((await runtime(client, config).runtime.process(request())).kind).toBe("escalate")
+          expect(client.replies).toHaveLength(0)
+        } finally {
+          setGlobalConfigPathForTests(undefined)
+          rmSync(dir, { recursive: true, force: true })
+        }
+      })
+    }
+  }
+
+  for (const layer of ["global", "inline"] as const) {
+    for (const when of [{ repositoryTrust: [] }, { actionClass: [] }]) {
+      test(`empty trusted ${layer} list ${JSON.stringify(when)} drops the rule and degrades`, () => {
+        const dir = tempDir("reviewer-enum-empty-")
+        const path = join(dir, "config.json")
+        try {
+          const rule = {
+            id: "empty-list",
+            source: layer,
+            effect: "deny",
+            reason: "empty list",
+            when,
+          }
+          writeFileSync(path, JSON.stringify(layer === "global" ? { policyRules: [rule] } : {}))
+          setGlobalConfigPathForTests(path)
+          const config = loadResolvedConfig(layer === "inline" ? { policyRules: [rule] } : {})
+          expect(config.configDegraded?.length).toBeGreaterThan(0)
+          expect(config.policyRules).toHaveLength(0)
+        } finally {
+          setGlobalConfigPathForTests(undefined)
+          rmSync(dir, { recursive: true, force: true })
+        }
+      })
+    }
+  }
+
+  test("valid enum members and modes survive without degradation", () => {
+    const dir = tempDir("reviewer-enum-valid-")
+    const path = join(dir, "config.json")
+    try {
+      writeFileSync(
+        path,
+        JSON.stringify({
+          enforcementMode: "enforce",
+          escalationMode: "deny",
+          policyRules: [
+            {
+              id: "valid",
+              source: "global",
+              effect: "deny",
+              reason: "valid members",
+              when: {
+                repositoryTrust: ["untrusted"],
+                actionClass: ["network"],
+                actorProfile: ["operator"],
+              },
+            },
+          ],
+        }),
+      )
+      setGlobalConfigPathForTests(path)
+      const config = loadResolvedConfig({})
+      expect(config.configDegraded).toBeUndefined()
+      expect(config.policyRules).toHaveLength(1)
+      expect(config.enforcementMode).toBe("enforce")
+      expect(config.escalationMode).toBe("deny")
+    } finally {
+      setGlobalConfigPathForTests(undefined)
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a mistyped global enforcementMode degrades and blocks model allow", async () => {
+    const dir = tempDir("reviewer-enum-mode-")
+    const path = join(dir, "config.json")
+    try {
+      writeFileSync(path, JSON.stringify({ enforcementMode: "enfroce" }))
+      setGlobalConfigPathForTests(path)
+      const config = loadResolvedConfig({})
+      expect(config.configDegraded!.join(" ")).toContain("enforcementMode")
+      expect(config.enforcementMode).toBe("observe")
+      const client = new MockClient()
+      expect((await runtime(client, config).runtime.process(request())).kind).toBe("escalate")
+      expect(client.replies).toHaveLength(0)
+    } finally {
+      setGlobalConfigPathForTests(undefined)
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a mistyped trusted inline enforcementMode degrades without changing the safe default", () => {
+    const dir = tempDir("reviewer-enum-inline-mode-")
+    try {
+      setGlobalConfigPathForTests(join(dir, "missing-global.jsonc"))
+      const config = loadResolvedConfig({ enforcementMode: "enfroce" })
+      expect(config.configDegraded!.join(" ")).toContain("enforcementMode")
+      expect(config.enforcementMode).toBe("observe")
+    } finally {
+      setGlobalConfigPathForTests(undefined)
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a mistyped global escalationMode degrades the config", () => {
+    const dir = tempDir("reviewer-enum-escalation-")
+    const path = join(dir, "config.json")
+    try {
+      writeFileSync(path, JSON.stringify({ escalationMode: "dnye" }))
+      setGlobalConfigPathForTests(path)
+      const config = loadResolvedConfig({})
+      expect(config.configDegraded!.join(" ")).toContain("escalationMode")
+      expect(config.escalationMode).toBe("manual")
+    } finally {
+      setGlobalConfigPathForTests(undefined)
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a misspelled project rule member is dropped with a warning and no degradation", () => {
+    const projectDir = tempDir("reviewer-enum-project-")
+    const outsideDir = tempDir("reviewer-enum-outside-")
+    const warnings: string[] = []
+    const originalWarn = console.warn
+    console.warn = (message: string) => warnings.push(String(message))
+    try {
+      setGlobalConfigPathForTests(join(outsideDir, "missing-global.jsonc"))
+      mkdirSync(join(projectDir, ".opencode"), { recursive: true })
+      writeFileSync(
+        projectConfigPath(projectDir),
+        JSON.stringify({
+          policyRules: [
+            {
+              id: "project-typo",
+              source: "project",
+              effect: "deny",
+              reason: "project typo",
+              when: { repositoryTrust: ["untrustd"] },
+            },
+          ],
+        }),
+      )
+      const config = loadResolvedConfig(undefined, projectDir)
+      expect(config.policyRules).toHaveLength(0)
+      expect(config.configDegraded).toBeUndefined()
+      expect(warnings.some((w) => w.includes("project") && w.includes("dropped"))).toBe(true)
+    } finally {
+      console.warn = originalWarn
+      setGlobalConfigPathForTests(undefined)
+      rmSync(projectDir, { recursive: true, force: true })
+      rmSync(outsideDir, { recursive: true, force: true })
+    }
+  })
+})

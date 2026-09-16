@@ -13,7 +13,21 @@ const askFlow = process.argv.includes("--ask-flow")
 const directory =
   process.env.REVIEWER_LIVE_DIRECTORY ??
   new URL("./live-fixture", import.meta.url).pathname.replace(/\/$/, "")
-const client = createOpencodeClient({ baseUrl, directory })
+// Optional server password for hosts started with OPENCODE_SERVER_PASSWORD.
+// The SDK merges these headers with the directory header it already sets,
+// so omitting the variable leaves previous behavior unchanged.
+const livePassword = process.env.REVIEWER_LIVE_PASSWORD
+const client = createOpencodeClient({
+  baseUrl,
+  directory,
+  ...(livePassword
+    ? {
+        headers: {
+          Authorization: `Basic ${Buffer.from(`opencode:${livePassword}`).toString("base64")}`,
+        },
+      }
+    : {}),
+})
 
 const driverModel = { providerID: "opencode", modelID: "mimo-v2.5-free" }
 const isolatedPermissions = [

@@ -9,6 +9,7 @@ import {
   DEFAULT_RISK_POLICY,
 } from "../config.ts"
 import type { PolicyRule, ReviewerConfig } from "../types.ts"
+import type { InlineOptionsTrust } from "./sources.ts"
 
 const O_RDONLY = typeof fsConstants.O_RDONLY === "number" ? fsConstants.O_RDONLY : 0
 const O_NOFOLLOW = typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0
@@ -168,6 +169,7 @@ const TRUST_BOUNDARY_KEYS = new Set([
 export function loadResolvedConfig(
   inlineOptions: Record<string, unknown> | undefined,
   directory?: string,
+  inlineTrust: InlineOptionsTrust = "trusted",
 ): ReviewerConfig {
   const globalLayer = readConfigLayer(globalConfigPath())
   const projectLayer: ConfigLayer =
@@ -197,6 +199,35 @@ export function loadResolvedConfig(
         `permission-reviewer: ${invalidRules} policy rule(s) in the global config are invalid and were dropped; automatic approval stays disabled until they are fixed`,
       )
     }
+    // A mistyped mode silently falls back to the less restrictive default in
+    // resolveConfig, so it gets the same fail-closed treatment as a dropped
+    // rule: visible degradation instead of a quiet downgrade.
+    const globalEnforcement = globalLayer.raw.enforcementMode
+    if (
+      globalEnforcement !== undefined &&
+      globalEnforcement !== "enforce" &&
+      globalEnforcement !== "observe"
+    ) {
+      degraded.push(
+        `global config enforcementMode ${JSON.stringify(globalEnforcement)} is invalid and was ignored`,
+      )
+      console.warn(
+        `permission-reviewer: global config enforcementMode ${JSON.stringify(globalEnforcement)} is invalid and was ignored; automatic approval stays disabled until it is fixed`,
+      )
+    }
+    const globalEscalation = globalLayer.raw.escalationMode
+    if (
+      globalEscalation !== undefined &&
+      globalEscalation !== "manual" &&
+      globalEscalation !== "deny"
+    ) {
+      degraded.push(
+        `global config escalationMode ${JSON.stringify(globalEscalation)} is invalid and was ignored`,
+      )
+      console.warn(
+        `permission-reviewer: global config escalationMode ${JSON.stringify(globalEscalation)} is invalid and was ignored; automatic approval stays disabled until it is fixed`,
+      )
+    }
   }
 
   const invalidInlineRules = countInvalidPolicyRules(inlineOptions?.policyRules)
@@ -206,21 +237,64 @@ export function loadResolvedConfig(
     )
   }
 
+  // Same visibility for trusted inline modes (no console.warn, matching the
+  // inline policyRules treatment above). resolveConfig still clamps the value
+  // to the safe default; this only records that the trusted input was lost.
+  if (inlineTrust === "trusted" && inlineOptions !== undefined) {
+    const inlineEnforcement = inlineOptions.enforcementMode
+    if (
+      inlineEnforcement !== undefined &&
+      inlineEnforcement !== "enforce" &&
+      inlineEnforcement !== "observe"
+    ) {
+      degraded.push(
+        `inline config enforcementMode ${JSON.stringify(inlineEnforcement)} is invalid and was ignored`,
+      )
+    }
+    const inlineEscalation = inlineOptions.escalationMode
+    if (
+      inlineEscalation !== undefined &&
+      inlineEscalation !== "manual" &&
+      inlineEscalation !== "deny"
+    ) {
+      degraded.push(
+        `inline config escalationMode ${JSON.stringify(inlineEscalation)} is invalid and was ignored`,
+      )
+    }
+  }
+
+  // Dropped project rules are warned about but never degrade the config:
+  // configDegraded describes trusted sources only, and project rules cannot
+  // weaken trusted restrictions anyway.
+  const invalidProjectRules = countInvalidPolicyRules(projectLayer.raw.policyRules)
+  if (invalidProjectRules > 0) {
+    console.warn(
+      `permission-reviewer: ${invalidProjectRules} policy rule(s) in the project config are invalid and were dropped`,
+    )
+  }
+
   // The trusted baseline is seeded with builtin defaults (so clamping always
   // has a floor) and includes inline, which participates as a trusted source
   // the project layer is clamped against.
   const trusted: Record<string, unknown> = {
     ...DEFAULT_CONFIG,
     ...globalLayer.raw,
-    ...(inlineOptions ?? {}),
+    ...(inlineTrust === "trusted" ? (inlineOptions ?? {}) : {}),
   }
-  const merged = mergeWithTrustBoundary(trusted, projectLayer.raw)
+  let merged = mergeWithTrustBoundary(trusted, projectLayer.raw)
+  if (inlineTrust !== "trusted") {
+    // Unknown-origin options may only contribute boundary-controlled hardening.
+    const restrictions = Object.fromEntries(
+      Object.entries(inlineOptions ?? {}).filter(([key]) => TRUST_BOUNDARY_KEYS.has(key)),
+    )
+    merged = mergeWithTrustBoundary(merged, restrictions)
+  }
   // Inline keeps documented precedence over the project layer for every
   // non-security field (the boundary's own keys are exempt: re-applying inline
   // there could undo project hardening clamped against it).
   const out: Record<string, unknown> = { ...merged }
   for (const [key, value] of Object.entries(inlineOptions ?? {})) {
-    if (!TRUST_BOUNDARY_KEYS.has(key)) out[key] = value
+    if (inlineTrust === "trusted" && !TRUST_BOUNDARY_KEYS.has(key)) out[key] = value
   }
   if (degraded.length > 0) out.configDegraded = degraded
   return resolveConfig(out)

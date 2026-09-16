@@ -73,7 +73,7 @@ describe("TUI state machine", () => {
     expect(state.get("per_1")?.phase).toBe("reviewing")
     expect(state.expire(1_000 + UI_START_GRACE_MS - 1)).toHaveLength(0)
     expect(state.expire(1_000 + UI_START_GRACE_MS)).toMatchObject([
-      { phase: "manual", reason: "The reviewer did not acknowledge the start of the review." },
+      { phase: "unknown", reason: "The reviewer did not acknowledge the start of the review." },
     ])
   })
 
@@ -82,7 +82,7 @@ describe("TUI state machine", () => {
     const asked = state.asked(request(), 1_000)
     state.apply({ ...asked, emittedAt: 1_100 })
     expect(state.expire(1_000 + options.timeoutMs + UI_WATCHDOG_GRACE_MS - 1)).toHaveLength(0)
-    expect(state.expire(1_000 + options.timeoutMs + UI_WATCHDOG_GRACE_MS)[0]?.phase).toBe("manual")
+    expect(state.expire(1_000 + options.timeoutMs + UI_WATCHDOG_GRACE_MS)[0]?.phase).toBe("unknown")
   })
 
   test("accepts the first server acknowledgement despite transport clock skew", () => {
@@ -90,7 +90,7 @@ describe("TUI state machine", () => {
     const local = state.asked(request(), 1_000)
     expect(state.apply({ ...local, emittedAt: 990 })).toBe(true)
     expect(state.expire(1_000 + UI_START_GRACE_MS)).toHaveLength(0)
-    expect(state.expire(1_000 + options.timeoutMs + UI_WATCHDOG_GRACE_MS)[0]?.phase).toBe("manual")
+    expect(state.expire(1_000 + options.timeoutMs + UI_WATCHDOG_GRACE_MS)[0]?.phase).toBe("unknown")
   })
 
   test("ignores stale network status and preserves terminal results after permission.replied", () => {

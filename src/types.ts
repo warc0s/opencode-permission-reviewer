@@ -124,6 +124,8 @@ export interface ReviewerConfig {
    *  asks the model to emit JSON in plain text and parses it locally. */
   outputFormat: ReviewerOutputFormat
   timeoutMs: number
+  /** Total review budget, including context, queueing, and retries. */
+  reviewBudgetMs?: number
   maxContextChars: number
   maxPartChars: number
   maxEnrichmentChars: number
@@ -223,6 +225,23 @@ export interface ReviewAuditRecord {
    * Bump only on a breaking change to the record shape.
    */
   schemaVersion?: number
+  reviewID?: string
+  hostRequestID?: string
+  hostGeneration?: "v1" | "v2"
+  hostVersion?: string
+  generation?: string
+  nativeAction?: string
+  directory?: string
+  application?:
+    | "evaluation-returned"
+    | "reply-accepted"
+    | "human-pending"
+    | "superseded"
+    | "cancelled"
+    | "unknown"
+  pluginVersion?: string
+  effectiveConfigHash?: string
+  actionFingerprint?: string
   /** Version of the structured-decision schema the reviewer was asked to emit. */
   decisionSchemaVersion?: number
   /** Version of the reviewer system prompt used for this decision. */

@@ -12,12 +12,21 @@ async function run(
   const isolatedArgs =
     args.includes("--host") || args.includes("--binary") ? [...args] : ["--host", "v1", ...args]
   if (!isolatedArgs.includes("--binary")) isolatedArgs.push("--binary", "/missing/opencode")
+  // The host session (this suite often runs inside OpenCode) may export
+  // XDG_CONFIG_HOME or OPENCODE_CONFIG* pointing at a real config where this
+  // plugin is already registered; init would resolve that config instead of
+  // the isolated HOME and plan phantom "noop" writes.
+  const inherited: Record<string, string | undefined> = { ...process.env }
+  delete inherited.XDG_CONFIG_HOME
+  delete inherited.OPENCODE_CONFIG
+  delete inherited.OPENCODE_CONFIG_DIR
+  delete inherited.OPENCODE_CONFIG_CONTENT
   const proc = Bun.spawn({
     cmd: ["bun", "run", "src/cli/explain.ts", "init", ...isolatedArgs],
     cwd: import.meta.dir + "/..",
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...process.env, ...env },
+    env: { ...inherited, ...env },
   })
   const [code, stdout, stderr] = await Promise.all([
     proc.exited,

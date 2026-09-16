@@ -266,8 +266,7 @@ the default interactive behavior.
 ## [1.0.0] - 2026-08-07
 
 The first stable release. The public configuration schema, the audit schema
-(v2), and the OpenCode 1.x adapter contract are frozen for the 1.x line. See
-[`docs/migration-guide.md`](./docs/migration-guide.md) for the upgrade path.
+(v2), and the OpenCode 1.x adapter contract are frozen for the 1.x line.
 
 ### Added
 

@@ -172,7 +172,16 @@ describe("npm install dedupe shape", () => {
     installDir = mkdtempSync(join(tmpdir(), "reviewer-install-"))
     // Mirror opencode's installer (arborist reify with ignoreScripts).
     const install = Bun.spawnSync({
-      cmd: ["npm", "install", "--ignore-scripts", "--no-audit", "--no-fund", packOnce()],
+      cmd: [
+        "npm",
+        "install",
+        "--prefix",
+        installDir,
+        "--ignore-scripts",
+        "--no-audit",
+        "--no-fund",
+        packOnce(),
+      ],
       cwd: installDir,
       stdout: "ignore",
       stderr: "pipe",

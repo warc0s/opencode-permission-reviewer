@@ -49,7 +49,7 @@ fails safe to manual review.
 ### Requirements
 
 - [Bun](https://bun.sh) ≥ 1.3.0 (CI runs 1.3.0 and 1.3.5)
-- [OpenCode](https://opencode.ai) V1 `>=1.18.29 <2` (**tested with 1.18.30**), or V2 `2.0.3` (**tested with 2.0.3**)
+- [OpenCode](https://opencode.ai) V1 `>=1.18.29 <2` (**tested with 1.18.31**), or V2 `2.0.3` (**tested with 2.0.3**)
 - `git` on `PATH` (only used for read-only Git-state enrichment; missing git
   degrades gracefully)
 - A model provider configured in OpenCode, exposing a model that follows JSON
@@ -493,7 +493,7 @@ binary, blocked, or truncated evidence) remains a reviewer decision.
 
 | Component             | Supported          | Notes                                                      |
 | --------------------- | ------------------ | ---------------------------------------------------------- |
-| OpenCode V1           | `>=1.18.29 <2`     | Dual object entrypoint; verified with **1.18.30**          |
+| OpenCode V1           | `>=1.18.29 <2`     | Dual object entrypoint; verified with **1.18.31**          |
 | OpenCode V2           | `2.0.3`            | Pinned contracts; verified with **2.0.3**                  |
 | `@opencode-ai/plugin` | `>=1.18.29 <2`     | Optional V1 peer dependency                                |
 | Bun                   | `>=1.3.0`          | Declared in `engines.bun`; CI runs **1.3.0** and **1.3.5** |
@@ -565,9 +565,10 @@ OpenCode server + model and is **not** part of `bun test`; see
 
 ## Attribution
 
-The reviewer policy and prompt text in `src/policy.ts` are adapted from
-[OpenAI Codex Guardian](https://github.com/openai/codex/tree/main/codex-rs/core/src/guardian)
-(Apache-2.0). See [`NOTICE`](./NOTICE) for full attribution and license details.
+The reviewer policy design is inspired by
+[OpenAI Codex Guardian](https://github.com/openai/codex/tree/main/codex-rs/core/src/guardian).
+The wording and implementation are independent. See [`NOTICE`](./NOTICE) for
+full attribution and license details.
 
 ## License
 

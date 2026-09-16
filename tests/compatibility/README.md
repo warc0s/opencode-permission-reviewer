@@ -6,6 +6,7 @@ in a disposable Python environment, and set these executable paths:
 ```bash
 export OPENCODE_V1_1_18_29=/absolute/path/to/opencode-1.18.29
 export OPENCODE_V1_1_18_30=/absolute/path/to/opencode-1.18.30
+export OPENCODE_V1_1_18_31=/absolute/path/to/opencode-1.18.31
 export OPENCODE_V2_2_0_3=/absolute/path/to/opencode-2.0.3
 python -m pytest tests/compatibility -q
 ```

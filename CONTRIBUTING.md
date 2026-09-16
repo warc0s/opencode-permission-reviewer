@@ -69,9 +69,9 @@ SPA), start a pinned opencode-ai host from the compatibility tooling instead:
 
 ```bash
 HOST_GENERATION=v1 bun tests/compatibility/install-hosts.ts
-# Note the printed OPENCODE_V1_1_18_30 path, then serve with a known password:
+# Note the printed OPENCODE_V1_1_18_31 path, then serve with a known password:
 OPENCODE_SERVER_PASSWORD=synthetic-local-host-password \
-  "$OPENCODE_V1_1_18_30" serve --hostname 127.0.0.1 --port 41973 &
+  "$OPENCODE_V1_1_18_31" serve --hostname 127.0.0.1 --port 41973 &
 REVIEWER_LIVE_PASSWORD=synthetic-local-host-password \
   bun run tests/live-harness.ts http://127.0.0.1:41973 --smoke
 ```
@@ -86,7 +86,7 @@ After building, `bun tests/live-host-regressions.ts` starts its own fresh
 OpenCode server, a synthetic MCP tool, and a local deterministic provider. It
 checks the actual provider tool list after host filtering and the regression
 cases without paid inference. It complements the live model smoke above. It
-resolves the server binary from `OPENCODE_V1_1_18_30` (printed by the installer
+resolves the server binary from `OPENCODE_V1_1_18_31` (printed by the installer
 above) with fallback to `opencode` on PATH, and authenticates with
 `REVIEWER_LIVE_PASSWORD` (default `synthetic-local-host-password`), so no
 manual serve is needed.

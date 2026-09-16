@@ -1,4 +1,4 @@
-import { appendFile, mkdtemp, writeFile } from "node:fs/promises"
+import { appendFile, mkdtemp, readdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { tmpdir } from "node:os"
 import packageInfo from "../../package.json"
@@ -18,10 +18,10 @@ async function run(cmd: string[], cwd: string): Promise<string> {
   return stdout
 }
 // Build is an explicit preceding step. Neither packing nor installation executes scripts.
-const packed = JSON.parse(
-  await run(["npm", "pack", "--ignore-scripts", "--json", "--pack-destination", directory], root),
-) as Array<{ filename: string }>
-const tarball = join(directory, packed[0]!.filename)
+await run(["npm", "pack", "--ignore-scripts", "--pack-destination", directory], root)
+const tarballs = (await readdir(directory)).filter((name) => name.endsWith(".tgz"))
+if (tarballs.length !== 1) throw new Error(`Expected one packed tarball, found ${tarballs.length}`)
+const tarball = join(directory, tarballs[0]!)
 await writeFile(
   join(directory, "package.json"),
   JSON.stringify({

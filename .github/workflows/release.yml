@@ -1,8 +1,8 @@
 name: release
 
-# Tag-driven release pipeline. Pushing a `v*` tag builds the package,
-# publishes to npm with provenance, generates a SHA-256 checksum file and an
-# SBOM, and creates a GitHub Release with all artifacts attached.
+# Pushing a `v*` tag builds and publishes the package with provenance, then
+# creates checksums, an SBOM, and a GitHub Release. Manual dispatch retries an
+# existing tag without moving it.
 #
 # Prerequisites (configure once in repo settings):
 #   - Secret `NPM_TOKEN` with publish rights for `opencode-permission-reviewer`.
@@ -15,6 +15,12 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to retry
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -29,8 +35,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          # Full history so the CHANGELOG extraction can locate the version.
+          # Full history for tag ancestry checks and release notes.
           fetch-depth: 0
+          ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -40,12 +47,17 @@ jobs:
 
       - name: Read tag metadata
         id: meta
-        run: bun scripts/release-metadata.ts
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: GITHUB_REF_NAME="$RELEASE_TAG" bun scripts/release-metadata.ts
 
       # Guard against mistags: the tag version must match package.json.
       - name: Verify tag matches package.json version
+        env:
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
         run: |
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          [ "$(git rev-parse "refs/tags/$RELEASE_TAG^{}")" = "$(git rev-parse HEAD)" ]
+          git merge-base --is-ancestor HEAD origin/main
           pkg_version=$(node -p "require('./package.json').version")
           if [ "${{ steps.meta.outputs.version }}" != "$pkg_version" ]; then
             echo "Tag version ${{ steps.meta.outputs.version }} != package.json version $pkg_version"
@@ -88,7 +100,7 @@ jobs:
         run: |
           set -- artifacts/*.tgz
           [ "$#" -eq 1 ]
-          npm publish "$1" \
+          npm publish "./$1" \
             --provenance \
             --access public \
             --tag "${{ steps.meta.outputs.dist_tag }}"

@@ -521,6 +521,12 @@ binary, blocked, or truncated evidence) remains a reviewer decision.
   isolated reviewer sessions for inspection in either host generation.
 - Run `opencode-permission-reviewer doctor` to compare installed versions
   against the ranges above.
+- A standard OpenCode installation invokes its runtime directly. Custom
+  profile launchers are also supported when they select a supported runtime
+  and provide coherent config, data, state, and cache locations. For the
+  isolated compatibility matrix, point the host variables at the underlying
+  executable instead of a launcher that overrides the harness environment;
+  see [`tests/compatibility`](./tests/compatibility/README.md).
 
 ## Troubleshooting
 

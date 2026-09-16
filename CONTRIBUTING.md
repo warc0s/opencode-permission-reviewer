@@ -96,6 +96,16 @@ documented there, then run `python -m pytest tests/compatibility -q`. Each host
 uses an isolated home, configuration, provider and audit file; no personal
 OpenCode installation is changed. V1 and V2 have independent pytest modules.
 
+Pass the matrix a direct OpenCode executable, not a profile launcher or wrapper
+that exports its own `HOME`, `XDG_*`, or `OPENCODE_CONFIG*` values. Such a
+launcher can intentionally replace the disposable environment created by the
+harness, making an otherwise correct runtime appear incompatible. If
+`opencode` on `PATH` is a wrapper, use its underlying runtime executable or the
+path printed by `tests/compatibility/install-hosts.ts`. This requirement is
+specific to isolated testing: normal installations invoke the runtime
+directly, while custom profile launchers remain valid deployment setups and
+should receive a separate smoke test with their intended configuration.
+
 To exercise the distributed artifact, build first and run
 `PACKAGE_MANAGER=npm bun tests/compatibility/install-package.ts` (or `bun` as
 the manager). Set `PLUGIN_PACKAGE_PATH` to the returned `packagePath` before

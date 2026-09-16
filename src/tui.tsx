@@ -1,13 +1,12 @@
 /** @jsxImportSource @opentui/solid */
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import { createSignal, Show } from "solid-js"
-import { DEFAULT_CONFIG, resolveConfig } from "./config.ts"
+import { DEFAULT_CONFIG, resolveConfig, reviewBudgetMs } from "./config.ts"
 // Import the normalizer directly. Going through ./runtime.ts would evaluate the
 // whole server engine (coordinator, git/ssh evidence, node:child_process) inside
 // the TUI process for a single unused re-export.
 import { extractPermissionRequest } from "./opencode/event-normalizer.ts"
 import { decodeUiStatus, type ReviewUiStatus } from "./ui-protocol.ts"
-import { reviewBudgetMs } from "./core/review-attempt.ts"
 import { ReviewUiState } from "./ui-state.ts"
 import { ReviewOverlay, ReviewResult, SPINNER } from "./ui/components.tsx"
 import { setupTuiV2 } from "./ui/v2.tsx"

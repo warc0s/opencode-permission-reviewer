@@ -1,15 +1,8 @@
 import { randomUUID } from "node:crypto"
-import type { ReviewEnvelope, ReviewerConfig } from "../types.ts"
+import type { ReviewEnvelope } from "../types.ts"
 import type { ApplicationResult } from "./contracts.ts"
 
 export type AttemptState = "reviewing" | "finished" | "cancelled" | "expired"
-
-/** Total per-review budget from config. Single source of truth shared by the
- *  coordinator attempt deadline, the v2 server budget, and the timeout carried
- *  in published UI statuses so the TUI watchdog expires on the real deadline. */
-export function reviewBudgetMs(config: ReviewerConfig): number {
-  return config.reviewBudgetMs ?? config.timeoutMs * 2 + 60_000
-}
 
 /** One invocation owns its deadline, identity, and terminal transition. */
 export class ReviewAttempt {

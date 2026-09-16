@@ -52,6 +52,11 @@ export const DEFAULT_CONFIG: ReviewerConfig = {
   askDecisions: true,
 }
 
+/** Total deadline for a review, shared by the server and TUI watchdog. */
+export function reviewBudgetMs(config: ReviewerConfig): number {
+  return config.reviewBudgetMs ?? config.timeoutMs * 2 + 60_000
+}
+
 function boundedInteger(value: unknown, fallback: number, min: number, max: number): number {
   if (typeof value !== "number" || !Number.isInteger(value)) return fallback
   return Math.min(max, Math.max(min, value))

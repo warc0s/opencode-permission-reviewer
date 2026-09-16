@@ -24,6 +24,7 @@ import { assembleEvidence, defaultEvidenceProviders } from "../context/evidence-
 import type { AskDecisionSource } from "../context/ask-decisions.ts"
 import { applyEscalationDisposition } from "../escalation.ts"
 import packageInfo from "../../package.json"
+import { ScriptAnalysisRegistry } from "../verified-ssh-script.ts"
 
 type Logger = (message: string, details?: unknown) => void
 
@@ -63,6 +64,7 @@ export class ReviewCoordinator {
   private readonly resolvedManually = new Set<string>()
   private readonly log: Logger
   private readonly providers: EvidenceProvider[]
+  private readonly scriptRegistry = new ScriptAnalysisRegistry()
   /** Live ask-decision capture (enrichment-only; undefined when disabled). */
   private readonly askDecisions: AskDecisionSource | undefined
   /** Bound for metadata SDK calls (session create, tool listing, replies,
@@ -253,7 +255,14 @@ export class ReviewCoordinator {
         }
       },
     })
-    return attempt.active() ? this.applyDisposition(request, result) : this.supersedeResult()
+    if (!attempt.active()) return this.supersedeResult()
+    const applied = await this.applyDisposition(request, result)
+    if (applied.kind === "allow")
+      this.scriptRegistry.rememberApproved(
+        this.attempts.get(request.id)?.evidence.verifiedScript,
+        applied.decision,
+      )
+    return applied
   }
 
   handlePermissionReply(event: unknown): void {
@@ -294,6 +303,7 @@ export class ReviewCoordinator {
       directory: this.ctx.directory,
       worktree: this.ctx.worktree,
       config: this.config,
+      scriptRegistry: this.scriptRegistry,
       ...(this.askDecisions === undefined ? {} : { askDecisions: this.askDecisions }),
     })
     if (!this.attempts.get(request.id)?.active()) return envelope
@@ -310,6 +320,8 @@ export class ReviewCoordinator {
     if (envelope.evidenceCompleteness !== undefined) {
       this.remember(request.id, { evidenceCompleteness: envelope.evidenceCompleteness })
     }
+    if (envelope.verifiedScript !== undefined)
+      this.remember(request.id, { verifiedScript: envelope.verifiedScript })
     if (envelope.askDecisions !== undefined && envelope.askDecisions.length > 0) {
       this.remember(request.id, { askDecisions: envelope.askDecisions })
     }
@@ -329,6 +341,7 @@ export class ReviewCoordinator {
     const policyTrace = this.attempts.get(request.id)?.evidence.policyTrace
     const timings = this.attempts.get(request.id)?.evidence.timings
     const evidence = this.attempts.get(request.id)?.evidence.evidenceCompleteness
+    const verifiedScript = this.attempts.get(request.id)?.evidence.verifiedScript
     const askDecisions = this.attempts.get(request.id)?.evidence.askDecisions
     // Infer the source when a path did not set it explicitly (the process()
     // catch builds an escalate with no decision): a result still carrying a
@@ -369,6 +382,15 @@ export class ReviewCoordinator {
       ...(warnings.length === 0 ? {} : { warnings }),
       ...(timings === undefined ? {} : { timings }),
       ...(evidence === undefined ? {} : { evidenceCompleteness: evidence.overall }),
+      ...(verifiedScript === undefined
+        ? {}
+        : {
+            verifiedScript: {
+              sha256: verifiedScript.sha256,
+              status: verifiedScript.status,
+              ...(verifiedScript.bytes === undefined ? {} : { bytes: verifiedScript.bytes }),
+            },
+          }),
       ...(result.reviewerOutcome === undefined ? {} : { reviewerOutcome: result.reviewerOutcome }),
       ...(result.escalationDisposition === undefined
         ? {}

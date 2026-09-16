@@ -156,7 +156,8 @@ export class V1ReviewerBackend {
       }
       const policy = this.config.policy ?? DEFAULT_TENANT_POLICY
       const evidence = buildEvidenceResult(envelope, this.config)
-      envelope.actionEvidenceComplete = evidence.actionEvidenceComplete
+      envelope.actionEvidenceComplete =
+        envelope.actionEvidenceComplete !== false && evidence.actionEvidenceComplete
       const prompt = buildReviewerPrompt(policy, evidence.text, this.config.outputFormat)
 
       const first = await this.promptReviewer(

@@ -20,6 +20,8 @@ export interface ReviewDecision {
   evidence_completeness: EvidenceSufficiency
   rationale: string
   confidence: number
+  /** Optional script-only semantic analysis. Never conveys authorization. */
+  script_analysis?: string
 }
 
 export interface PermissionToolSource {
@@ -180,6 +182,7 @@ export interface ReviewEnvelope {
   transcript: string
   intentHistory: string
   enrichment: string
+  verifiedScript?: import("./verified-ssh-script.ts").VerifiedScriptEvidence
   sshAudit: NonNullable<ReviewAuditRecord["ssh"]>
   preflightDenial?: string
   /** Agent-aware context (actor, lineage, intent). Observe-only: flows into the
@@ -285,6 +288,8 @@ export interface ReviewAuditRecord {
   /** Non-fatal warnings accumulated during evidence collection/analysis. */
   warnings?: string[]
   reviewerSessionID?: string
+  /** Content identity and inspection mode only; never script text or local path. */
+  verifiedScript?: { sha256: string; status: "full" | "reused" | "unavailable"; bytes?: number }
   /** Root session of the request's ancestry (additive; absent when lineage was
    *  unavailable). */
   rootSessionID?: string

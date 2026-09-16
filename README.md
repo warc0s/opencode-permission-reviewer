@@ -423,6 +423,37 @@ by itself** (one narrow deterministic exception exists for SSH, below).
   common `cat script | ssh ... python -` pattern. Sensitive paths,
   credential-like literal content, binary files, unresolved shell expressions,
   and symlinks escaping approved roots are excluded.
+- **Verified remote shell scripts** have an opt-in command form. Stage the exact
+  script locally inside the workspace or `/tmp/opencode`, then generate the
+  command rather than hand-writing its hash guard:
+
+  ```bash
+  bunx opencode-permission-reviewer script command --file /tmp/opencode/deploy.sh --host deploy.example
+  ```
+
+  Ask the agent to execute the printed command. It streams that local file to
+  the host, checks its SHA-256 there **before** running `bash`, and removes the
+  remote temporary copy. Add `--port 2222` or `--shell sh` when needed. The
+  supported command is deliberately exact: extra shell actions, dynamic paths,
+  or a remote-only script are **not** treated as verified. The local source is
+  a copy of the intended executable bytes; if the script comes from Git, stage
+  the blob from a pinned commit locally before generating the command. It is
+  re-read on each review and must remain regular, text-only, secret-free, and
+  at most 64 KiB. A changed file fails the remote hash check even if it changes
+  after permission approval. The plugin never connects to the host to inspect
+  it.
+
+  The first permission review includes the whole script. If that review is
+  approved with sufficient evidence and a script analysis, later reviews in
+  the same conversation can reuse only a compact, in-memory analysis for the
+  same hash, host, interpreter, and configuration (up to one hour). **Each
+  command still receives a fresh authorization decision.** A different script,
+  host, configuration, or expired analysis requires full inspection again. The
+  audit stores the hash and inspection status, never the script body. When an
+  opaque or truncated SSH script is rejected, the agent receives guidance to
+  stage a local copy and generate this form. The CLI and plugin must use the
+  same installed package version.
+
 - **Local interpreter commands** (Python, Node, Bun, shell, Ruby, Perl, and
   compound commands that first activate an environment) get the same bounded
   inspection when they name an explicit script. Inline code, modules, stdin

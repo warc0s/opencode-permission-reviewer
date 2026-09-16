@@ -246,6 +246,7 @@ export function buildEvidenceResult(
   const pending = pendingPermissionSection(request, config)
   const evidence = [
     `PENDING_PERMISSION\n${pending.text}`,
+    ...(envelope.verifiedScript === undefined ? [] : [envelope.verifiedScript.text]),
     renderPolicySummary(envelope.policyTrace, config.maxPartChars * 2),
     `WORKING_DIRECTORY\n${envelope.directory}`,
     `WORKTREE\n${envelope.worktree}`,
@@ -266,12 +267,16 @@ export function buildEvidenceResult(
     config.maxContextChars +
       config.maxPartChars * 2 +
       config.maxEnrichmentChars +
-      config.maxIntentChars,
+      config.maxIntentChars +
+      (envelope.verifiedScript?.status === "full" ? envelope.verifiedScript.text.length : 0),
   )
   return {
     text,
     actionEvidenceComplete:
-      pending.actionEvidenceComplete && text.startsWith(`PENDING_PERMISSION\n${pending.text}\n\n`),
+      envelope.actionEvidenceComplete !== false &&
+      pending.actionEvidenceComplete &&
+      text.startsWith(`PENDING_PERMISSION\n${pending.text}\n\n`) &&
+      (envelope.verifiedScript === undefined || text.includes(envelope.verifiedScript.text)),
   }
 }
 

@@ -30,6 +30,7 @@ const resultSchema = z
     evidence_completeness: z.enum(["sufficient", "partial", "insufficient", "unknown"]),
     rationale: z.string().min(3).max(2000),
     confidence: z.number().min(0).max(1),
+    script_analysis: z.string().min(20).max(1500).optional(),
   })
   .strict()
 

@@ -7,6 +7,7 @@ import type {
 import { emergencyBrakeReason } from "../emergency-brake.ts"
 import { evaluatePolicy } from "../policy/policy-engine.ts"
 import { applyEscalationDisposition } from "../escalation.ts"
+import { sourceCommand } from "../evidence/source-command.ts"
 
 export interface ReviewEnginePorts {
   collect(request: PermissionRequest): Promise<ReviewEnvelope>
@@ -100,7 +101,23 @@ export async function evaluateReview(
       )
     }
   }
-  return result.kind === "escalate" && result.escalationDisposition === undefined
-    ? applyEscalationDisposition(result, config, "general")
-    : result
+  const disposed =
+    result.kind === "escalate" && result.escalationDisposition === undefined
+      ? applyEscalationDisposition(result, config, "general")
+      : result
+  const needsScriptGuidance =
+    request.permission === "bash" &&
+    /\bssh\b/.test(sourceCommand(request)) &&
+    (envelope.verifiedScript?.status === "unavailable" ||
+      envelope.sshAudit.some((entry) =>
+        ["truncated", "unavailable", "blocked", "unresolved"].includes(entry.stdinStatus ?? ""),
+      ) ||
+      /(?:(?:script|guion).{0,120}(?:truncat|truncad|unavailable|incomplet|not inspect|no.{0,20}inspeccion)|(?:truncat|truncad|incomplet).{0,120}(?:script|guion))/i.test(
+        disposed.reason,
+      ))
+  if (disposed.kind === "allow" || !needsScriptGuidance) return disposed
+  return {
+    ...disposed,
+    reason: `${disposed.reason} To inspect this script, stage its exact bytes locally and generate a hash-checked SSH command with opencode-permission-reviewer script command --file PATH --host HOST.`,
+  }
 }

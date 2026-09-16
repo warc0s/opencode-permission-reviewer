@@ -33,6 +33,9 @@ import { validateHostEndpoint } from "../opencode/v2/connection.ts"
 import { ReviewerRpc } from "../ui/rpc.ts"
 import { OpenCode } from "@opencode/client"
 import type { PermissionRequest, PermissionToolSource, ReviewerConfig } from "../types.ts"
+import { includeEvidenceFile } from "../ssh-evidence.ts"
+import { renderVerifiedSshScriptCommand, VERIFIED_SCRIPT_LIMIT } from "../verified-ssh-script.ts"
+import { redactSecrets } from "../redact.ts"
 
 // Guarded so importing the module (e.g. via the "./cli" export or in tests)
 // never triggers the CLI or kills the importing process; only a direct
@@ -61,6 +64,8 @@ export async function runCli(argv: string[]): Promise<number> {
         return await runConfig(rest)
       case "audit":
         return await runAudit(rest)
+      case "script":
+        return await runScript(rest)
       default:
         console.error(`unknown command: ${command}\n${usage()}`)
         return 2
@@ -81,7 +86,65 @@ function usage(): string {
   opencode-permission-reviewer explain [--event <file>] [--project <dir>]
   opencode-permission-reviewer doctor [--project <dir>] [--json]
   opencode-permission-reviewer config print-effective [--project <dir>]
-  opencode-permission-reviewer audit report [--path <file>] [--project <dir>] [--json]`
+  opencode-permission-reviewer audit report [--path <file>] [--project <dir>] [--json]
+  opencode-permission-reviewer script command --file <path> --host <host> [--port <port>] [--shell bash|sh]`
+}
+
+async function runScript(argv: string[]): Promise<number> {
+  const { values, positionals } = parseArgs({
+    args: argv,
+    options: {
+      file: { type: "string" },
+      host: { type: "string" },
+      port: { type: "string" },
+      shell: { type: "string" },
+    },
+    strict: true,
+    allowPositionals: true,
+  })
+  const file = values.file
+  const host = values.host
+  const shell = values.shell ?? "bash"
+  const port = values.port === undefined ? undefined : Number(values.port)
+  if (
+    positionals.length !== 1 ||
+    positionals[0] !== "command" ||
+    !file ||
+    !/^[A-Za-z0-9_./-]+$/.test(file) ||
+    !host ||
+    !/^[A-Za-z0-9_.@-]+$/.test(host) ||
+    host.startsWith("-") ||
+    (shell !== "bash" && shell !== "sh") ||
+    (port !== undefined && (!Number.isInteger(port) || port < 1 || port > 65535))
+  ) {
+    console.error(
+      "Usage: script command --file <simple-path> --host <host> [--port <port>] [--shell bash|sh]",
+    )
+    return 2
+  }
+  const directory = process.cwd()
+  const evidence = await includeEvidenceFile(file, directory, directory, VERIFIED_SCRIPT_LIMIT)
+  if (
+    evidence.status !== "included" ||
+    evidence.includedSha256 === undefined ||
+    evidence.content === undefined ||
+    redactSecrets(evidence.content) !== evidence.content
+  ) {
+    console.error(
+      `Script cannot be fully inspected (${evidence.status}). Use a text file of at most 64 KiB inside the workspace or /tmp/opencode, without secrets.`,
+    )
+    return 1
+  }
+  console.log(
+    renderVerifiedSshScriptCommand({
+      path: file,
+      destination: host,
+      ...(port === undefined ? {} : { port }),
+      sha256: evidence.includedSha256,
+      shell,
+    }),
+  )
+  return 0
 }
 
 // --- explain -----------------------------------------------------------------

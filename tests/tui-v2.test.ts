@@ -14,11 +14,14 @@ test("TUI restores authoritative snapshots after disconnect and isolates routes,
   })
   let render!: () => unknown
   const toasts: unknown[] = []
-  const reviewing = createUiStatus(request(), "reviewing", {
-    model: "fixture/reviewer",
-    variant: "max",
-    timeoutMs: 10000,
-  })
+  const reviewing = {
+    ...createUiStatus(request(), "reviewing", {
+      model: "fixture/reviewer",
+      variant: "max",
+      timeoutMs: 10000,
+    }),
+    action: `printf ${"long action ".repeat(30)}\nsecond line\tend`,
+  }
   let snapshot = { directory, generation: "generation_first", revision: 1, reviews: [reviewing] }
   type Channel = { queue: unknown[]; ended: boolean; wake?: () => void }
   const channels: Channel[] = []
@@ -99,6 +102,16 @@ test("TUI restores authoritative snapshots after disconnect and isolates routes,
   }
   try {
     await waitForFrame("Reviewing this permission")
+    const progressFrame = view.captureCharFrame()
+    const occupied = progressFrame.split("\n").filter((line) => line.trim())
+    expect(occupied).toHaveLength(2)
+    expect(progressFrame.split("\n").findIndex((line) => line.trim())).toBe(22)
+    expect(occupied[0]).toContain("fixture/reviewer")
+    expect(occupied[1]).toContain("printf long action")
+    const firstElapsed = Number(progressFrame.match(/(\d+\.\d)s/)?.[1])
+    await Bun.sleep(700)
+    await view.flush()
+    expect(Number(view.captureCharFrame().match(/(\d+\.\d)s/)?.[1])).toBeGreaterThan(firstElapsed)
     expect(modeDepth).toBe(1)
     sessionID = "ses_other"
     await waitForFrame("Reviewing this permission", false)

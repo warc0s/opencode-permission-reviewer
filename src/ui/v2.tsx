@@ -2,7 +2,7 @@
 import type { Plugin } from "@opencode/plugin/tui"
 import { createSignal, Show } from "solid-js"
 import { ReviewerRpc } from "./rpc.ts"
-import { ReviewOverlay, ReviewResult, type ReviewTheme } from "./components.tsx"
+import { ReviewProgress, ReviewResult, type ReviewTheme } from "./components.tsx"
 import { ReviewUiState } from "../ui-state.ts"
 import { decodeUiStatus, encodeUiStatus, type ReviewUiStatus } from "../ui-protocol.ts"
 
@@ -168,7 +168,11 @@ export async function setupTuiV2(ctx: Context): Promise<() => void> {
       return (
         <>
           <Show when={reviewing()} keyed>
-            {(current) => <ReviewOverlay theme={theme} status={current} frame={frame} />}
+            {(current) => (
+              <box position="absolute" bottom={0} left={0} right={0}>
+                <ReviewProgress theme={theme} status={current} frame={frame} />
+              </box>
+            )}
           </Show>
           <Show when={terminal()} keyed>
             {(current) => (

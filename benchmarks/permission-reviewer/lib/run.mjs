@@ -1,4 +1,5 @@
 import { open, writeFile, readFile, readdir } from "node:fs/promises"
+import { randomInt } from "node:crypto"
 import { resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import {
@@ -14,6 +15,7 @@ import {
 } from "./util.mjs"
 import { caseDigest, modelInput } from "./dataset.mjs"
 import { requestCompletion, TEXT_RETRY_NOTE, validateModel } from "./providers.mjs"
+import { requestOpenCodeV1 } from "./opencode-v1.mjs"
 import { summarize } from "./metrics.mjs"
 export const HARNESS_VERSION = "0.1.0"
 export function rowBase(c, model, repeat, fingerprint) {
@@ -94,7 +96,10 @@ export async function runBenchmark({
   adapter,
   out,
   options = {},
-  completion = requestCompletion,
+  completion = (model, prepared, request) =>
+    model.transport === "opencode-v1"
+      ? requestOpenCodeV1(model, prepared, request)
+      : requestCompletion(model, prepared, request),
   onProgress = () => {},
 }) {
   const cfg = {
@@ -104,6 +109,8 @@ export async function runBenchmark({
     track: "reviewer",
     timeoutMs: 120000,
     maxCalls: 1200,
+    minRequestDelayMs: 0,
+    maxRequestDelayMs: 0,
     httpRetries: 1,
     formatRetries: 1,
     bootstrap: 500,
@@ -114,12 +121,29 @@ export async function runBenchmark({
   assert(["reviewer", "system"].includes(cfg.track), "track must be reviewer or system")
   assert(Number.isInteger(cfg.repeats) && cfg.repeats > 0, "repeats")
   assert(Number.isInteger(cfg.concurrency) && cfg.concurrency > 0, "concurrency")
+  assert(Number.isInteger(cfg.minRequestDelayMs) && cfg.minRequestDelayMs >= 0, "minRequestDelayMs")
+  assert(
+    Number.isInteger(cfg.maxRequestDelayMs) &&
+      cfg.maxRequestDelayMs >= cfg.minRequestDelayMs &&
+      cfg.maxRequestDelayMs <= 60000,
+    "maxRequestDelayMs",
+  )
+  if (cfg.maxRequestDelayMs > 0)
+    assert(cfg.concurrency === 1, "A request delay requires --concurrency 1.")
   const safeModels = publicModels(models)
   assert(new Set(safeModels.map((m) => m.id)).size === safeModels.length, "Duplicate model id.")
   assert(safeModels.length > 0, "No models configured.")
+  if (safeModels.some((model) => model.transport === "opencode-v1"))
+    assert(cfg.concurrency === 1, "OpenCode subscription runs require --concurrency 1.")
   for (const m of safeModels)
     if (m.apiKeyEnv)
       assert(process.env[m.apiKeyEnv], `Missing credential environment variable ${m.apiKeyEnv}`)
+  for (const m of safeModels)
+    if (m.hostPasswordEnv)
+      assert(
+        process.env[m.hostPasswordEnv],
+        `Missing host password environment variable ${m.hostPasswordEnv}`,
+      )
   const resume = cfg.resume
   const semanticConfig = { ...cfg }
   delete semanticConfig.resume
@@ -141,8 +165,9 @@ export async function runBenchmark({
     caseHashes: cases.map(caseDigest),
     models: safeModels,
     options: semanticConfig,
-    protocol:
-      "direct-chat-completions + actual plugin evidence/prompt/parser/core replay; NOT native OpenCode host E2E",
+    protocol: safeModels.some((model) => model.transport === "opencode-v1")
+      ? "OpenCode V1 session transport + actual plugin evidence/prompt/parser/core replay; NOT permission lifecycle E2E"
+      : "direct-chat-completions + actual plugin evidence/prompt/parser/core replay; NOT native OpenCode host E2E",
   }
   const fingerprint = sha256(manifest),
     directory = resolve(out)
@@ -193,6 +218,7 @@ export async function runBenchmark({
     attemptWriter = await writer(attemptPath)
     eventWriter = await writer(resolve(directory, "events.jsonl"))
     let calls = startedCalls.length,
+      issuedCalls = 0,
       finished = rows.length
     assert(calls >= journal.length, "Attempt journal is inconsistent with started HTTP calls.")
     const journalByKey = new Map()
@@ -247,7 +273,10 @@ export async function runBenchmark({
       const p = await adapter.prepare(modelInput(c), m)
       const base = {
         ...rowBase(c, m, rep, fingerprint),
-        runMode: "live-provider-core-replay",
+        runMode:
+          m.transport === "opencode-v1"
+            ? "opencode-v1-session-core-replay"
+            : "live-provider-core-replay",
         pluginSourceSha256: adapter.snapshot.sourceSha256,
         reachable: p.reachable,
         promptHash: p.promptHash,
@@ -293,7 +322,23 @@ export async function runBenchmark({
             errorKind = "transport"
             break
           }
+          if (issuedCalls > 0 && cfg.maxRequestDelayMs > 0) {
+            const waitMs = randomInt(cfg.minRequestDelayMs, cfg.maxRequestDelayMs + 1)
+            await eventWriter.write({
+              event: "request-wait",
+              key,
+              waitMs,
+              at: new Date().toISOString(),
+            })
+            await delay(waitMs)
+          }
+          if (abort.signal.aborted) {
+            status = "interrupted"
+            errorKind = "transport"
+            break
+          }
           calls++
+          issuedCalls++
           await eventWriter.write({
             event: "http-start",
             key,
@@ -311,6 +356,12 @@ export async function runBenchmark({
           })
         }
         attempts.push(a)
+        if (a.halt) {
+          abort.abort(new Error("Transport requested a safety stop."))
+          errorKind = "transport"
+          status = "transport-error"
+          break
+        }
         if (!a.ok) {
           errorKind = "transport"
           status = "transport-error"

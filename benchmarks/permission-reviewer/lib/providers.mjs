@@ -21,6 +21,11 @@ export function validateModel(model) {
     typeof model.model === "string" && model.model.length > 0,
     `${model.id}: model identifier missing`,
   )
+  const transport = model.transport ?? "chat-completions"
+  assert(
+    ["chat-completions", "opencode-v1"].includes(transport),
+    `${model.id}: unsupported transport`,
+  )
   assert(typeof model.endpoint === "string", `${model.id}: endpoint missing`)
   const url = new URL(model.endpoint)
   assert(
@@ -36,6 +41,37 @@ export function validateModel(model) {
     FORMATS.has(model.format ?? "text"),
     `${model.id}: format must be text, json_schema or tool`,
   )
+  if (transport === "opencode-v1") {
+    assert(
+      url.protocol === "http:" &&
+        ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) &&
+        url.pathname === "/",
+      "OpenCode host must be a loopback HTTP server root.",
+    )
+    assert(
+      /^[a-z0-9-]+\/[a-zA-Z0-9_.-]+$/.test(model.model),
+      "OpenCode model must use provider/model.",
+    )
+    assert(
+      typeof model.variant === "string" && model.variant.length > 0,
+      "OpenCode variant is required.",
+    )
+    assert(
+      (model.format ?? "text") !== "tool",
+      "OpenCode V1 transport does not support the tool profile.",
+    )
+    assert(
+      model.apiKeyEnv === undefined && model.parameters === undefined,
+      "OpenCode transport uses the host's credentials and variants, not direct API parameters.",
+    )
+    assert(
+      typeof model.hostPasswordEnv === "string" &&
+        /^[A-Za-z_][A-Za-z0-9_]*$/.test(model.hostPasswordEnv),
+      "OpenCode transport requires a hostPasswordEnv environment variable for local server authentication.",
+    )
+  } else {
+    assert(model.hostPasswordEnv === undefined, "hostPasswordEnv is only for OpenCode transport.")
+  }
   if (model.apiKeyEnv !== undefined)
     assert(
       typeof model.apiKeyEnv === "string" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(model.apiKeyEnv),
@@ -53,6 +89,8 @@ export function validateModel(model) {
     "variant",
     "pricesPerMillion",
     "notes",
+    "transport",
+    "hostPasswordEnv",
   ])
   for (const k of Object.keys(model))
     assert(
@@ -62,7 +100,7 @@ export function validateModel(model) {
   if (model.pricesPerMillion)
     for (const v of Object.values(model.pricesPerMillion))
       assert(Number.isFinite(v) && v >= 0, "Prices must be nonnegative numbers.")
-  return { ...model, format: model.format ?? "text" }
+  return { ...model, transport, format: model.format ?? "text" }
 }
 export function buildBody(model, prepared, retryNote) {
   const messages = [

@@ -598,6 +598,8 @@ The [synthetic model benchmark](./benchmarks/permission-reviewer/README.md)
 evaluates 600 permission-review cases against the current reviewer prompt and
 core. It is a separate development tool, not part of the npm package or plugin
 runtime. It does not collect OpenCode conversations or execute fixture actions.
+See its [evaluation protocol](./benchmarks/permission-reviewer/docs/METHODOLOGY.md)
+and [results table](./benchmarks/permission-reviewer/RESULTS.md).
 
 ## Attribution
 

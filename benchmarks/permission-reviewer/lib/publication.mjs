@@ -44,7 +44,9 @@ export function publicReport(document) {
     ),
     "Public results must contain only matching synthetic cases.",
   )
-  const models = (run.models ?? []).map((model) => pick(model, ["id", "model", "format"]))
+  const models = (run.models ?? []).map((model) =>
+    pick(model, ["id", "model", "format", "transport", "variant"]),
+  )
   assert(models.length > 0, "Missing model provenance.")
   const metrics = Object.fromEntries(
     models.map((model) => {

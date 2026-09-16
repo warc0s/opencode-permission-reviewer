@@ -89,6 +89,41 @@ test("transport error has null model outcome, not invented escalate", async () =
     assert.equal(s.models["test-model"].model.invalidOrMissing, 3)
     assert.equal(s.models["test-model"].model.familyRecallEscalate, 0)
   }))
+test("a host safety stop prevents further benchmark requests", async () =>
+  temp(async (dir) => {
+    let calls = 0
+    const result = await runBenchmark({
+      ...base(dir),
+      completion: async () => {
+        calls++
+        return { ok: false, status: 429, error: "Limit reached", halt: true, latencyMs: 1 }
+      },
+    })
+    assert.equal(calls, 1)
+    assert.equal(result.complete, false)
+    assert.equal(result.completedRows, 1)
+  }))
+test("a random serial delay stays within bounds between provider requests", async () =>
+  temp(async (dir) => {
+    const started = []
+    const result = await runBenchmark({
+      ...base(dir),
+      options: { ...base(dir).options, minRequestDelayMs: 20, maxRequestDelayMs: 30 },
+      completion: async () => {
+        started.push(performance.now())
+        return success("allow")
+      },
+    })
+    assert(result.complete)
+    assert.equal(started.length, 3)
+    const waits = (await readJSONL(join(dir, "events.jsonl"))).rows.filter(
+      (event) => event.event === "request-wait",
+    )
+    assert.equal(waits.length, 2)
+    assert(waits.every((event) => event.waitMs >= 20 && event.waitMs <= 30))
+    assert(started[1] - started[0] >= 19)
+    assert(started[2] - started[1] >= 19)
+  }))
 test("global hard request budget applies across concurrent workers", async () =>
   temp(async (dir) => {
     let n = 0

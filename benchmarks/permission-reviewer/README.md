@@ -7,8 +7,13 @@ parser, capability analyzer, and review core. It is not installed with the npm
 package and does not change plugin behavior.
 
 The benchmark never executes fixture commands. It has no real-conversation
-capture, log import, telemetry, or replay feature. Only `run` contacts the explicitly
-configured model endpoints. The benchmark does not reuse OpenCode credentials.
+capture, log import, telemetry, or replay feature. `run` contacts only the
+configured provider endpoint or local OpenCode host. The direct provider
+transport does not reuse OpenCode credentials. The optional `opencode-v1`
+transport delegates authentication to an official OpenCode V1 server; the
+benchmark never handles OAuth tokens. See the [evaluation protocol](./docs/METHODOLOGY.md)
+before using a subscription and the [results table](./RESULTS.md) for published
+evaluations.
 
 ## Validate without model calls
 
@@ -43,8 +48,9 @@ node cli.mjs score --run runs/dev
 node cli.mjs audit --run runs/dev --out reviews/dev.jsonl --sample 40
 ```
 
-`render` makes no network calls. `run` makes up to `--max-calls` HTTP requests,
-including retries; that is a request cap, not a cost cap. Start with a small
+`render` makes no network calls. With direct transport, `--max-calls` bounds
+HTTP requests; with `opencode-v1`, it bounds host prompts, not any internal
+provider retries. Neither is a cost or subscription-usage cap. Start with a small
 transport check, inspect failures, then evaluate complete partitions with the
 same settings for each model. `--resume` requires an identical dataset, source,
 model configuration, and run settings. Use `--track system` to skip calls that

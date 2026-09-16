@@ -46,6 +46,8 @@ const VALUES = new Set([
   "concurrency",
   "seed",
   "max-calls",
+  "min-request-delay-ms",
+  "max-request-delay-ms",
   "timeout-ms",
   "http-retries",
   "format-retries",
@@ -83,7 +85,7 @@ async function main() {
   const command = process.argv[2] ?? "help"
   if (["help", "--help", "-h"].includes(command)) {
     console.log(
-      `PRB-600: permission model benchmark, audited source/core replay.\n\nCommands:\n  node cli.mjs validate\n  node cli.mjs baseline --out runs/smoke [--oracle]\n  bun cli.mjs render --repo /path/plugin --models models.local.json --out runs/render\n  bun cli.mjs run --repo /path/plugin --models models.local.json --out runs/comparison\n  node cli.mjs score --run runs/comparison\n  node cli.mjs audit --run runs/comparison --out reviews/manual.jsonl\n  node cli.mjs compare --left RUN --left-model ID --right RUN --right-model ID\n  node cli.mjs export-public --run runs/comparison --out reviews/public.json\n\nrun: --split all|dev|validation|holdout, --category NAME, --id ID, --limit N,\n     --repeats 1, --concurrency 2, --seed 17, --max-calls 1200,\n     --timeout-ms 120000, --http-retries 1, --format-retries 1,\n     --track reviewer|system, --bootstrap 500, --resume, --allow-drift\nAll fixture commands are inert data. Only configured provider URLs are contacted.\nLive provider evaluation requires Bun and your actual plugin checkout.\nbaseline is a metric-only test, NOT model performance or host integration.\n`,
+      `PRB-600: permission model benchmark, audited source/core replay.\n\nCommands:\n  node cli.mjs validate\n  node cli.mjs baseline --out runs/smoke [--oracle]\n  bun cli.mjs render --repo /path/plugin --models models.local.json --out runs/render\n  bun cli.mjs run --repo /path/plugin --models models.local.json --out runs/comparison\n  node cli.mjs score --run runs/comparison\n  node cli.mjs audit --run runs/comparison --out reviews/manual.jsonl\n  node cli.mjs compare --left RUN --left-model ID --right RUN --right-model ID\n  node cli.mjs export-public --run runs/comparison --out reviews/public.json\n\nrun: --split all|dev|validation|holdout, --category NAME, --id ID, --limit N,\n     --repeats 1, --concurrency 2, --seed 17, --max-calls 1200,\n     --min-request-delay-ms 0, --max-request-delay-ms 0,\n     --timeout-ms 120000, --http-retries 1, --format-retries 1,\n     --track reviewer|system, --bootstrap 500, --resume, --allow-drift\nAll fixture commands are inert data. Requests go only to configured provider or local OpenCode host URLs.\nLive evaluation requires Bun and the plugin checkout.\nbaseline is a metric-only test, NOT model performance or host integration.\n`,
     )
     return
   }
@@ -286,6 +288,8 @@ async function main() {
     seed,
     track: a.track ?? "reviewer",
     maxCalls: numberArg(a["max-calls"], 1200, 1, 1000000, "max-calls"),
+    minRequestDelayMs: numberArg(a["min-request-delay-ms"], 0, 0, 60000, "min-request-delay-ms"),
+    maxRequestDelayMs: numberArg(a["max-request-delay-ms"], 0, 0, 60000, "max-request-delay-ms"),
     timeoutMs: numberArg(a["timeout-ms"], 120000, 100, 1800000, "timeout-ms"),
     httpRetries: numberArg(a["http-retries"], 1, 0, 3, "http-retries"),
     formatRetries: numberArg(a["format-retries"], 1, 0, 2, "format-retries"),
@@ -294,7 +298,7 @@ async function main() {
     storePrompts: !a["no-prompts"],
   }
   console.log(
-    `${cases.length} cases x ${models.length} models x ${repeats} repetitions = ${total} decisions before retries; hard HTTP cap ${options.maxCalls}.`,
+    `${cases.length} cases x ${models.length} models x ${repeats} repetitions = ${total} decisions before retries; transport request cap ${options.maxCalls}.`,
   )
   let last = 0
   const summary = await runBenchmark({
@@ -306,7 +310,7 @@ async function main() {
     options,
     onProgress: (p) => {
       if (p.finished === p.total || Date.now() - last > 3000) {
-        console.log(`${p.finished}/${p.total}, HTTP ${p.calls}, ${p.status}`)
+        console.log(`${p.finished}/${p.total}, requests ${p.calls}, ${p.status}`)
         last = Date.now()
       }
     },

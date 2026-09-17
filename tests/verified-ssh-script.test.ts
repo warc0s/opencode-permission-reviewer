@@ -198,8 +198,9 @@ describe("verified SSH script protocol", () => {
   test("remote hash guard stops changed bytes before invoking the script", async () => {
     const directory = await fixture()
     const path = join(directory, "deploy.sh")
-    const marker = join(directory, "executed")
-    const original = `printf done > ${marker}\n`
+    const blockedMarker = join(directory, "blocked")
+    const approvedMarker = join(directory, "executed")
+    const original = `printf done > ${approvedMarker}\n`
     await writeFile(path, original)
     const fakeSsh = join(directory, "ssh")
     await writeFile(fakeSsh, '#!/bin/sh\nfor arg do remote=$arg; done\nexec sh -c "$remote"\n', {
@@ -212,12 +213,12 @@ describe("verified SSH script protocol", () => {
       shell: "bash",
     })
     const env = { ...process.env, PATH: `${directory}:${process.env.PATH ?? ""}` }
-    await writeFile(path, `printf changed > ${marker}\n`)
+    await writeFile(path, `printf changed > ${blockedMarker}\n`)
     await expect(execFileAsync("sh", ["-c", command], { env })).rejects.toThrow()
-    await expect(stat(marker)).rejects.toThrow()
+    await expect(stat(blockedMarker)).rejects.toThrow()
     await writeFile(path, original)
     await execFileAsync("sh", ["-c", command], { env })
-    expect(await readFile(marker, "utf8")).toBe("done")
+    expect(await readFile(approvedMarker, "utf8")).toBe("done")
   })
 
   test("assembles complete first evidence and a compact follow-up for both hosts", async () => {

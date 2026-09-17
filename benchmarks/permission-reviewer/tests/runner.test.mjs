@@ -103,49 +103,67 @@ test("a host safety stop prevents further benchmark requests", async () =>
     assert.equal(result.complete, false)
     assert.equal(result.completedRows, 1)
   }))
-test("OpenCode transport permits two concurrent workers and caps the pool", async () =>
-  temp(async (dir) => {
-    process.env.PRB_TEST_CONCURRENT_PASSWORD = "synthetic-local-password"
-    const hostModel = {
-      id: "luna-medium",
-      model: "openai/gpt-5.6-luna",
-      endpoint: "http://127.0.0.1:1/",
-      transport: "opencode-v1",
-      variant: "medium",
-      format: "text",
-      hostPasswordEnv: "PRB_TEST_CONCURRENT_PASSWORD",
-    }
-    let active = 0
-    let peak = 0
-    const configured = {
-      ...base(dir),
-      cases: cases.slice(0, 2),
-      models: [hostModel],
-      options: { ...base(dir).options, concurrency: 2 },
-      completion: async () => {
-        active++
-        peak = Math.max(peak, active)
-        await new Promise((resolve) => setTimeout(resolve, 20))
-        active--
-        return success("allow")
-      },
-    }
-    try {
-      const result = await runBenchmark(configured)
-      assert(result.complete)
-      assert.equal(peak, 2)
-      await assert.rejects(
-        runBenchmark({
-          ...configured,
-          out: join(dir, "rejected"),
-          options: { ...configured.options, concurrency: 3 },
-        }),
-        /at most two workers/,
-      )
-    } finally {
-      delete process.env.PRB_TEST_CONCURRENT_PASSWORD
-    }
-  }))
+test(
+  "OpenCode transport permits two concurrent workers and caps the pool",
+  { timeout: 30000 },
+  async () =>
+    temp(async (dir) => {
+      process.env.PRB_TEST_CONCURRENT_PASSWORD = "synthetic-local-password"
+      const hostModel = {
+        id: "luna-medium",
+        model: "openai/gpt-5.6-luna",
+        endpoint: "http://127.0.0.1:1/",
+        transport: "opencode-v1",
+        variant: "medium",
+        format: "text",
+        hostPasswordEnv: "PRB_TEST_CONCURRENT_PASSWORD",
+      }
+      let active = 0
+      let peak = 0
+      let releaseBoth
+      let timer
+      const bothStarted = new Promise((resolve, reject) => {
+        releaseBoth = resolve
+        timer = setTimeout(() => reject(new Error("Concurrent workers did not overlap")), 10000)
+      })
+      const configured = {
+        ...base(dir),
+        cases: cases.slice(0, 2),
+        models: [hostModel],
+        options: { ...base(dir).options, concurrency: 2 },
+        completion: async () => {
+          active++
+          peak = Math.max(peak, active)
+          if (active === 2) {
+            clearTimeout(timer)
+            releaseBoth()
+          }
+          try {
+            await bothStarted
+            return success("allow")
+          } finally {
+            active--
+          }
+        },
+      }
+      try {
+        const result = await runBenchmark(configured)
+        assert(result.complete)
+        assert.equal(peak, 2)
+        await assert.rejects(
+          runBenchmark({
+            ...configured,
+            out: join(dir, "rejected"),
+            options: { ...configured.options, concurrency: 3 },
+          }),
+          /at most two workers/,
+        )
+      } finally {
+        clearTimeout(timer)
+        delete process.env.PRB_TEST_CONCURRENT_PASSWORD
+      }
+    }),
+)
 test("a random serial delay stays within bounds between provider requests", async () =>
   temp(async (dir) => {
     const started = []

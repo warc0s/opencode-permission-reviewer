@@ -75,6 +75,13 @@ export function parseDecision(value: unknown): ReviewDecision | undefined {
   if (rationale.length < 3 || rationale.length > 2_000) return
   if (typeof value.confidence !== "number" || !Number.isFinite(value.confidence)) return
   if (value.confidence < 0 || value.confidence > 1) return
+  if (
+    value.script_analysis !== undefined &&
+    (typeof value.script_analysis !== "string" ||
+      value.script_analysis.length < 20 ||
+      value.script_analysis.length > 1500)
+  )
+    return
   if (typeof value.scope_alignment !== "string" || !SCOPE_ALIGNMENTS.has(value.scope_alignment))
     return
   if (
@@ -90,6 +97,9 @@ export function parseDecision(value: unknown): ReviewDecision | undefined {
     user_authorization: value.user_authorization as ReviewDecision["user_authorization"],
     rationale,
     confidence: value.confidence,
+    ...(value.script_analysis === undefined
+      ? {}
+      : { script_analysis: value.script_analysis as string }),
     scope_alignment: value.scope_alignment as ScopeAlignment,
     evidence_completeness: value.evidence_completeness as EvidenceSufficiency,
   }
@@ -233,6 +243,13 @@ export const DECISION_SCHEMA = {
       enum: ["sufficient", "partial", "insufficient", "unknown"],
       description:
         "Whether the evidence was sufficient to decide: sufficient, partial (some gaps), insufficient (major gaps), unknown.",
+    },
+    script_analysis: {
+      type: "string",
+      minLength: 20,
+      maxLength: 1500,
+      description:
+        "Optional factual analysis of a fully supplied verified script. Describe effects and uncertainty, never user authorization or an approval.",
     },
   },
 } as const

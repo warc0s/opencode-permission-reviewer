@@ -1,0 +1,14 @@
+{
+  "models": [
+    {
+      "id": "grok-4.6-low-opencode-v1",
+      "model": "xai/grok-4.6",
+      "endpoint": "http://127.0.0.1:4096/",
+      "transport": "opencode-v1",
+      "hostPasswordEnv": "PRB_OPENCODE_SERVER_PASSWORD",
+      "variant": "low",
+      "format": "text",
+      "notes": "Use an official OpenCode V1 host with its normal subscription login. Never put OAuth tokens here."
+    }
+  ]
+}

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-09-17
+
+### Added
+
+- Inspect verified remote SSH scripts from bounded local evidence, with a
+  SHA-256 check of the staged script before remote execution.
+- Add `script command` to generate the guarded SSH invocation from a local file.
+- Add the repository-only PRB-600 synthetic reviewer benchmark and publish
+  results for nine complete model evaluations.
+- Test V2 host connection rejection for unsafe URLs, missing authentication,
+  and instance identity mismatch.
+
+### Changed
+
+- Clarify V1 and V2 configuration paths and document the limits of automatic
+  approval and failure handling.
+
 ## [2.0.0] - 2026-09-16
 
 ### Added

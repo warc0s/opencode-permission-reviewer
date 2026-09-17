@@ -5,6 +5,7 @@
  * compatibility installer, with fallback to `opencode` on PATH;
  * authentication uses REVIEWER_LIVE_PASSWORD. */
 import { strict as assert } from "node:assert"
+import { createHash } from "node:crypto"
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -12,6 +13,7 @@ import { createOpencodeClient } from "@opencode-ai/sdk"
 import { ApprovalReviewerRuntime, resolveConfig, loadResolvedConfig } from "../dist/index.js"
 import { probeCapabilities } from "../src/opencode/capability-detection.ts"
 import { decision, request } from "./helpers.ts"
+import { renderVerifiedSshScriptCommand } from "../src/verified-ssh-script.ts"
 import type { OpenCodeClientLike } from "../src/opencode/types.ts"
 
 const root = await mkdtemp(join(tmpdir(), "reviewer-host-regression-"))
@@ -25,6 +27,12 @@ const provider = Bun.serve({
     const body = (await req.json()) as (typeof captured)[number] & { stream?: boolean }
     captured.push(body)
     const tool = body.tools?.find((tool) => tool.function.name === "StructuredOutput")
+    const scriptAnalysis = JSON.stringify(body.messages).includes("status: full content")
+      ? {
+          script_analysis:
+            "Runs a fixed synthetic diagnostic without deleting data or reading credentials.",
+        }
+      : {}
     const delta = tool
       ? {
           tool_calls: [
@@ -32,11 +40,14 @@ const provider = Bun.serve({
               index: 0,
               id: "call_structured",
               type: "function",
-              function: { name: "StructuredOutput", arguments: JSON.stringify(decision("allow")) },
+              function: {
+                name: "StructuredOutput",
+                arguments: JSON.stringify(decision("allow", scriptAnalysis)),
+              },
             },
           ],
         }
-      : { content: JSON.stringify(decision("allow")) }
+      : { content: JSON.stringify(decision("allow", scriptAnalysis)) }
     const chunk = (delta: unknown, finish_reason: string | null) => ({
       id: "completion_synthetic",
       object: "chat.completion.chunk",
@@ -179,6 +190,33 @@ try {
   const result = await run()
   assert.equal(result.kind, "allow")
   assert.equal(replies.length, 1)
+  const scriptPath = join(project, "verified.sh")
+  const scriptContent = "echo synthetic-diagnostic\n".repeat(1100)
+  await writeFile(scriptPath, scriptContent)
+  const scriptCommand = renderVerifiedSshScriptCommand({
+    path: scriptPath,
+    destination: "synthetic.invalid",
+    sha256: createHash("sha256").update(scriptContent).digest("hex"),
+    shell: "bash",
+  })
+  const scriptRuntime = new ApprovalReviewerRuntime(ctx, config, undefined, [])
+  const scriptRequest = request({
+    id: "per_verified_first",
+    sessionID: session.data!.id,
+    patterns: [scriptCommand],
+    metadata: { command: scriptCommand },
+  })
+  assert.equal((await scriptRuntime.process(scriptRequest)).kind, "allow")
+  const fullPrompt = JSON.stringify(captured.at(-1)?.messages)
+  const escapedScript = JSON.stringify(scriptContent).slice(1, -1)
+  assert(fullPrompt.includes(escapedScript))
+  assert.equal(
+    (await scriptRuntime.process({ ...scriptRequest, id: "per_verified_second" })).kind,
+    "allow",
+  )
+  const compactPrompt = JSON.stringify(captured.at(-1)?.messages)
+  assert(compactPrompt.includes("Prior model-generated script analysis"))
+  assert(!compactPrompt.includes(escapedScript))
   const reviewRequests = captured.filter((r) =>
     JSON.stringify(r.messages).includes("PENDING_PERMISSION"),
   )
@@ -267,6 +305,7 @@ try {
       mcpConnected: true,
       isolationFailuresBlocked: true,
       incompleteActionBlocked: true,
+      verifiedScriptReusedWithoutRepeatingContent: true,
     }),
   )
 } finally {

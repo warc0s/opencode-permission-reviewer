@@ -19,6 +19,13 @@ import type { SshAuditSummary } from "../ssh-evidence.ts"
 import { SshEvidenceProvider } from "../evidence/ssh-provider.ts"
 import { LocalScriptEvidenceProvider } from "../evidence/local-script-provider.ts"
 import { GitEvidenceProvider } from "../evidence/git-provider.ts"
+import {
+  collectVerifiedSshScript,
+  configFingerprint,
+  parseVerifiedSshScriptCommand,
+  ScriptAnalysisRegistry,
+} from "../verified-ssh-script.ts"
+import { REVIEWER_PROMPT_VERSION } from "../policy.ts"
 
 export interface EvidenceAssemblyContext {
   client: OpenCodeClientLike | ContextReader
@@ -27,6 +34,7 @@ export interface EvidenceAssemblyContext {
   config: ReviewerConfig
   /** Live ask-decision capture, when enabled. Enrichment-only. */
   askDecisions?: AskDecisionSource
+  scriptRegistry?: ScriptAnalysisRegistry
 }
 
 /**
@@ -57,6 +65,17 @@ export async function assembleEvidence(
   // Resolve actor/lineage/intent. The resolver is resilient — it never throws,
   // degrading to "unknown" — so this cannot block a review.
   const actor = await resolveActorContext(request, messages, reader, ctx.directory, ctx.config)
+  const verifiedCommand = parseVerifiedSshScriptCommand(request)
+  const verifiedScript = verifiedCommand
+    ? await collectVerifiedSshScript(
+        verifiedCommand,
+        ctx.directory,
+        ctx.worktree,
+        actor.lineage.origin === "unknown" ? request.sessionID : actor.lineage.rootSessionID,
+        configFingerprint({ config: ctx.config, prompt: REVIEWER_PROMPT_VERSION }),
+        ctx.scriptRegistry ?? new ScriptAnalysisRegistry(),
+      )
+    : undefined
 
   // Parse the bash command and derive capability facts. Only computed for bash
   // requests; non-bash permissions have no command surface to analyze. Wrapped in
@@ -88,14 +107,16 @@ export async function assembleEvidence(
   // On timeout the whole assembly fails into the fail-safe escalation path.
   const fragments = await withTimeout(
     Promise.all(
-      providers.map((provider) =>
-        provider.collect({
-          request,
-          directory: ctx.directory,
-          worktree: ctx.worktree,
-          maxChars: ctx.config.maxEnrichmentChars,
-        }),
-      ),
+      providers
+        .filter((provider) => !(verifiedScript && provider.id === "ssh"))
+        .map((provider) =>
+          provider.collect({
+            request,
+            directory: ctx.directory,
+            worktree: ctx.worktree,
+            maxChars: ctx.config.maxEnrichmentChars,
+          }),
+        ),
     ),
     Math.min(ctx.config.timeoutMs, 20_000),
   )
@@ -107,7 +128,15 @@ export async function assembleEvidence(
     .join("\n\n")
 
   const sshFragment = fragments.find((fragment) => fragment.kind === "ssh")
-  const sshAudit: SshAuditSummary[] = sshFragment?.audit ?? []
+  const sshAudit: SshAuditSummary[] = verifiedScript
+    ? [
+        {
+          destination: verifiedScript.destination,
+          ...(verifiedScript.port === undefined ? {} : { port: String(verifiedScript.port) }),
+          stdinStatus: verifiedScript.status,
+        },
+      ]
+    : (sshFragment?.audit ?? [])
   const preflightDenial = fragments.find(
     (fragment) => fragment.preflightDenial !== undefined,
   )?.preflightDenial
@@ -135,6 +164,8 @@ export async function assembleEvidence(
   const { actionEvidenceComplete } = pendingPermissionSection(request, ctx.config)
   if (!actionEvidenceComplete)
     completenessReasons.push("pending action was elided or truncated in the evidence")
+  if (verifiedScript?.status === "unavailable")
+    completenessReasons.push("verified script content was unavailable or did not match its hash")
 
   return {
     request,
@@ -146,13 +177,14 @@ export async function assembleEvidence(
       delegatedSession: actor.lineage.origin !== "human-root",
     }),
     enrichment,
+    ...(verifiedScript === undefined ? {} : { verifiedScript }),
     sshAudit,
     ...(preflightDenial === undefined ? {} : { preflightDenial }),
     actor: actor.actor,
     lineage: actor.lineage,
     intent: actor.intent,
     actionPurpose,
-    actionEvidenceComplete,
+    actionEvidenceComplete: actionEvidenceComplete && verifiedScript?.status !== "unavailable",
     evidenceCompleteness: {
       ...actor.completeness,
       purpose: purposeOk,

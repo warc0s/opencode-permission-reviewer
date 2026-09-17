@@ -10,7 +10,13 @@ export class ReviewAttempt {
   readonly evidence: Partial<
     Pick<
       ReviewEnvelope,
-      "sshAudit" | "actor" | "capability" | "policyTrace" | "askDecisions" | "evidenceCompleteness"
+      | "sshAudit"
+      | "actor"
+      | "capability"
+      | "policyTrace"
+      | "askDecisions"
+      | "evidenceCompleteness"
+      | "verifiedScript"
     >
   > & {
     timings?: { contextMs?: number; enrichmentMs?: number; reviewerMs?: number; replyMs?: number }

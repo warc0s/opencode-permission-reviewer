@@ -19,6 +19,7 @@ import { V2AskDecisions } from "./event-codec.ts"
 import { REVIEWER_PROMPT_VERSION } from "../../policy.ts"
 import packageInfo from "../../../package.json"
 import { VERIFIED_V2_VERSION } from "../host-guard.ts"
+import { ScriptAnalysisRegistry } from "../../verified-ssh-script.ts"
 
 type Context = Parameters<Plugin.Plugin["setup"]>[0]
 
@@ -49,6 +50,7 @@ export async function setupWithServices(
   const generation = randomUUID()
   const identity = randomUUID()
   const backend = services.createBackend(ctx, config)
+  const scriptRegistry = new ScriptAnalysisRegistry()
   const askDecisions = config.askDecisions ? new V2AskDecisions() : undefined
   const requests = new Map<
     string,
@@ -244,6 +246,7 @@ export async function setupWithServices(
                 directory,
                 worktree: ctx.location.project.directory,
                 config,
+                scriptRegistry,
                 ...(askDecisions ? { askDecisions } : {}),
               })
               envelope.actionEvidenceComplete =
@@ -288,6 +291,8 @@ export async function setupWithServices(
         }
       // The hook owns this evaluation; there is no published permission ID to reply to.
       input.effect = result.kind === "allow" ? "allow" : result.kind === "deny" ? "deny" : "ask"
+      if (input.effect === "allow" && envelope?.actionEvidenceComplete !== false)
+        scriptRegistry.rememberApproved(envelope?.verifiedScript, result.decision)
       if (input.effect !== "allow") input.message = result.reason
       attempt.close("finished")
       // No awaited I/O between the terminal mutation and returning the hook.
@@ -366,6 +371,17 @@ export async function setupWithServices(
                 }
               : {}),
             ...(envelope?.sshAudit.length ? { ssh: envelope.sshAudit } : {}),
+            ...(envelope?.verifiedScript
+              ? {
+                  verifiedScript: {
+                    sha256: envelope.verifiedScript.sha256,
+                    status: envelope.verifiedScript.status,
+                    ...(envelope.verifiedScript.bytes === undefined
+                      ? {}
+                      : { bytes: envelope.verifiedScript.bytes }),
+                  },
+                }
+              : {}),
             ...(envelope?.askDecisions
               ? {
                   askDecisions: envelope.askDecisions

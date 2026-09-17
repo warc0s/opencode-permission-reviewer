@@ -12,6 +12,18 @@ import { decision } from "./helpers.mjs"
 const exec = promisify(execFile)
 const benchmark = fileURLToPath(new URL("../", import.meta.url))
 
+test("CLI errors do not echo private argument values", async () => {
+  const privateValue = "synthetic-private-value"
+  await assert.rejects(
+    exec("node", ["cli.mjs", "validate", `--${privateValue}`], { cwd: benchmark }),
+    (error) => {
+      assert.match(error.stderr, /benchmark command failed/)
+      assert(!error.stderr.includes(privateValue))
+      return true
+    },
+  )
+})
+
 test("CLI runs real plugin replay through a local HTTP provider and exports safe results", async () => {
   let calls = 0
   const server = createServer(async (request, response) => {

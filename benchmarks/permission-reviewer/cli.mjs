@@ -322,7 +322,7 @@ async function main() {
     process.exitCode = 2
   }
 }
-main().catch((error) => {
-  console.error("ERROR:", error.message)
+main().catch(() => {
+  console.error("ERROR: benchmark command failed; check configuration and private run files.")
   process.exitCode = 1
 })

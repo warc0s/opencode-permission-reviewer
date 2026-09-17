@@ -5,7 +5,7 @@
 > with or endorsed by [Anomaly](https://anoma.ly).
 
 > **A tool-free AI reviewer for every `ask` permission.** It reads the request,
-> your policy, and the session context, then **allows once, denies with
+> your policy, and the session context, then **allows, denies with
 > feedback, or escalates to you** — so safe actions don't wait for a keystroke,
 > and genuinely risky ones still get blocked or surfaced.
 
@@ -21,9 +21,10 @@ OpenCode pauses on **every** `ask` permission and waits for a keystroke — even
 for safe, routine actions. This plugin adds a Codex-Guardian-style reviewer: a
 dedicated, tool-free model session reads the pending request, bounded
 transcript evidence, recovered user intent, and **a tenant policy you control**,
-then allows `once`, denies with rationale, or escalates to you.
-**Critical risk is never allowed**, and anything broken or uncertain
-fails safe to manual review.
+then allows, denies with rationale, or escalates to you.
+Actions the reviewer classifies as critical are not auto-approved. Failures do
+not become new approvals: they lead to manual review or denial, depending on
+the host and configuration.
 
 - **Preserves your policy** — `allow` continues, `deny` stays blocked; neither
   ever reaches the reviewer.
@@ -186,9 +187,11 @@ review; by default it is `2 * timeoutMs + 60000`. Retries consume this budget.
 ## Choosing the reviewer model
 
 The reviewer is a normal OpenCode model invocation (every tool denied at the
-session-permission level), so it can
-be **any model from any provider you have configured**. Three options,
-identical in both config files:
+session-permission level), so it can be **any model from any provider you have
+configured**. In V1, keep shared options identical in `opencode.json` and
+`tui.json` when using the overlay. In V2, configure reviewer settings in the
+trusted global `permission-reviewer.jsonc`; the TUI reads them from the server.
+The model options are:
 
 - **`model`** — in `provider/model` form. Must match a configured provider and
   a model that provider exposes.
@@ -199,22 +202,24 @@ identical in both config files:
   `text` (ask the model to emit JSON in plain text and parse it locally). Use
   `text` for models that reject the `json_schema` format, e.g.
   `opencode-go/deepseek-v4-flash`.
-- **`timeoutMs`** — review timeout; must match across files.
+- **`timeoutMs`**: review timeout; match it across the V1 config files.
 
 The default reviewer is **`openai/gpt-5.6-luna`** (`max` reasoning) — a real
 model that follows JSON schemas well. Override `model` to use any other
 provider/model you have configured; whichever you pick should follow structured
-output reliably, because weaker models just produce more escalations (safe, but
-noisier). Higher reasoning variants give better safety judgments at higher
-cost/latency.
+output reliably. Model mistakes can cause unsupported approvals as well as
+unnecessary escalations, so compare both safety errors and format validity.
+Higher reasoning variants may cost more or take longer without always improving
+the result.
 
 ### Reviewer models without structured-output support
 
 Some models (for example `opencode-go/deepseek-v4-flash`) do not support
 OpenCode's `json_schema` structured-output format and fail with a format error
 when it is requested. For those, set `"outputFormat": "text"` so the reviewer
-asks the model to emit its decision as plain JSON and parses it locally. This
-needs the flag set identically in both `opencode.json` and `tui.json`:
+asks the model to emit its decision as plain JSON and parses it locally. For V1
+with the optional overlay, set this option identically in `opencode.json` and
+`tui.json`. For V2, set it in the trusted global `permission-reviewer.jsonc`:
 
 ```jsonc
 {
@@ -225,16 +230,17 @@ needs the flag set identically in both `opencode.json` and `tui.json`:
 }
 ```
 
-Text mode is **safe but noisier**: without host-side schema enforcement the
-plugin re-prompts the reviewer once if the response is unparseable (mirroring
-the auto-retry that `json_schema` mode gets from OpenCode), and a response that
-is still invalid escalates to a human rather than being auto-approved. Parsing
+Text mode has no host-side schema enforcement: the plugin re-prompts the
+reviewer once if the response is unparseable (mirroring the auto-retry that
+`json_schema` mode gets from OpenCode). A response that is still invalid is not
+auto-approved; it escalates or is denied according to `escalationMode`. Parsing
 is deliberately strict and fail-closed: the entire response must be exactly one
 JSON object (optionally wrapped in a single Markdown code fence). Prose around
-the object, multiple objects, multiple fences, or any other ambiguity escalates
-to a human — the parser never guesses which candidate the model meant. Every
+the object, multiple objects, multiple fences, or any other ambiguity prevents
+automatic approval: the parser never guesses which candidate the model meant. Every
 parsed decision still passes the same strict `parseDecision` validation and
-`enforceDecision` invariants (critical risk is never approved, etc.), so text
+`enforceDecision` invariants (model-classified critical risk is not approved,
+etc.), so text
 mode cannot approve anything that structured mode would not.
 
 One caveat applies to any output format: the deterministic gates check the
@@ -251,7 +257,7 @@ Every option is optional. Numeric/string options are clamped to safe bounds.
 | `model`                | `openai/gpt-5.6-luna`                                     | `provider/model`                    | Reviewer model (override with any provider/model)                                             |
 | `variant`              | `max`                                                     | non-empty string                    | Reasoning variant passed to OpenCode                                                          |
 | `outputFormat`         | `json_schema`                                             | `json_schema` / `text`              | How the reviewer returns its decision (`text` for models without structured output)           |
-| `timeoutMs`            | `120000`                                                  | `5000`–`600000`                     | Review timeout (match in both files)                                                          |
+| `timeoutMs`            | `120000`                                                  | `5000`–`600000`                     | Review timeout (match across V1 config files)                                                 |
 | `confidenceThreshold`  | `0.7`                                                     | `0.5`–`1`                           | Minimum confidence to auto-act; below it escalates                                            |
 | `maxContextChars`      | `32000`                                                   | `4000`–`200000`                     | Total transcript evidence budget                                                              |
 | `maxPartChars`         | `8000`                                                    | `500`–`50000`                       | Per-message-part budget                                                                       |
@@ -357,14 +363,17 @@ Once resolved, both hosts show a compact status strip: one line for the result
 and a second for its rationale, with long text truncated. The review keymap is
 released immediately; the result stays visible for 5 s. Editor availability
 during a pending review depends on the host; the V2 strip is not a keyboard
-lock. On a technical failure or escalation, the overlay is removed and
-OpenCode's native approval controls
-become available with a **manual review required** warning. A broken TUI
+lock. On a final escalation in interactive mode, the overlay is removed and
+OpenCode's native approval controls become available with a **manual review
+required** warning. Host interruption, event-stream loss, and fail-closed
+settings can instead deny the request. A broken TUI
 transport **never changes the safety decision**.
 
 ## How it works
 
-1. OpenCode emits `permission.asked` for any `ask`-classified action.
+1. OpenCode V1 emits `permission.asked` for an `ask`-classified action. V2 calls
+   the `permission.evaluate` hook; the plugin preserves decisions already made
+   by the host or other plugins and reviews only requests that remain `ask`.
 2. A deterministic **emergency brake** rejects unmistakable root destruction and
    direct credential export before any model call. It is wrapper-aware
    (`sudo`, `doas`, `env`, `command`, `nice`, `nohup`, …), so `sudo rm -rf /`,
@@ -377,13 +386,14 @@ transport **never changes the safety decision**.
    delegated (subagent) session **no** user-role message counts as human
    authorization — the initial briefing and every later `task_id` follow-up
    are agent-authored and surface only as labeled delegation context.
-   **Common credential formats are always redacted** from this evidence
+   Recognized common credential formats are redacted from this evidence
    (`Bearer`, AWS / GitHub / OpenAI / Anthropic / Slack / Google / Stripe /
    GitLab keys, JWTs, private keys, URL userinfo, cookies, and
-   credential-bearing assignments) so a secret you once pasted into the
-   session never travels to the reviewer's provider.
-4. An **isolated, tool-free reviewer session** runs the reviewer model with a
-   strict JSON schema and returns `{ outcome, risk_level, user_authorization,
+   credential-bearing assignments). Redaction reduces exposure but cannot
+   prove that every secret format has been detected.
+4. An **isolated, tool-free reviewer session** runs the reviewer model with
+   schema-validated output or strict text parsing and returns
+   `{ outcome, risk_level, user_authorization,
 rationale, confidence }`. The session is created in a scratch directory
    outside your project so the host does not prepend repository instructions
    (`AGENTS.md`, project config `instructions`, project MCP context) to the
@@ -391,26 +401,32 @@ rationale, confidence }`. The session is created in a scratch directory
    Tool denial is a wildcard session permission rule, which takes precedence
    over agent-config allows and therefore also covers MCP tools and MCP
    resource tools. If the host refuses the isolated directory, the review is
-   not run in the project directory: it escalates to the human as a reviewer
-   failure instead, so isolation is never silently degraded.
-5. Decisions are enforced with invariants: **critical risk is never approved**,
+   not run in the project directory: the failure cannot auto-approve the
+   request, so isolation is never silently degraded.
+5. Decisions are enforced with invariants: **risk classified as critical by the
+   reviewer is not auto-approved**,
    **high risk with low/unknown authorization is escalated**, **medium risk
    with unknown authorization is escalated**, low confidence is escalated,
-   invalid output is escalated, errors and timeouts are escalated. Two
+   invalid output is escalated, and reviewer errors and timeouts cannot become
+   approvals. Two
    deterministic blocks also apply regardless of model confidence: a degraded
    trusted config (see above) and evidence where a material part of the action
    itself was elided or truncated — neither can auto-approve. A single
    enforcement boundary then disposes every internal `escalate` according to
    `escalationMode` (`manual` → human; `deny` → reject with the original reason).
-6. Approved actions get `once` (never `always`) and execute **silently** — the
+   V2 also denies requests invalidated by cancellation, review deadline, or
+   loss of the host event connection.
+6. V1 approvals reply `once` (never `always`); V2 approvals return `allow` from
+   the evaluation hook. Both continue **silently** if the host applies the
+   decision: the
    tool output is not annotated, so approval rationale never contaminates the
    primary agent context (rationale still lands in audit, TUI, and debug logs).
    Denials return a short actionable rationale as tool feedback. A manual reply
    that arrives mid-review **supersedes** the automatic one (no double reply).
 
-By default everything fails safe to **manual review**. With
-`escalationMode: "deny"`, uncertainty fails closed to a reject with reason
-instead — suitable for non-interactive agents.
+By default final reviewer escalations go to **manual review**. With
+`escalationMode: "deny"`, they become rejections with reasons instead. V2 host
+interruptions and event-stream failures can deny directly in either mode.
 
 ## Evidence enrichment
 
@@ -485,23 +501,26 @@ binary, blocked, or truncated evidence) remains a reviewer decision.
 
 ## Safety properties
 
-- Responds only to `permission.asked`.
-- **Critical-risk actions cannot be approved**, even if model output says
-  `allow`.
+- Reviews only `ask` requests: V1 handles `permission.asked`, while V2 handles
+  `permission.evaluate` without replacing an existing host decision.
+- **A decision the model labels critical cannot be auto-approved**, even if its
+  outcome says `allow`. This does not guarantee that every dangerous action is
+  classified correctly by the model.
 - **High-risk actions with low or unknown authorization, and medium-risk
   actions with unknown authorization, are deterministically escalated** — the
   model cannot auto-approve them by labeling a contradictory combination.
-- Invalid, low-confidence, or inconsistent output is escalated to the user.
-- **Common credential formats are always redacted** from the evidence before
-  reaching the reviewer, so credentials never leak to the reviewer's provider.
+- Invalid, low-confidence, or inconsistent output cannot create an approval.
+  Final escalations reach the user or are denied according to `escalationMode`;
+  some V2 host failures deny directly.
+- Known common credential formats are redacted from reviewer evidence. Redaction
+  is defense in depth, not a guarantee that every possible secret is detected.
 - Reviewer sessions cannot request permissions recursively; every tool is
   denied by a wildcard session permission rule that also covers MCP tools and
   takes precedence over agent-config allows.
 - The reviewer session runs outside the project directory, so repository
   instructions (`AGENTS.md` and project-config `instructions`) are not part of
   its system prompt; if the isolated directory cannot be established, the
-  review escalates to the human as a reviewer failure rather than running
-  with degraded isolation.
+  review cannot auto-approve rather than running with degraded isolation.
 - A narrow deterministic emergency brake rejects unmistakable root destruction
   (including privilege-prefixed and command-string forms such as
   `sudo rm -rf /`, `sh -c 'rm -rf /'`, `ssh host rm -rf /`) and direct
@@ -561,17 +580,17 @@ binary, blocked, or truncated evidence) remains a reviewer decision.
 
 ## Troubleshooting
 
-| Symptom                                       | Likely cause                                                                                     | Fix                                                                                                                                                                                             |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Every `ask` escalates after a long wait       | Reviewer model not found / provider not configured                                               | Ensure the model's provider is set up in OpenCode and the `model` ID is valid in **both** config files                                                                                          |
-| Plugin does nothing                           | No `ask` rule in your `permission` policy                                                        | Add e.g. `"bash": "ask"`                                                                                                                                                                        |
-| TUI overlay never appears                     | Not in `tui.json`; mismatched `timeoutMs`; stale process; or host without Solid/OpenTUI pipeline | Register the same block in `tui.json` with matching `timeoutMs`. Overlay is raw TSX (`dist/tui/tui.tsx`); a prebundled `dist/tui.js` does not render. **Fully restart OpenCode** after rebuilds |
-| Startup error: "authenticated SDK transport…" | OpenCode V1 outside `>=1.18.29 <2`, or an SDK change that hides the raw transport                | Upgrade OpenCode and `@opencode-ai/plugin` into the supported range; report the version in an issue                                                                                             |
-| Reviewer host connection unavailable          | Independent V2 server without a registered endpoint                                              | Configure the trusted server URL and authentication, then restart                                                                                                                               |
-| Reviews always time out                       | `timeoutMs` too low for the model                                                                | Raise `timeoutMs` (up to 600000)                                                                                                                                                                |
-| `GIT_STATE_ANALYSIS` shows `spawn git ENOENT` | `git` not on `PATH`                                                                              | Install `git`; Git enrichment degrades safely until then                                                                                                                                        |
-| Want a version check                          | Host/SDK outside the supported range                                                             | Run `opencode --version` and `opencode-permission-reviewer doctor`                                                                                                                              |
-| Want to turn it off                           | —                                                                                                | Remove the plugin entry from both `opencode.json` and `tui.json`                                                                                                                                |
+| Symptom                                       | Likely cause                                                                      | Fix                                                                                                                                                                         |
+| --------------------------------------------- | --------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Every `ask` escalates after a long wait       | Reviewer model not found / provider not configured                                | Check the model ID in V1's `opencode.json` (and `tui.json` if used), or V2's trusted global `permission-reviewer.jsonc`                                                     |
+| Plugin does nothing                           | No `ask` rule in the host permission policy                                       | Set a V1 `"bash": "ask"` rule or a V2 shell permission with `effect: "ask"`                                                                                                 |
+| TUI overlay never appears                     | Wrong TUI config; stale process; or host without Solid/OpenTUI pipeline           | Check V1 `tui.json` or V2 global `cli.json`. The overlay is raw TSX (`dist/tui/tui.tsx`); a prebundled `dist/tui.js` does not render. Fully restart OpenCode after rebuilds |
+| Startup error: "authenticated SDK transport…" | OpenCode V1 outside `>=1.18.29 <2`, or an SDK change that hides the raw transport | Upgrade OpenCode and `@opencode-ai/plugin` into the supported range; report the version in an issue                                                                         |
+| Reviewer host connection unavailable          | Independent V2 server without a registered endpoint                               | Configure the trusted server URL and authentication, then restart                                                                                                           |
+| Reviews always time out                       | `timeoutMs` too low for the model                                                 | Raise `timeoutMs` (up to 600000)                                                                                                                                            |
+| `GIT_STATE_ANALYSIS` shows `spawn git ENOENT` | `git` not on `PATH`                                                               | Install `git`; Git enrichment degrades safely until then                                                                                                                    |
+| Want a version check                          | Host/SDK outside the supported range                                              | Run `opencode --version` and `opencode-permission-reviewer doctor`                                                                                                          |
+| Want to turn it off                           | -                                                                                 | Remove the plugin from the host config and, if installed, V1 `tui.json` or V2 global `cli.json`                                                                             |
 
 Enable `"debug": true` for verbose stderr logs while investigating. TUI load
 errors (`[tui.plugin] …`) are printed on the **TUI process console**, not in

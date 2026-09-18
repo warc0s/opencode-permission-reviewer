@@ -26,6 +26,11 @@ Note: configs using `credentialRead` degrade fail-closed on older plugin
 versions that reject unknown condition keys (the rule is dropped and trusted
 configs block automatic approval until fixed).
 
+### Fixed
+
+- Failure-safe denial reasons now include the failure phase and the underlying
+  error cause instead of a bare SDK reason word.
+
 ## [2.1.0] - 2026-09-17
 
 ### Added

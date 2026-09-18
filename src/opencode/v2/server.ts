@@ -4,6 +4,7 @@ import { loadResolvedConfig } from "../../config/loader.ts"
 import { reviewBudgetMs } from "../../config.ts"
 import { createAuditWriter } from "../../audit.ts"
 import { applyEscalationDisposition } from "../../escalation.ts"
+import { formatFailureReason } from "../../failure-reason.ts"
 import { assembleEvidence, defaultEvidenceProviders } from "../../context/evidence-assembler.ts"
 import { ReviewAttempt } from "../../core/review-attempt.ts"
 import { evaluateReview } from "../../core/review-engine.ts"
@@ -261,7 +262,7 @@ export async function setupWithServices(
         result = applyEscalationDisposition(
           {
             kind: "escalate",
-            reason: error instanceof Error ? error.message : String(error),
+            reason: formatFailureReason("permission review hook", error),
             decisionSource: "failure-safe",
           },
           config,

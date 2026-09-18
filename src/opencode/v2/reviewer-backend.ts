@@ -15,6 +15,7 @@ import { buildEvidenceResult } from "../../context.ts"
 import { buildReviewerPrompt, DEFAULT_TENANT_POLICY, REVIEWER_SYSTEM_PROMPT } from "../../policy.ts"
 import { enforceDecision, parseDecision, parseDecisionFromText } from "../../decision.ts"
 import { applyEscalationDisposition } from "../../escalation.ts"
+import { formatFailureReason } from "../../failure-reason.ts"
 import { splitModel } from "../../config.ts"
 import { createIsolatedLocation } from "./isolated-location.ts"
 
@@ -277,7 +278,7 @@ export class V2ReviewerBackend {
       return applyEscalationDisposition(
         {
           kind: "escalate",
-          reason: error instanceof Error ? error.message : String(error),
+          reason: formatFailureReason("reviewer session call", error),
           reviewSessionID: id,
           decisionSource: "failure-safe",
         },

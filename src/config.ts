@@ -225,6 +225,7 @@ const CONDITION_FLAG_KEYS = [
   "packageManagement",
   "gitMutation",
   "networkObserved",
+  "credentialRead",
   "privilegeEscalation",
   "remoteEnabled",
   "persistence",

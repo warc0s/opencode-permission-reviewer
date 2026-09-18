@@ -225,6 +225,51 @@ describe("trust hardening — rule condition validation", () => {
     expect(config.policyRules).toHaveLength(0)
   })
 
+  test("credentialRead:true is accepted as a policy condition", () => {
+    const config = resolveConfig({
+      policyRules: [
+        {
+          id: "cred",
+          source: "global",
+          effect: "manual",
+          reason: "cred",
+          when: { credentialRead: true },
+        },
+      ],
+    })
+    expect(config.policyRules).toHaveLength(1)
+  })
+
+  test("credentialRead:false drops the rule (facts are never false)", () => {
+    const config = resolveConfig({
+      policyRules: [
+        {
+          id: "cred",
+          source: "global",
+          effect: "manual",
+          reason: "cred",
+          when: { credentialRead: false },
+        },
+      ],
+    })
+    expect(config.policyRules).toHaveLength(0)
+  })
+
+  test("a misspelled credential condition key drops the rule", () => {
+    const config = resolveConfig({
+      policyRules: [
+        {
+          id: "cred",
+          source: "global",
+          effect: "manual",
+          reason: "cred",
+          when: { credentialReads: true },
+        },
+      ],
+    })
+    expect(config.policyRules).toHaveLength(0)
+  })
+
   test("an empty when object drops the rule; catch-alls are expressed by omitting when", () => {
     const config = resolveConfig({
       policyRules: [{ id: "catch-all", source: "global", effect: "deny", reason: "all", when: {} }],

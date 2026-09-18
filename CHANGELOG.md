@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add a deterministic `credentialRead` capability signal: known file readers
+  (`cat`, `head`, `tail`, `less`, `more`, `grep`, `rg`, `sed`, `awk`,
+  `base64`, `xxd`, `od`, `strings`, `source`, `.`) with a literal credential
+  path operand, or any command with a literal credential path as an input
+  (`<`) redirect target, report `credentialRead: true` (otherwise
+  `"unknown"`, never `false`). Example and public-key suffixes (`.example`,
+  `.sample`, `.template`, `.dist`, `.pub`) never match.
+- Add a `credentialRead` policy condition key (positive-only, AND-composable
+  with `networkObserved` and the other keys). No built-in rule uses it; the
+  default rule set is unchanged.
+- Record a flattened `credentialRead: true` field in the audit capability
+  snapshot (present only when true). Audit `schemaVersion` stays 3.
+
+Note: configs using `credentialRead` degrade fail-closed on older plugin
+versions that reject unknown condition keys (the rule is dropped and trusted
+configs block automatic approval until fixed).
+
 ## [2.1.0] - 2026-09-17
 
 ### Added

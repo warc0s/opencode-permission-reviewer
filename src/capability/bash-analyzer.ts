@@ -8,6 +8,7 @@ import type {
   Redirection,
 } from "../types.ts"
 import { shellBasename, type ShellToken } from "../shell-lexer.ts"
+import { isSensitivePathToken } from "./sensitive-paths.ts"
 
 /*
  * Bash capability analyzer.
@@ -345,6 +346,24 @@ const PERSISTENCE_TOOLS = new Set(["at", "atq", "atrm", "cron", "crontab"])
 
 const SSH_TOOLS = new Set(["ssh", "mosh", "autossh"])
 
+const CREDENTIAL_READERS = new Set([
+  "cat",
+  "head",
+  "tail",
+  "less",
+  "more",
+  "grep",
+  "rg",
+  "sed",
+  "awk",
+  "base64",
+  "xxd",
+  "od",
+  "strings",
+  "source",
+  ".",
+])
+
 const SHELL_KEYWORDS = new Set(["{", "}", "(", ")", "then", "else", "do", "elif", "!"])
 
 // --- helpers ----------------------------------------------------------------
@@ -555,6 +574,15 @@ function gitSubcommandOf(cmd: ShellToken[]): { sub?: string } {
   return {}
 }
 
+/** Whether a token value is a static literal path candidate. Dynamic values
+ *  (variables, command substitution, globs) never count as credential reads:
+ *  the analyzer cannot resolve what they point at. */
+function isLiteralPathValue(value: string): boolean {
+  if (!value) return false
+  if (/[$`*?[\]{}]/.test(value)) return false
+  return true
+}
+
 // --- analyzer ---------------------------------------------------------------
 
 /** Analyze a parsed bash command and produce capability facts. */
@@ -581,6 +609,7 @@ export function analyzeCapability(
   let remoteMutation = false
   let gitObserved = false
   let gitMutation = false
+  let credentialRead = false
   let sawReadOnlyExecutable = false
   let sawUnknownExecutable = false
   const destinations: string[] = []
@@ -823,6 +852,38 @@ export function analyzeCapability(
     // our lexer but `setsid`/`nohup` cover the common persistence cases.
   }
 
+  // Deterministic credential reads: a known file reader with a literal
+  // credential path operand, or any command with a literal credential path as
+  // an input (`<`) redirect target. Wrappers are already peeled in
+  // `effective`, so `sudo cat ...` arrives here as `cat ...`. Facts accumulate
+  // with OR across every command in the chain.
+  for (let index = 0; index < parsed.effective.length; index += 1) {
+    const cmd = parsed.effective[index]!
+    if (cmd.length === 0) continue
+    const base = shellBasename(cmd[0]!.value)
+    const redirects = parsed.redirections[index] ?? []
+    for (const r of redirects) {
+      if (r.operator !== "<") continue
+      if (!isLiteralPathValue(r.target)) continue
+      if (isSensitivePathToken(r.target)) credentialRead = true
+    }
+    if (!CREDENTIAL_READERS.has(base)) continue
+    for (let i = 1; i < cmd.length; i += 1) {
+      const value = cmd[i]!.value
+      // A token following a redirect operator is that redirect's target, not
+      // a path operand: `cat > .env` writes the file, it does not read it.
+      const prev = cmd[i - 1]!.value
+      if (prev === "<" || prev === ">" || prev === ">>" || prev === "<<") continue
+      if (/^[0-9]*[<>]/.test(prev)) continue
+      if (value === "--") continue
+      if (value.startsWith("-") && value.length > 1) continue
+      if (value === "<" || value === ">" || value === ">>" || value === "<<") continue
+      if (value.startsWith("<") || value.startsWith(">")) continue
+      if (!isLiteralPathValue(value)) continue
+      if (isSensitivePathToken(value)) credentialRead = true
+    }
+  }
+
   // Redirections across all commands.
   for (const segRedirects of parsed.redirections) {
     if (hasWriteRedirect(segRedirects)) {
@@ -923,6 +984,7 @@ export function analyzeCapability(
     createsAdHocCode: staticFact(createsAdHocCode ? true : "unknown"),
     invokesExistingTestRunner: staticFact(invokesTestRunner ? true : "unknown"),
     invokesPackageLifecycleScripts: staticFact(invokesPackageLifecycle ? true : "unknown"),
+    credentialRead: staticFact(credentialRead ? true : "unknown"),
     writeEffects: {
       temporaryWrite: staticFact(temporaryWrite ? true : "unknown"),
       workspaceWrite: staticFact(workspaceWrite ? true : "unknown"),

@@ -446,6 +446,7 @@ export class ReviewCoordinator {
                 ...(capability.writeEffects.deletion.value === true ? { deletion: true } : {}),
               },
               ...(capability.network.observed.value === true ? { networkObserved: true } : {}),
+              ...(capability.credentialRead.value === true ? { credentialRead: true } : {}),
               ...(capability.process.privilegeEscalation.value === true
                 ? { privilegeEscalation: true }
                 : {}),

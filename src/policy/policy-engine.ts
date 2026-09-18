@@ -124,6 +124,7 @@ function matches(
     return false
   if (cond.gitMutation === true && cap?.git.possible.value !== true) return false
   if (cond.networkObserved === true && cap?.network.observed.value !== true) return false
+  if (cond.credentialRead === true && cap?.credentialRead.value !== true) return false
   if (cond.privilegeEscalation === true && cap?.process.privilegeEscalation.value !== true)
     return false
   if (cond.remoteEnabled === true && cap?.remote.enabled.value !== true) return false

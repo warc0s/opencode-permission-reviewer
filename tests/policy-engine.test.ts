@@ -20,6 +20,7 @@ function cap(overrides: Partial<CapabilityAssessment> = {}): CapabilityAssessmen
       source: "static-analysis",
       confidence: "unknown",
     },
+    credentialRead: { value: "unknown", source: "static-analysis", confidence: "unknown" },
     writeEffects: {
       temporaryWrite: { value: "unknown", source: "static-analysis", confidence: "unknown" },
       workspaceWrite: { value: "unknown", source: "static-analysis", confidence: "unknown" },
@@ -324,5 +325,75 @@ describe("policy engine — profile templates", () => {
     const trace = evaluatePolicy(c, actor("read-only"), config, PROFILE_TEMPLATES)
     expect(trace.matchedRules.some((m) => m.id === "read-only-workspace-write")).toBe(true)
     expect(trace.finalRoute).toBe("manual")
+  })
+})
+
+describe("policy engine - credentialRead condition", () => {
+  const readAndNetwork: PolicyRule[] = [
+    {
+      id: "cred-net",
+      source: "builtin",
+      when: { credentialRead: true, networkObserved: true },
+      effect: "manual",
+      reason: "credential read with network",
+    },
+  ]
+
+  function readCap(network: boolean | "unknown"): CapabilityAssessment {
+    return cap({
+      credentialRead: { value: true, source: "static-analysis", confidence: "high" },
+      network: {
+        ...cap().network,
+        observed: {
+          value: network,
+          source: "static-analysis",
+          confidence: network === true ? "high" : "unknown",
+        },
+      },
+    })
+  }
+
+  test("matches only when both credentialRead and networkObserved are true", () => {
+    expect(
+      evaluatePolicy(readCap(true), undefined, config, readAndNetwork).matchedRules,
+    ).toHaveLength(1)
+    expect(evaluatePolicy(readCap(true), undefined, config, readAndNetwork).finalRoute).toBe(
+      "manual",
+    )
+  })
+
+  test("no match when credentialRead is unknown", () => {
+    const c = cap({
+      network: {
+        ...cap().network,
+        observed: { value: true, source: "static-analysis", confidence: "high" },
+      },
+    })
+    expect(evaluatePolicy(c, undefined, config, readAndNetwork).matchedRules).toHaveLength(0)
+  })
+
+  test("no match when networkObserved is unknown", () => {
+    expect(
+      evaluatePolicy(readCap("unknown"), undefined, config, readAndNetwork).matchedRules,
+    ).toHaveLength(0)
+  })
+
+  test("deny beats review when both match on credentialRead", () => {
+    const rules: PolicyRule[] = [
+      {
+        id: "rev",
+        source: "builtin",
+        when: { credentialRead: true },
+        effect: "review",
+        reason: "r",
+      },
+      { id: "den", source: "builtin", when: { credentialRead: true }, effect: "deny", reason: "d" },
+    ]
+    const c = cap({
+      credentialRead: { value: true, source: "static-analysis", confidence: "high" },
+    })
+    const trace = evaluatePolicy(c, undefined, config, rules)
+    expect(trace.matchedRules).toHaveLength(2)
+    expect(trace.finalRoute).toBe("deny")
   })
 })

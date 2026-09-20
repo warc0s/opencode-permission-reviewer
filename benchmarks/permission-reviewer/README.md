@@ -8,10 +8,12 @@ package and does not change plugin behavior.
 
 The benchmark never executes fixture commands. It has no real-conversation
 capture, log import, telemetry, or replay feature. `run` contacts only the
-configured provider endpoint or local OpenCode host. The direct provider
-transport does not reuse OpenCode credentials. The optional `opencode-v1`
-transport delegates authentication to an official OpenCode V1 server; the
-benchmark never handles OAuth tokens. See the [evaluation protocol](./docs/METHODOLOGY.md)
+configured provider endpoint, local OpenCode host, or official Command Code
+CLI. The direct provider transport does not reuse OpenCode credentials. The
+optional `opencode-v1` transport delegates authentication to an official
+OpenCode V1 server; the benchmark never handles OAuth tokens. The optional
+`command-code-cli` transport uses the CLI's existing login, not its separately
+billed Provider API. See the [evaluation protocol](./docs/METHODOLOGY.md)
 before using a subscription and the [results table](./RESULTS.md) for published
 evaluations.
 
@@ -49,13 +51,23 @@ node cli.mjs audit --run runs/dev --out reviews/dev.jsonl --sample 40
 ```
 
 `render` makes no network calls. With direct transport, `--max-calls` bounds
-HTTP requests; with `opencode-v1`, it bounds host prompts, not any internal
-provider retries. Neither is a cost or subscription-usage cap. Start with a small
+HTTP requests; with `opencode-v1` or `command-code-cli`, it bounds host prompts,
+not any internal provider retries. Neither is a cost or subscription-usage cap.
+Start with a small
 transport check, inspect failures, then evaluate complete partitions with the
 same settings for each model. `--resume` requires an identical dataset, source,
 model configuration, and run settings. Use `--track system` to skip calls that
 the core would bypass deterministically; the default `reviewer` track still
 tests those model decisions counterfactually.
+
+For a Command Code subscription run, set `PRB_COMMAND_CODE_BIN` to the absolute
+path of the official CLI binary and use
+[`models.command-code-cli.example.json`](./examples/models.command-code-cli.example.json).
+This transport accepts only the `text` profile and a named effort variant. It
+starts a fresh headless process per case and stops if the CLI attempts a tool
+action. Command Code adds its own system prompt and receives the plugin policy
+and evidence together as user content, so its result is a distinct prompt
+profile, not a controlled comparison with `opencode-v1`.
 
 Raw `runs/` and `reviews/` stay local and private. They can contain prompts,
 provider responses, rationale text, endpoint details, and usage metadata.

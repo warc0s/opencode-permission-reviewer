@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto"
 import type { Plugin } from "@opencode/plugin"
+import type { OpenCodeEvent } from "@opencode/client"
 import { loadResolvedConfig } from "../../config/loader.ts"
 import { reviewBudgetMs } from "../../config.ts"
 import { createAuditWriter } from "../../audit.ts"
@@ -18,8 +19,9 @@ import { V2ReviewerBackend } from "./reviewer-backend.ts"
 import { withTimeout } from "../transport.ts"
 import { V2AskDecisions } from "./event-codec.ts"
 import { REVIEWER_PROMPT_VERSION } from "../../policy.ts"
+import { satisfies } from "semver"
 import packageInfo from "../../../package.json"
-import { VERIFIED_V2_VERSION } from "../host-guard.ts"
+import { SUPPORTED_V2_RANGE } from "../host-guard.ts"
 import { ScriptAnalysisRegistry } from "../../verified-ssh-script.ts"
 
 type Context = Parameters<Plugin.Plugin["setup"]>[0]
@@ -44,8 +46,10 @@ export async function setupWithServices(
     ): Pick<V2ReviewerBackend, "owns" | "review" | "waitForIdle">
   },
 ): Promise<() => Promise<void>> {
-  if (ctx.app.version !== VERIFIED_V2_VERSION)
-    throw new Error("This OpenCode V2 release has not been verified")
+  if (!satisfies(ctx.app.version, SUPPORTED_V2_RANGE))
+    throw new Error(
+      `Unsupported OpenCode V2 host ${ctx.app.version}; supported range is ${SUPPORTED_V2_RANGE}`,
+    )
   const directory = ctx.location.directory
   const config = services.loadConfig(ctx.options, directory, "unknown")
   const generation = randomUUID()
@@ -129,7 +133,10 @@ export async function setupWithServices(
   })
   const eventTask = (async () => {
     for await (const event of ctx.event.subscribe({ signal: subscription.signal })) {
-      askDecisions?.observe(event, directory)
+      // The setup context is typed by the oldest supported host SDK while
+      // reviewer events use the client library; the fields read here are
+      // stable across the supported range.
+      askDecisions?.observe(event as unknown as OpenCodeEvent, directory)
       if ("location" in event && event.location?.directory !== directory) continue
       if (event.type !== "session.execution.interrupted" && event.type !== "session.deleted")
         continue

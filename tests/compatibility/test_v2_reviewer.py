@@ -76,8 +76,25 @@ def model_server():
     thread.join(timeout=5)
 
 
-@pytest.mark.parametrize("output_format,decision_outcome", [("json_schema", "allow"), ("text", "allow"), ("json_schema", "deny"), ("json_schema", "ambiguous"), ("json_schema", "low-confidence-deny"), ("json_schema", "prior-deny"), ("json_schema", "later-deny"), ("json_schema", "interrupted"), ("json_schema", "retained"), ("json_schema", "brake"), ("json_schema", "schema-retry"), ("json_schema", "service")])
-def test_v2_reviewer_applies_and_cleans_up(launch_host, activate_host, model_server, output_format, decision_outcome, tmp_path):
+@pytest.mark.parametrize("host_version,output_format,decision_outcome", [
+    ("2.0.3", "json_schema", "allow"),
+    ("2.0.3", "text", "allow"),
+    ("2.0.3", "json_schema", "deny"),
+    ("2.0.3", "json_schema", "ambiguous"),
+    ("2.0.3", "json_schema", "low-confidence-deny"),
+    ("2.0.3", "json_schema", "prior-deny"),
+    ("2.0.3", "json_schema", "later-deny"),
+    ("2.0.3", "json_schema", "interrupted"),
+    ("2.0.3", "json_schema", "retained"),
+    ("2.0.3", "json_schema", "brake"),
+    ("2.0.3", "json_schema", "schema-retry"),
+    ("2.0.3", "json_schema", "service"),
+    ("2.0.11", "json_schema", "allow"),
+    ("2.0.11", "json_schema", "deny"),
+    ("2.0.11", "json_schema", "interrupted"),
+    ("2.0.11", "json_schema", "service"),
+])
+def test_v2_reviewer_applies_and_cleans_up(launch_host, activate_host, model_server, host_version, output_format, decision_outcome, tmp_path):
     expected_effect = decision_outcome
     if decision_outcome == "ambiguous":
         model_server["control"]["ambiguous"] = True
@@ -94,7 +111,7 @@ def test_v2_reviewer_applies_and_cleans_up(launch_host, activate_host, model_ser
         expected_effect = "allow"
     else:
         model_server["decision"]["outcome"] = decision_outcome
-    binary = os.environ["OPENCODE_V2_2_0_3"]
+    binary = os.environ[f"OPENCODE_V2_{host_version.replace('.', '_')}"]
     package = os.environ.get("PLUGIN_PACKAGE_PATH", str(Path(__file__).resolve().parents[2]))
     provider = {"providers": {"fixture": {
         "package": "@opencode/ai/providers/openai-compatible",
@@ -130,6 +147,7 @@ def test_v2_reviewer_applies_and_cleans_up(launch_host, activate_host, model_ser
         **({"model": {"providerID": "fixture", "id": "driver"}} if decision_outcome == "interrupted" else {}),
         "permissions": [{"action": "shell", "resource": "*", "effect": "ask"}]})
     session_id = session.get("data", session)["id"]
+    wait_prefix = "/api/session" if host_version == "2.0.3" else "/api/experimental/session"
     if decision_outcome == "interrupted":
         model_server["control"]["delay"] = 1
         request(f"/api/session/{session_id}/prompt", {"text": "Print the fixture marker using shell once"})
@@ -138,7 +156,7 @@ def test_v2_reviewer_applies_and_cleans_up(launch_host, activate_host, model_ser
             time.sleep(0.02)
         assert any(call.get("model") == "reviewer" for call in model_server["calls"])
         request(f"/api/session/{session_id}/interrupt", {})
-        request(f"/api/session/{session_id}/wait", {})
+        request(f"{wait_prefix}/{session_id}/wait", {})
         context = request(f"/api/session/{session_id}/context")
         assert not any(part.get("type") == "tool" and part.get("state", {}).get("status") == "completed"
                        for message in context["data"] if message["type"] == "assistant" for part in message["content"]), context
@@ -201,7 +219,7 @@ def test_v2_reviewer_applies_and_cleans_up(launch_host, activate_host, model_ser
             "permissions": [{"action": "shell", "resource": "*", "effect": "ask"}]})
         operation_id = operation.get("data", operation)["id"]
         request(f"/api/session/{operation_id}/prompt", {"text": "Print the fixture marker with shell exactly once"})
-        request(f"/api/session/{operation_id}/wait", {})
+        request(f"{wait_prefix}/{operation_id}/wait", {})
         context = request(f"/api/session/{operation_id}/context")
         assert "COMPATIBILITY_EXECUTED" in json.dumps(context), context
         assert any(part.get("type") == "tool" and part.get("name") == "shell" and part.get("state", {}).get("status") == "completed"

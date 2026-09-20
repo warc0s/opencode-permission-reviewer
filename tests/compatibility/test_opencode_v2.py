@@ -27,8 +27,9 @@ def test_v2_isolated_server(launch_host, activate_host, probe_package):
     }
 
 
-def test_native_context_fork_and_form_contracts(launch_host, model_server):
-    binary = os.environ["OPENCODE_V2_2_0_3"]
+@pytest.mark.parametrize("host_version", ["2.0.3", "2.0.11"])
+def test_native_context_fork_and_form_contracts(launch_host, model_server, host_version):
+    binary = os.environ[f"OPENCODE_V2_{host_version.replace('.', '_')}"]
     provider = {"providers": {"fixture": {
         "package": "@opencode/ai/providers/openai-compatible",
         "settings": {"baseURL": model_server["url"], "apiKey": "synthetic-fixture"},
@@ -36,7 +37,7 @@ def test_native_context_fork_and_form_contracts(launch_host, model_server):
     }}}
     host = launch_host("v2", binary, {}, global_config=provider)
     script = Path(__file__).with_name("capture-contracts.ts")
-    captured = subprocess.run([shutil.which("bun"), str(script), host["url"], str(host["project"])],
+    captured = subprocess.run([shutil.which("bun"), str(script), host["url"], str(host["project"]), host_version],
         env=host["env"], capture_output=True, text=True, timeout=30)
     assert captured.returncode == 0, captured.stderr
     contract = json.loads(captured.stdout)

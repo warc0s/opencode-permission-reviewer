@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Widen OpenCode V2 host support from the pinned 2.0.3 release to the range
+  `>=2.0.3 <3`: newer 2.x hosts load, while older releases, 3.x hosts, and
+  prereleases still fail loudly. Bumped `@opencode/client` to 2.0.11.
+
 ### Added
 
 - Add a deterministic `credentialRead` capability signal: known file readers

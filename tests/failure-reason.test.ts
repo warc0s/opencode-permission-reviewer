@@ -139,7 +139,7 @@ test("v2 reviewer session call failure keeps deny and failure-safe with cause", 
   }
   const client = {
     plugin: {
-      awaitActivation: async () => {
+      list: async () => {
         throw clientError()
       },
     },

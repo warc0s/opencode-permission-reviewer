@@ -90,9 +90,12 @@ describe("cli init", () => {
     for (const [version, supported] of [
       ["1.18.28", false],
       ["1.18.29", true],
+      ["2.0.2", false],
       ["2.0.3", true],
-      ["2.0.4", false],
+      ["2.0.4", true],
+      ["2.0.11", true],
       ["2.0.3-beta.1", false],
+      ["3.0.0", false],
     ] as const) {
       writeFileSync(binary, `#!/bin/sh\nprintf '${version}\\n'\n`, { mode: 0o700 })
       const result = await run(["--binary", binary, "--dry-run", "--project", project], {

@@ -16,6 +16,7 @@ async function fixture(
     delay?: Promise<void>
     connectionError?: boolean
     budget?: number
+    hostVersion?: string
   } = {},
 ) {
   const directory = await mkdtemp(join(tmpdir(), "reviewer-server-contract-"))
@@ -32,7 +33,7 @@ async function fixture(
   let reviews = 0
   const toolHooks = new Map<string, (event: unknown) => void>()
   const ctx = {
-    app: { version: "2.0.3" },
+    app: { version: options.hostVersion ?? "2.0.3" },
     options: {},
     location: { directory, project: { directory } },
     rpc: {
@@ -239,6 +240,37 @@ test("overload stays bounded and independent sessions keep independent outcomes"
   } finally {
     release()
     await harness.cleanup()
+  }
+})
+
+test("v2 host setup enforces the supported range and reports it", async () => {
+  for (const version of ["2.0.3", "2.0.4", "2.0.11"]) {
+    const harness = await fixture({ hostVersion: version })
+    try {
+      expect(await harness.rpc.status()).toMatchObject({ host: "v2", hostVersion: version })
+    } finally {
+      await harness.cleanup()
+    }
+  }
+  for (const version of ["2.0.2", "3.0.0", "2.0.3-beta.1"]) {
+    const ctx = {
+      app: { version },
+      location: { directory: "/tmp", project: { directory: "/tmp" } },
+    } as unknown as Parameters<typeof setupWithServices>[0]
+    const services = {
+      loadConfig: () => {
+        throw new Error("setup must reject the host before loading config")
+      },
+      connect: () => {
+        throw new Error("setup must reject the host before connecting")
+      },
+      createBackend: () => {
+        throw new Error("setup must reject the host before creating a backend")
+      },
+    } as unknown as Parameters<typeof setupWithServices>[1]
+    await expect(setupWithServices(ctx, services)).rejects.toThrow(
+      `Unsupported OpenCode V2 host ${version}; supported range is >=2.0.3 <3`,
+    )
   }
 })
 

@@ -32,6 +32,8 @@ function fixture(
     variant?: string
     retain?: boolean
     wrongLocation?: boolean
+    activationFailed?: boolean
+    activationDelayed?: boolean
   } = {},
 ) {
   let tool!: Tool
@@ -42,6 +44,8 @@ function fixture(
   let removed = false
   let prompts = 0
   let disposed = 0
+  let checks = 0
+  let setups = 0
   const registration = () => ({
     dispose: async () => {
       disposed++
@@ -72,10 +76,32 @@ function fixture(
   } as unknown as Context
   const client = {
     plugin: {
-      awaitActivation: async (input: { location: { directory: string } }) => {
+      list: async (input: { location: { directory: string } }) => {
         directory = input.location.directory
-        const plugin = await import(pathToFileURL(directory + "/index.js").href)
-        await plugin.default.setup({ ...ctx, location: { directory } })
+        checks++
+        if (setups === 0) {
+          const plugin = await import(pathToFileURL(directory + "/index.js").href)
+          await plugin.default.setup({ ...ctx, location: { directory } })
+          setups++
+        }
+        if (options.activationFailed)
+          return {
+            data: [
+              {
+                source: { type: "local", path: directory + "/index.js" },
+                state: { status: "failed", error: "Fixture activation failure" },
+              },
+            ],
+          }
+        if (options.activationDelayed && checks < 3) return { data: [] }
+        return {
+          data: [
+            {
+              source: { type: "local", path: directory + "/index.js" },
+              state: { status: "active" },
+            },
+          ],
+        }
       },
     },
     model: {
@@ -186,7 +212,7 @@ function fixture(
     backend,
     attempt,
     run: () => backend.review(envelope, attempt, client),
-    state: () => ({ directory, sessionID, removed, prompts, disposed }),
+    state: () => ({ directory, sessionID, removed, prompts, disposed, setups }),
     unrelated: () => {
       const event: ContextEvent = {
         sessionID: "ses_other",
@@ -242,6 +268,26 @@ test("invalid, ambiguous, and foreign execution outputs never become approvals",
     } finally {
       await harness.cleanup()
     }
+  }
+})
+
+test("isolation activation waits for the host report and fails loudly", async () => {
+  const delayed = fixture({ activationDelayed: true })
+  try {
+    expect((await delayed.run()).kind).toBe("allow")
+    expect(delayed.state().prompts).toBe(1)
+    expect(delayed.state().setups).toBe(1)
+  } finally {
+    await delayed.cleanup()
+  }
+  const failed = fixture({ activationFailed: true })
+  try {
+    const result = await failed.run()
+    expect(result.kind).toBe("escalate")
+    expect(result.reason).toContain("failed to activate")
+    expect(failed.state().prompts).toBe(0)
+  } finally {
+    await failed.cleanup()
   }
 })
 

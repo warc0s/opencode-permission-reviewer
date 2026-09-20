@@ -22,7 +22,7 @@ import {
 } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import { VERIFIED_V2_VERSION } from "../opencode/host-guard.ts"
+import { SUPPORTED_V2_RANGE } from "../opencode/host-guard.ts"
 import { stripCommentsAndTrailingCommas } from "../config/jsonc.ts"
 
 interface PackageInfo {
@@ -517,8 +517,8 @@ async function runVersionChecks(pkg: PackageInfo, binary: string): Promise<Versi
     range: ocRange,
     ok:
       ocVersion !== undefined &&
-      (!ocVersion.startsWith("2.") || ocVersion === VERIFIED_V2_VERSION) &&
-      (!pkg.engines.opencode || satisfies(ocVersion, pkg.engines.opencode)),
+      (!pkg.engines.opencode || satisfies(ocVersion, pkg.engines.opencode)) &&
+      (!ocVersion.startsWith("2.") || satisfies(ocVersion, SUPPORTED_V2_RANGE)),
   })
   return checks
 }

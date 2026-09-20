@@ -6,7 +6,7 @@ in `tests/compatibility/host-contracts.json`.
 
 | Setting                | V1                            | V2                                    |
 | ---------------------- | ----------------------------- | ------------------------------------- |
-| Host                   | 1.18.29 or newer V1           | >=2.0.3 <2.0.12                       |
+| Host                   | 1.18.29 or newer V1           | >=2.0.3 <3                            |
 | Server config key      | `plugin`                      | `plugins`                             |
 | Entry with options     | `[package, options]`          | `{package, options}`                  |
 | Terminal config        | `tui.json` or `tui.jsonc`     | Global `cli.json`                     |

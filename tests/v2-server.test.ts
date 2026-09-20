@@ -254,7 +254,7 @@ test("overload stays bounded and independent sessions keep independent outcomes"
 })
 
 test("v2 host setup enforces the supported range and reports it", async () => {
-  for (const version of ["2.0.3", "2.0.4", "2.0.11"]) {
+  for (const version of ["2.0.3", "2.0.4", "2.0.11", "2.0.12", "2.1.0"]) {
     const harness = await fixture({ hostVersion: version })
     try {
       expect(await harness.rpc.status()).toMatchObject({ host: "v2", hostVersion: version })
@@ -262,7 +262,7 @@ test("v2 host setup enforces the supported range and reports it", async () => {
       await harness.cleanup()
     }
   }
-  for (const version of ["2.0.2", "2.0.12", "3.0.0", "2.0.3-beta.1"]) {
+  for (const version of ["2.0.2", "3.0.0", "2.0.3-beta.1"]) {
     const ctx = {
       app: { version },
       location: { directory: "/tmp", project: { directory: "/tmp" } },
@@ -279,7 +279,7 @@ test("v2 host setup enforces the supported range and reports it", async () => {
       },
     } as unknown as Parameters<typeof setupWithServices>[1]
     await expect(setupWithServices(ctx, services)).rejects.toThrow(
-      `Unsupported OpenCode V2 host ${version}; verified range is >=2.0.3 <2.0.12`,
+      `Unsupported OpenCode V2 host ${version}; supported range is >=2.0.3 <3`,
     )
   }
 })

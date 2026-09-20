@@ -20,7 +20,7 @@ edit shell aliases. CI receives these paths through `GITHUB_ENV`.
 The V2 server and TUI compile against the minimum supported plugin SDK while
 the real-host matrix exercises the minimum and reference host binaries.
 
-To verify every stable release in the closed V2 window locally without making
+To verify every currently published stable V2 release locally without making
 CI install all nine hosts, run the sequential window harness. It installs one
 host at a time, verifies its integrity, runs the real-host tests, and removes
 the disposable installation before continuing:

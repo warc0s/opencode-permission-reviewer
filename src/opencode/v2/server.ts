@@ -21,7 +21,7 @@ import { V2AskDecisions } from "./event-codec.ts"
 import { REVIEWER_PROMPT_VERSION } from "../../policy.ts"
 import { satisfies } from "semver"
 import packageInfo from "../../../package.json"
-import { VERIFIED_V2_RANGE } from "../host-guard.ts"
+import { SUPPORTED_V2_RANGE } from "../host-guard.ts"
 import { ScriptAnalysisRegistry } from "../../verified-ssh-script.ts"
 
 type Context = Parameters<Plugin.Plugin["setup"]>[0]
@@ -46,9 +46,9 @@ export async function setupWithServices(
     ): Pick<V2ReviewerBackend, "owns" | "review" | "waitForIdle">
   },
 ): Promise<() => Promise<void>> {
-  if (!satisfies(ctx.app.version, VERIFIED_V2_RANGE))
+  if (!satisfies(ctx.app.version, SUPPORTED_V2_RANGE))
     throw new Error(
-      `Unsupported OpenCode V2 host ${ctx.app.version}; verified range is ${VERIFIED_V2_RANGE}`,
+      `Unsupported OpenCode V2 host ${ctx.app.version}; supported range is ${SUPPORTED_V2_RANGE}`,
     )
   const directory = ctx.location.directory
   const config = services.loadConfig(ctx.options, directory, "unknown")

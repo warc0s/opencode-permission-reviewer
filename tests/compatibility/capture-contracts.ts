@@ -1,17 +1,24 @@
 import { OpenCode, type OpenCodeEvent } from "@opencode/client"
 import { V2AskDecisions } from "../../src/opencode/v2/event-codec.ts"
 import { createV2ContextReader } from "../../src/opencode/v2/context-reader.ts"
+import { hostCompatibleFetch } from "../../src/opencode/v2/connection.ts"
 import { withTimeout } from "../../src/opencode/transport.ts"
 import type { MessageWithParts } from "../../src/types.ts"
+import contracts from "./host-contracts.json"
 
-const [url, directory] = process.argv.slice(2)
-if (!url || !directory || !process.env.OPENCODE_PASSWORD)
+const [url, directory, hostVersion] = process.argv.slice(2)
+if (!url || !directory || !hostVersion || !process.env.OPENCODE_PASSWORD)
   throw new Error("Missing synthetic host settings")
+if (
+  !Object.hasOwn(contracts.v2.integrities, hostVersion) &&
+  !Object.hasOwn(contracts.v2.optionalIntegrities, hostVersion)
+)
+  throw new Error(`Unsupported fixture host ${hostVersion}`)
+const authorization = `Basic ${Buffer.from(`opencode:${process.env.OPENCODE_PASSWORD}`).toString("base64")}`
 const client = OpenCode.make({
   baseUrl: url,
-  headers: {
-    authorization: `Basic ${Buffer.from(`opencode:${process.env.OPENCODE_PASSWORD}`).toString("base64")}`,
-  },
+  headers: { authorization },
+  fetch: hostCompatibleFetch(),
 })
 const controller = new AbortController()
 const events: OpenCodeEvent[] = []
@@ -33,38 +40,85 @@ const stream = (async () => {
   }
 })()
 void stream.catch(() => {})
+let phase = "event connection"
 try {
   await withTimeout(ready, 5000)
+  phase = "session creation"
   const session = await client.session.create({
     title: "Read-only contract fixture",
     location: { directory },
     model: { providerID: "fixture", id: "reviewer" },
   })
+  phase = "session prompt"
   const admission = await client.session.prompt({
     sessionID: session.id,
     text: "Read-only contract fixture.",
   })
+  phase = "session wait"
   await client.session.wait({ sessionID: session.id })
+  phase = "session context"
   const context = await client.session.context({ sessionID: session.id })
   if (!context.some((message) => message.id === admission.id && message.type === "user"))
     throw new Error("Inbox correlation changed")
-  const fork = await client.session.fork({ sessionID: session.id, boundary: { type: "through" } })
+  phase = "session fork"
+  const fork =
+    hostVersion === "2.0.3"
+      ? await fetch(new URL(`/api/session/${session.id}/fork`, url), {
+          method: "POST",
+          headers: { authorization, "content-type": "application/json" },
+          body: JSON.stringify({ boundary: { type: "through" } }),
+        }).then(async (response) => {
+          if (!response.ok) throw new Error(`Legacy fork failed with ${response.status}`)
+          const payload = (await response.json()) as {
+            data: Awaited<ReturnType<typeof client.session.fork>>
+          }
+          return payload.data
+        })
+      : await client.session.fork({ sessionID: session.id })
   const reader = createV2ContextReader(client, controller.signal)
+  phase = "fork context"
   const normalizedFork = (await reader.messages(fork.id, directory, 10)) as MessageWithParts[]
-  const form = await client.form.create({
-    sessionID: session.id,
+  const formInput = {
     title: "Scope fixture",
     fields: [
       {
-        type: "string",
+        type: "string" as const,
         key: "scope",
         title: "Allowed scope",
         options: [{ value: "read", label: "Read only" }],
       },
-    ],
-  })
-  await client.form.reply({ sessionID: session.id, formID: form.id, answer: { scope: "read" } })
+    ] as const,
+  }
+  phase = "form creation"
+  const form =
+    hostVersion === "2.0.3"
+      ? await fetch(new URL(`/api/session/${session.id}/form`, url), {
+          method: "POST",
+          headers: { authorization, "content-type": "application/json" },
+          body: JSON.stringify(formInput),
+        }).then(async (response) => {
+          if (!response.ok) throw new Error(`Legacy form creation failed with ${response.status}`)
+          return ((await response.json()) as { data: { id: string } }).data
+        })
+      : await client.session.form.create({ sessionID: session.id, ...formInput })
+  if (hostVersion === "2.0.3") {
+    phase = "form reply"
+    const response = await fetch(new URL(`/api/session/${session.id}/form/${form.id}/reply`, url), {
+      method: "POST",
+      headers: { authorization, "content-type": "application/json" },
+      body: JSON.stringify({ answer: { scope: "read" } }),
+    })
+    if (!response.ok) throw new Error(`Legacy form reply failed with ${response.status}`)
+  } else {
+    phase = "form reply"
+    await client.session.form.reply({
+      sessionID: session.id,
+      formID: form.id,
+      answer: { scope: "read" },
+    })
+  }
   const deadline = Date.now() + 3000
+  phase = "form event"
   while (!registry.recentFor([session.id]).length && Date.now() < deadline) await Bun.sleep(10)
   if (registry.recentFor([session.id])[0]?.answer !== "Read only")
     throw new Error("Native form answer was not normalized")
@@ -101,6 +155,8 @@ try {
           : null,
     }),
   )
+} catch (error) {
+  throw new Error(`Contract capture failed during ${phase}`, { cause: error })
 } finally {
   controller.abort()
   await stream.catch(() => {})

@@ -33,8 +33,10 @@ For each attempt, the harness creates a private temporary directory and a new
 OpenCode session, submits the plugin-generated system prompt and evidence,
 selects the exact `provider/model` and named variant, sets all operational
 tools to disabled, records the response, and deletes the session and temporary
-directory. A host error requests a global stop. Use `--concurrency 1` and set
-retry limits explicitly. `--max-calls` bounds host prompt attempts; OpenCode
+directory. A host error requests a global stop. Use `--concurrency 1` by
+default; at most two workers are supported when explicitly requested. With two
+workers, one request can already be in flight when the other fails. Set retry
+limits explicitly. `--max-calls` bounds host prompt attempts; OpenCode
 may perform provider-side retries that this counter cannot see.
 
 Start OpenCode V1 from an otherwise empty workspace, on loopback, with external
@@ -91,12 +93,13 @@ the pilot and account usage. Stop on 401/403, 429, missing variants, anomalous
 model IDs, tools, or other host errors; do not rotate credentials or bypass
 limits. Do not run `medium` or additional models merely because `low` works.
 
-For a full low-effort run, use one serial worker and independently sample a
+For a deliberately paced serial run, use one worker and independently sample a
 random pause of 2-4 seconds between completed host prompts. The selected pause
-is recorded as a `request-wait` event. This is a pacing control, not a guarantee
-about subscription quotas or provider-side retries. Keep the same options and
-source checkout for `--resume`; the delay range and request cap are included in
-the run fingerprint.
+is recorded as a `request-wait` event. This was used for the initial Grok
+low-effort evaluation; it is a pacing control, not a guarantee about
+subscription quotas or provider-side retries. Keep the same options and source
+checkout for `--resume`; the delay range and request cap are included in the
+run fingerprint.
 
 ```sh
 bun cli.mjs run --repo ../.. \
@@ -107,10 +110,41 @@ bun cli.mjs run --repo ../.. \
   --http-retries 0 --format-retries 0
 ```
 
+For an explicitly requested two-worker run, keep a single protected OpenCode
+host, use two independent sessions, and disable benchmark pacing. The host may
+have two prompts in flight. The benchmark still records each attempt and stops
+new work on a transport error. Do not interpret the request cap as a billing
+or subscription-usage cap.
+
+```sh
+bun cli.mjs run --repo ../.. --models models.local.json \
+  --out runs/model-medium --concurrency 2 --max-calls 600 \
+  --min-request-delay-ms 0 --max-request-delay-ms 0 \
+  --http-retries 0 --format-retries 0
+```
+
 The run is complete only when all 600 results have been written and reviewed.
 If it stops, inspect the run journal and account status before deciding whether
 to resume. Never silently replace a missing or failed model decision with the
 core's escalation. Raw run output stays ignored by Git.
+
+`attempt.latencyMs` measures OpenCode session creation and the model response.
+It excludes the pause before the request and the subsequent session cleanup.
+`row.elapsedMs` and the operational `totalTimeMs` include pacing and must not
+be presented as model latency. Published latency is host-transport latency,
+not isolated provider inference time.
+
+Changing pacing or concurrency changes the run fingerprint. Record a new
+segment instead of silently resuming with different settings. If a selected
+subset is used to avoid repeating completed cases, keep the original case
+contents, labels, and dependency pairs intact. To consolidate segments,
+require matching plugin source, harness, model, variant, and output profile;
+verify every case hash against the full corpus and every duplicated prompt and
+evidence hash. Select the first non-transport response per case, whether valid
+or invalid. Never replace an invalid output with a more favorable duplicate.
+Retain repeated controls, timeouts, and interrupted attempts separately in
+provenance. A transport error is never a successful escalation or a substitute
+for a model decision.
 
 The OpenCode transport is closer to the plugin's V1 reviewer host than direct
 Chat Completions, but it is still a core replay, not a full pending-permission
@@ -118,6 +152,33 @@ cycle. Host prompts can add host-owned context, and this harness does not test
 V2 sessions, cancellation races, real permission application, or native tool
 result registration. Report the transport and output profile with every score;
 do not merge them into a supposedly controlled comparison with direct calls.
+
+## Command Code subscription transport
+
+`command-code-cli` invokes the official Command Code CLI in headless mode with
+the user's existing CLI login. It does not use Command Code's separately billed
+Provider API, copy authentication files, or send a subscription token through
+the benchmark. Set `commandCodeBinEnv` in the ignored model config to the name
+of an environment variable containing the CLI binary path; never store a
+personal path in a tracked config.
+
+Each request starts a fresh CLI process in an empty temporary workspace with
+no saved session, no skills, one model turn, and a non-interactive permission
+mode. The benchmark sends the plugin-generated policy and evidence through
+stdin, checks the returned model, rejects any tool event, and parses only the
+final answer. Nonzero exit codes, quota errors, timeouts, and tool attempts
+stop the run. The CLI's own system prompt is still present: it cannot accept
+the plugin policy as a separate system message, so the benchmark folds policy
+and evidence into one user message with explicit boundaries. This is a
+different prompt profile from OpenCode V1 even when the synthetic cases and
+plugin-produced text match. Its scores can be reported alongside OpenCode
+scores with that caveat, but not as a controlled head-to-head comparison.
+
+The CLI's token usage includes its own instructions; its latency includes
+process startup. The subscription's usage limits still apply, and two workers
+are the maximum supported by this transport. Use a one-case pilot to verify
+the model and effort before a full run, and keep format retries disabled when
+comparing first-shot decision quality.
 
 ## Logs, quotas, and publication
 

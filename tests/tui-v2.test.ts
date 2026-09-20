@@ -1,7 +1,73 @@
 import { expect, test } from "bun:test"
-import { setupTuiV2, testRender } from "./tui-loader.ts"
+import { resolveReviewTheme, setupTuiV2, testRender } from "./tui-loader.ts"
 import { createUiStatus } from "../src/ui-protocol.ts"
 import { request } from "./helpers.ts"
+
+test("TUI resolves nested, flat, and unavailable host themes", () => {
+  expect(
+    resolveReviewTheme({
+      background: { surface: { overlay: "nested-background" } },
+      text: {
+        default: "nested-text",
+        subdued: "nested-muted",
+        status: { running: "nested-info" },
+        feedback: {
+          success: { default: "nested-success" },
+          error: { default: "nested-error" },
+        },
+      },
+    }),
+  ).toEqual({
+    backgroundPanel: "nested-background",
+    text: "nested-text",
+    textMuted: "nested-muted",
+    info: "nested-info",
+    success: "nested-success",
+    error: "nested-error",
+  })
+  expect(
+    resolveReviewTheme({
+      background: { raised: { base: "current-background" } },
+      text: {
+        base: "current-text",
+        muted: "current-muted",
+        feedback: {
+          info: { base: "current-info" },
+          success: { base: "current-success" },
+          error: { base: "current-error" },
+        },
+      },
+    }),
+  ).toEqual({
+    backgroundPanel: "current-background",
+    text: "current-text",
+    textMuted: "current-muted",
+    info: "current-info",
+    success: "current-success",
+    error: "current-error",
+  })
+  expect(
+    resolveReviewTheme({
+      backgroundPanel: "flat-background",
+      text: "flat-text",
+      textMuted: "flat-muted",
+      info: "flat-info",
+      success: "flat-success",
+      error: "flat-error",
+    }),
+  ).toEqual({
+    backgroundPanel: "flat-background",
+    text: "flat-text",
+    textMuted: "flat-muted",
+    info: "flat-info",
+    success: "flat-success",
+    error: "flat-error",
+  })
+  expect(resolveReviewTheme(undefined)).toMatchObject({
+    backgroundPanel: expect.any(String),
+    text: expect.any(String),
+  })
+})
 
 test("TUI restores authoritative snapshots after disconnect and isolates routes, revisions, and generations", async () => {
   const directory = "/workspace/fixture"
@@ -28,15 +94,6 @@ test("TUI restores authoritative snapshots after disconnect and isolates routes,
   const ctx = {
     location: { directory },
     data: { session: { get: () => ({ location: { directory } }) } },
-    theme: {
-      background: { surface: { overlay: "#111111" } },
-      text: {
-        default: "#eeeeee",
-        subdued: "#999999",
-        status: { running: "#0000ff" },
-        feedback: { success: { default: "#00ff00" }, error: { default: "#ff0000" } },
-      },
-    },
     keymap: {
       mode: {
         push: () => {
@@ -57,8 +114,8 @@ test("TUI restores authoritative snapshots after disconnect and isolates routes,
     },
     client: {
       event: {
-        subscribe: async function* () {
-          yield { type: "connected" }
+        subscribe: () => {
+          throw new Error("TUI snapshot loading must not depend on a generic host event")
         },
       },
       rpc: () => ({

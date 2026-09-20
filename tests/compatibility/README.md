@@ -8,6 +8,7 @@ export OPENCODE_V1_1_18_29=/absolute/path/to/opencode-1.18.29
 export OPENCODE_V1_1_18_30=/absolute/path/to/opencode-1.18.30
 export OPENCODE_V1_1_18_31=/absolute/path/to/opencode-1.18.31
 export OPENCODE_V2_2_0_3=/absolute/path/to/opencode-2.0.3
+export OPENCODE_V2_2_0_11=/absolute/path/to/opencode-2.0.11
 python -m pytest tests/compatibility -q
 ```
 
@@ -15,6 +16,29 @@ python -m pytest tests/compatibility -q
 `v2` command install pinned Linux binaries in new temporary directories and
 print the required variables. They never replace an existing installation or
 edit shell aliases. CI receives these paths through `GITHUB_ENV`.
+
+The V2 server and TUI compile against the minimum supported plugin SDK while
+the real-host matrix exercises the minimum and reference host binaries.
+
+To verify every currently published stable V2 release locally without making
+CI install all nine hosts, run the sequential window harness. It installs one
+host at a time, verifies its integrity, runs the real-host tests, and removes
+the disposable installation before continuing:
+
+```bash
+PYTHON=/path/to/python-with-pytest \
+  bun tests/compatibility/verify-v2-window.ts
+```
+
+The default command and CI remain limited to the minimum and reference V2
+hosts. The optional window verifies the intermediate releases on demand.
+
+`tests/live-v2-smoke.ts` is the paid-provider smoke for a fresh V2 service. Its
+fixture uses a placeholder plugin path that must point at the checkout before
+starting the host. Pass the registered service password through
+`REVIEWER_LIVE_PASSWORD`; set `REVIEWER_LIVE_AUDIT_PATH` only when trusted
+global config overrides the default audit path. The smoke proves a real allow
+and execution, an LLM denial, and a deterministic emergency-brake denial.
 
 The variables must point to the actual host executable. Do not point them at a
 profile launcher that overwrites `HOME`, `XDG_*`, or `OPENCODE_CONFIG*`: that
@@ -42,10 +66,10 @@ temporary directory for diagnosis. These artifacts must not be committed.
 Only Linux is currently verified by this matrix; other operating systems need
 equivalent live validation before being advertised as supported.
 
-`fixtures/*-native.json` preserve sanitized projections captured from the pinned
-hosts. The tests compare live context, tool correlation, fork provenance and
-form events against these contracts. `capture-contracts.ts` also exercises the
-native form events through the production normalizer.
+`fixtures/*-native.json` preserve sanitized projections captured from the
+reference hosts. The tests compare live context, tool correlation, fork
+provenance and form events against these contracts. `capture-contracts.ts`
+also exercises the native form events through the production normalizer.
 
 The rollback test switches a single disposable profile from V1 to V2 and back,
 restoring exact configuration backups and checking the original session and

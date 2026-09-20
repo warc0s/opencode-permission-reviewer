@@ -29,18 +29,24 @@ def activate_host():
         route = "/path" if generation == "v1" else "/api/plugin"
         key = "directory" if generation == "v1" else "location[directory]"
         query = urllib.parse.urlencode({key: str(host["project"])})
-        if generation == "v2":
-            wait = urllib.request.Request(
-                host["url"] + "/api/plugin/await-activation?" + query,
-                headers=host["headers"], method="POST",
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            request = urllib.request.Request(
+                host["url"] + route + "?" + query, headers=host["headers"]
             )
-            with urllib.request.urlopen(wait, timeout=30):
-                pass
-        request = urllib.request.Request(
-            host["url"] + route + "?" + query, headers=host["headers"]
-        )
-        with urllib.request.urlopen(request, timeout=30) as response:
-            return json.load(response)
+            with urllib.request.urlopen(request, timeout=30) as response:
+                result = json.load(response)
+            if generation == "v1":
+                return result
+            plugins = result.get("data", result)
+            local = [plugin for plugin in plugins if plugin.get("source", {}).get("type") == "local"]
+            failed = [plugin for plugin in local if plugin.get("state", {}).get("status") == "failed"]
+            if failed:
+                pytest.fail(f"Host plugin activation failed: {failed}")
+            if local and all(plugin.get("state", {}).get("status") == "active" for plugin in local):
+                return result
+            time.sleep(0.1)
+        pytest.fail("Host plugin activation timed out")
     return activate
 
 
@@ -106,7 +112,7 @@ def launch_host(tmp_path):
                     process.kill()
                     process.wait(timeout=5)
         url = f"http://127.0.0.1:{port}"
-        health = "/global/health" if generation == "v1" else "/api/health"
+        health = "/global/health" if generation == "v1" else "/api/location"
         deadline = time.monotonic() + 45
         headers = {} if generation == "v1" else {"Authorization": "Basic " + base64.b64encode(
             b"opencode:synthetic-local-host-password"
@@ -121,13 +127,18 @@ def launch_host(tmp_path):
             if process.poll() is not None:
                 pytest.fail(f"Host exited before becoming ready:\n{safe_log()}")
             if service and not service_discovered:
-                discovery = subprocess.run([shutil.which("bun"), "-e",
-                    'import { Service } from "@opencode/client/service"; const endpoint = await Service.discover({ version: "2.0.3" }); if (endpoint) console.log(JSON.stringify({ url: endpoint.url, headers: Service.headers(endpoint) }));'],
-                    cwd=Path(__file__).resolve().parents[2], env=env, capture_output=True, text=True, timeout=5)
-                if discovery.returncode == 0 and discovery.stdout.strip():
-                    connection = json.loads(discovery.stdout)
-                    url, headers = connection["url"], connection["headers"]
-                    service_discovered = True
+                registration = Path(env["XDG_STATE_HOME"]) / "opencode" / "service.json"
+                if registration.exists():
+                    try:
+                        connection = json.loads(registration.read_text())
+                        url = connection["url"]
+                        password = connection.get("password")
+                        headers = {} if password is None else {"Authorization": "Basic " + base64.b64encode(
+                            ("opencode:" + password).encode()
+                        ).decode()}
+                        service_discovered = True
+                    except (KeyError, json.JSONDecodeError, OSError):
+                        pass
             if generation == "v2" and not headers:
                 log.seek(0)
                 match = re.search(r"server password (\S+)", log.read())

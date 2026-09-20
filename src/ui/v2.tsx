@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import type { Plugin } from "@opencode/plugin/tui"
+import type { ColorInput } from "@opentui/core"
 import { createSignal, Show } from "solid-js"
 import { ReviewerRpc } from "./rpc.ts"
 import { ReviewProgress, ReviewResult, type ReviewTheme } from "./components.tsx"
@@ -9,6 +10,61 @@ import { decodeUiStatus, encodeUiStatus, type ReviewUiStatus } from "../ui-proto
 type Context = Parameters<Plugin.Definition["setup"]>[0]
 const object = (value: unknown): Record<string, unknown> | undefined =>
   typeof value === "object" && value !== null ? (value as Record<string, unknown>) : undefined
+const color = (value: unknown): ColorInput | undefined => {
+  if (typeof value === "string") return value
+  const candidate = object(value)
+  return candidate && "buffer" in candidate ? (value as ColorInput) : undefined
+}
+const FALLBACK_THEME = {
+  backgroundPanel: "#111111",
+  text: "#eeeeee",
+  textMuted: "#999999",
+  info: "#4da3ff",
+  success: "#48c774",
+  error: "#ff5c5c",
+} satisfies ReviewTheme
+
+export function resolveReviewTheme(value: unknown): ReviewTheme {
+  const host = object(value)
+  if (!host) return FALLBACK_THEME
+  const background = object(host.background)
+  const surface = object(background?.surface)
+  const raised = object(background?.raised)
+  const text = object(host.text)
+  const status = object(text?.status)
+  const feedback = object(text?.feedback)
+  const infoFeedback = object(feedback?.info)
+  const successFeedback = object(feedback?.success)
+  const errorFeedback = object(feedback?.error)
+  return {
+    backgroundPanel:
+      color(surface?.overlay) ??
+      color(raised?.base) ??
+      color(host.backgroundPanel) ??
+      FALLBACK_THEME.backgroundPanel,
+    text: color(text?.default) ?? color(text?.base) ?? color(host.text) ?? FALLBACK_THEME.text,
+    textMuted:
+      color(text?.subdued) ??
+      color(text?.muted) ??
+      color(host.textMuted) ??
+      FALLBACK_THEME.textMuted,
+    info:
+      color(status?.running) ??
+      color(infoFeedback?.base) ??
+      color(host.info) ??
+      FALLBACK_THEME.info,
+    success:
+      color(successFeedback?.default) ??
+      color(successFeedback?.base) ??
+      color(host.success) ??
+      FALLBACK_THEME.success,
+    error:
+      color(errorFeedback?.default) ??
+      color(errorFeedback?.base) ??
+      color(host.error) ??
+      FALLBACK_THEME.error,
+  }
+}
 
 export async function setupTuiV2(ctx: Context): Promise<() => void> {
   let directory = ctx.location?.directory
@@ -30,14 +86,7 @@ export async function setupTuiV2(ctx: Context): Promise<() => void> {
       ? state.activeFor(route.sessionID, (id) => ctx.data.session.get(id)?.parentID)
       : undefined
   }
-  const theme = (): ReviewTheme => ({
-    backgroundPanel: ctx.theme.background.surface.overlay,
-    text: ctx.theme.text.default,
-    textMuted: ctx.theme.text.subdued,
-    info: ctx.theme.text.status.running,
-    success: ctx.theme.text.feedback.success.default,
-    error: ctx.theme.text.feedback.error.default,
-  })
+  const theme = (): ReviewTheme => resolveReviewTheme((ctx as unknown as { theme?: unknown }).theme)
   const refresh = () => {
     touch((value) => value + 1)
     const reviewing = active()?.phase === "reviewing"
@@ -111,12 +160,6 @@ export async function setupTuiV2(ctx: Context): Promise<() => void> {
     })()
     void stream.catch(() => {})
     try {
-      const ready = ctx.client.event.subscribe({ signal: current.signal })[Symbol.asyncIterator]()
-      try {
-        await ready.next()
-      } finally {
-        await ready.return?.()
-      }
       const snapshot = object(
         await rpc.snapshot({}, { location: { directory: scopeDirectory }, signal: current.signal }),
       )

@@ -12,7 +12,11 @@ const releases =
         version,
         integrity,
       }))
-    : [contracts.v2]
+    : Object.entries(contracts.v2.integrities).map(([version, integrity]) => ({
+        package: contracts.v2.package,
+        version,
+        integrity,
+      }))
 for (const release of releases) {
   const directory = await mkdtemp(join(tmpdir(), "reviewer-host-"))
   const proc = Bun.spawn(

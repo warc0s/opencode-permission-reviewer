@@ -8,7 +8,7 @@
       "1.18.30": "sha512-oLcOLQE4XzDKy6T5L5d1RdVJvXHXwVlD4hRF5V317JbUQorrl2EyDdGZk5kbgv675J9FXp8usg92MZbEWhh6gQ==",
       "1.18.31": "sha512-J95feefeWwtIaw3irx76WjzWcgQXxmuHmDVphvs5ep9X30fBJ6T6bFhw50i9Kx50MG/xPn5w2pafXIfNtdry9w=="
     },
-    "sdk": {
+    "minimumSdk": {
       "package": "@opencode-ai/plugin",
       "version": "1.18.31",
       "integrity": "sha512-Rdc1bPK06PByaGyGd0kf7JUZ4pTkexz2OOUNlqZWLpHOiMEZ+/rFGjt46ypZ3QwA697gNdWwwwQbHbKG5NMwGA=="
@@ -18,8 +18,21 @@
   },
   "v2": {
     "package": "@opencode/cli",
-    "version": "2.0.3",
-    "integrity": "sha512-FC4+2a5kwdKS2o/pIcGCscpSQB7PuhBObwGMfqnx/2XtoaZBMtSq/99nuEdeDNAFvy1qyK6mp2hwvoiMWsiI4w==",
+    "minimum": "2.0.3",
+    "reference": "2.0.11",
+    "integrities": {
+      "2.0.3": "sha512-FC4+2a5kwdKS2o/pIcGCscpSQB7PuhBObwGMfqnx/2XtoaZBMtSq/99nuEdeDNAFvy1qyK6mp2hwvoiMWsiI4w==",
+      "2.0.11": "sha512-7hnjVw7+zlcjt34hXFQ+aWuLiG20iq/nKq3O9SRwq2Dahch5RNI+Q3mbj5X3db5l1Cn1U6WcvEF2u7kQFo7JLw=="
+    },
+    "optionalIntegrities": {
+      "2.0.4": "sha512-2b1WYZoKewgKxMmMG+Lv3V7f/aZVQCULYq35x0Q8JHp1fBLK3EZVvRvp30YxurM2PVIGYnqletf2Gezykq5izQ==",
+      "2.0.5": "sha512-jHo7z1eqesr9X//dLHF86Qnntl1VDAbevVqftnHSCgDolseNeI5z6HmVggtU/z1JLAstCEmpo9DCgTBi7NsJWA==",
+      "2.0.6": "sha512-uA7mf76LwSge0iLp05TCO9dVNdqrOMQWV6ljvkLVgd9r67ioNoNVkn0P3h670JoBHBJQ/jxXnnJ5BTnjVZ+oNA==",
+      "2.0.7": "sha512-IhNhMKEq+sVCVgsjKZD7p7k/2lNIWT2nfrw21lJg1iiJ/2TGL76QOcUy8rlhw79gaiovw19VNioKAP40302avw==",
+      "2.0.8": "sha512-8Zm2aVylv44fXnUD9kqxzMmhowWAikTEOiIEwJiW0I87BeCbaj2f9zqy2WYQ5PatnbgGKLkluBFdFH2qoMWyNg==",
+      "2.0.9": "sha512-1HcKFKpvKbz33PLR7BrLa7TxjXOYd+Pl6QidVaO9PFzLQrlTMnmCSQm9337lFgPwXPcmshK5U3QbKbhvs+EHaw==",
+      "2.0.10": "sha512-WYHnl1o1hfXKvrr54TsXTKQUrONYbEr8c7m7E0jMFe1Z+LBnwaNu5JaTpgAEIaO03DEws2ifCUhjS7A+ge2q1Q=="
+    },
     "sdk": {
       "package": "@opencode/plugin",
       "version": "2.0.3",

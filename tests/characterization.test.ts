@@ -381,6 +381,27 @@ describe("actor-aware context threading", () => {
     expect(audits[0]!.capability).toBeUndefined()
   })
 
+  test("credential reads appear in the audit snapshot only when true", async () => {
+    const reading = runtime()
+    await reading.runtime.process(
+      request({ permission: "bash", metadata: { command: "cat .env" } }),
+    )
+    const readingAudits = (reading.ctx as unknown as { auditRecords: ReviewAuditRecord[] })
+      .auditRecords
+    expect(readingAudits).toHaveLength(1)
+    expect(readingAudits[0]!.schemaVersion).toBe(3)
+    expect(readingAudits[0]!.capability).toMatchObject({ credentialRead: true })
+
+    const plain = runtime()
+    await plain.runtime.process(
+      request({ permission: "bash", metadata: { command: "cat notes.txt" } }),
+    )
+    const plainAudits = (plain.ctx as unknown as { auditRecords: ReviewAuditRecord[] }).auditRecords
+    expect(plainAudits).toHaveLength(1)
+    expect(plainAudits[0]!.schemaVersion).toBe(3)
+    expect(plainAudits[0]!.capability).not.toHaveProperty("credentialRead")
+  })
+
   test("policy trace appears in audit records for bash requests", async () => {
     const harness = runtime()
     await harness.runtime.process(

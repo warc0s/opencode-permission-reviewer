@@ -4,20 +4,20 @@ import { pathToFileURL } from "node:url"
 import { createHash } from "node:crypto"
 import { assert, sha256 } from "./util.mjs"
 
-export const PINNED_COMMIT = "ed7cafd279f65a881dfc7020083b860bd71a8961"
+export const PINNED_COMMIT = "dc5fd3d820dd72c0406fd46fc1dd8f0875189fc2"
 // Git blob hashes of the security-critical files actually inspected for this kit.
 export const PINNED_BLOBS = {
   "src/policy.ts": "641e81586e738cfdee64c61bb341529707eac4eb",
   "src/context.ts": "e099dacaacca78ad4474bd35d36a291c190df256",
-  "src/config.ts": "b3bffec4183cf142fea6159bfdaf90429829c5e8",
+  "src/config.ts": "21147ed99fb5499f584f5033cc5a2b6fc660ddf6",
   "src/decision.ts": "ad3443f3bf2ca1b34b3b23e8115c79148e19238b",
-  "src/policy/policy-engine.ts": "786e4a33b4c4e3c0ffd332ef7ea5dcf94b87207f",
+  "src/policy/policy-engine.ts": "b4470dc188d956cc0ed25454c2d34465110fe1be",
   "src/escalation.ts": "ad900880c33f8b78f2f636ce4aa18f0c42d40911",
   "src/core/review-engine.ts": "6678bcec69c6bd32f11730ce5629c269c951179e",
   "src/emergency-brake.ts": "6f1b65a6f2b125a9e07824922a9ac57ce39ef2fc",
   "src/redact.ts": "78394b5cf92d787e92037ed9e6c44df323b8ed48",
   "src/capability/command-parser.ts": "520f02c8d55e6d0ffc7dcff3ae862b80acd3af5e",
-  "src/capability/bash-analyzer.ts": "6861999659cf805c141ef4bd3ec6e26c91ea363f",
+  "src/capability/bash-analyzer.ts": "f11abc52f29f44452c340a66e9e8fe39f5ebc515",
   "src/shell-lexer.ts": "5865d1917b6e61dd2da671611254e93c8de677ca",
   "src/capability/heredoc-extractor.ts": "81995fef64dde83f9a9b45c8aca2fa11518d64b6",
 }

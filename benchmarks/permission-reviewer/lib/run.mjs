@@ -16,6 +16,7 @@ import {
 import { caseDigest, modelInput } from "./dataset.mjs"
 import { requestCompletion, TEXT_RETRY_NOTE, validateModel } from "./providers.mjs"
 import { requestOpenCodeV1 } from "./opencode-v1.mjs"
+import { requestCommandCodeCli } from "./command-code-cli.mjs"
 import { summarize } from "./metrics.mjs"
 export const HARNESS_VERSION = "0.1.0"
 export function rowBase(c, model, repeat, fingerprint) {
@@ -99,7 +100,9 @@ export async function runBenchmark({
   completion = (model, prepared, request) =>
     model.transport === "opencode-v1"
       ? requestOpenCodeV1(model, prepared, request)
-      : requestCompletion(model, prepared, request),
+      : model.transport === "command-code-cli"
+        ? requestCommandCodeCli(model, prepared, request)
+        : requestCompletion(model, prepared, request),
   onProgress = () => {},
 }) {
   const cfg = {
@@ -133,8 +136,8 @@ export async function runBenchmark({
   const safeModels = publicModels(models)
   assert(new Set(safeModels.map((m) => m.id)).size === safeModels.length, "Duplicate model id.")
   assert(safeModels.length > 0, "No models configured.")
-  if (safeModels.some((model) => model.transport === "opencode-v1"))
-    assert(cfg.concurrency <= 2, "OpenCode subscription runs permit at most two workers.")
+  if (safeModels.some((model) => ["opencode-v1", "command-code-cli"].includes(model.transport)))
+    assert(cfg.concurrency <= 2, "Subscription runs permit at most two workers.")
   for (const m of safeModels)
     if (m.apiKeyEnv)
       assert(process.env[m.apiKeyEnv], `Missing credential environment variable ${m.apiKeyEnv}`)
@@ -143,6 +146,12 @@ export async function runBenchmark({
       assert(
         process.env[m.hostPasswordEnv],
         `Missing host password environment variable ${m.hostPasswordEnv}`,
+      )
+  for (const m of safeModels)
+    if (m.commandCodeBinEnv)
+      assert(
+        process.env[m.commandCodeBinEnv],
+        `Missing Command Code binary environment variable ${m.commandCodeBinEnv}`,
       )
   const resume = cfg.resume
   const semanticConfig = { ...cfg }
@@ -165,9 +174,11 @@ export async function runBenchmark({
     caseHashes: cases.map(caseDigest),
     models: safeModels,
     options: semanticConfig,
-    protocol: safeModels.some((model) => model.transport === "opencode-v1")
-      ? "OpenCode V1 session transport + actual plugin evidence/prompt/parser/core replay; NOT permission lifecycle E2E"
-      : "direct-chat-completions + actual plugin evidence/prompt/parser/core replay; NOT native OpenCode host E2E",
+    protocol: safeModels.some((model) => model.transport === "command-code-cli")
+      ? "Command Code CLI headless transport with role-folded user prompt + actual plugin evidence/parser/core replay; NOT controlled with OpenCode V1 or permission lifecycle E2E"
+      : safeModels.some((model) => model.transport === "opencode-v1")
+        ? "OpenCode V1 session transport + actual plugin evidence/prompt/parser/core replay; NOT permission lifecycle E2E"
+        : "direct-chat-completions + actual plugin evidence/prompt/parser/core replay; NOT native OpenCode host E2E",
   }
   const fingerprint = sha256(manifest),
     directory = resolve(out)

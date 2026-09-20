@@ -13,6 +13,7 @@ import { splitModel } from "../../config.ts"
 import { redactSecrets } from "../../redact.ts"
 import { extractStructured, extractText, responseData, withTimeout } from "../transport.ts"
 import { applyEscalationDisposition } from "../../escalation.ts"
+import { formatFailureReason } from "../../failure-reason.ts"
 
 /**
  * Corrective instruction appended to a text-mode parse-failure retry. Text mode
@@ -235,7 +236,7 @@ export class V1ReviewerBackend {
       return applyEscalationDisposition(
         {
           kind: "escalate",
-          reason: error instanceof Error ? error.message : String(error),
+          reason: formatFailureReason("reviewer backend", error),
           ...(reviewSessionID === undefined ? {} : { reviewSessionID }),
           decisionSource: "failure-safe",
         },

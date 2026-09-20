@@ -15,15 +15,16 @@ globals[symbol] = activations
 /** A host-loaded bootstrap registers only this attempt's isolated hooks. */
 export async function createIsolatedLocation(
   activate: Activate,
-): Promise<{ directory: string; release(): void }> {
+): Promise<{ directory: string; pluginID: string; release(): void }> {
   const directory = await mkdtemp(join(tmpdir(), "opencode-reviewer-"))
   const key = randomUUID()
+  const pluginID = `permission-reviewer-isolation-${key}`
   activations.set(key, async (ctx) => {
     if (ctx.location.directory !== directory)
       throw new Error("Reviewer isolation location mismatch")
     return activate(ctx)
   })
-  const source = `export default { id: "permission-reviewer-isolation", setup(ctx) {
+  const source = `export default { id: ${JSON.stringify(pluginID)}, setup(ctx) {
     const activate = globalThis[Symbol.for(${JSON.stringify(KEY)})]?.get(${JSON.stringify(key)});
     if (!activate) throw new Error("Reviewer isolation activation expired");
     return activate(ctx);
@@ -46,6 +47,7 @@ export async function createIsolatedLocation(
     })
     return {
       directory,
+      pluginID,
       release: () => {
         activations.delete(key)
       },

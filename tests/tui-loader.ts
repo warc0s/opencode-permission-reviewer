@@ -23,5 +23,5 @@ import { ensureSolidTransformPlugin } from "@opentui/solid/bun-plugin"
 ensureSolidTransformPlugin()
 
 export const { tui } = await import("../src/tui.tsx")
-export const { setupTuiV2 } = await import("../src/ui/v2.tsx")
+export const { resolveReviewTheme, setupTuiV2 } = await import("../src/ui/v2.tsx")
 export const { testRender } = await import("@opentui/solid")

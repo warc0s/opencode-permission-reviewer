@@ -87,6 +87,7 @@ export interface PolicyCondition {
   packageManagement?: boolean
   gitMutation?: boolean
   networkObserved?: boolean
+  credentialRead?: boolean
   privilegeEscalation?: boolean
   remoteEnabled?: boolean
   persistence?: boolean
@@ -333,6 +334,7 @@ export interface ReviewAuditRecord {
       deletion?: boolean
     }
     networkObserved?: boolean
+    credentialRead?: boolean
     privilegeEscalation?: boolean
     persistence?: boolean
     remoteEnabled?: boolean
@@ -613,6 +615,8 @@ export interface CapabilityAssessment {
   invokesExistingTestRunner: Provenanced<boolean | "unknown">
   /** Runs a package manager that may execute lifecycle scripts. */
   invokesPackageLifecycleScripts: Provenanced<boolean | "unknown">
+  /** Reads literal credential material through a known file reader. */
+  credentialRead: Provenanced<boolean | "unknown">
   /** Detected file-write surface. */
   writeEffects: {
     temporaryWrite: Provenanced<boolean | "unknown">

@@ -1,15 +1,15 @@
 /** @jsxImportSource @opentui/solid */
 import { Show } from "solid-js"
-import type { RGBA } from "@opentui/core"
+import type { ColorInput } from "@opentui/core"
 import type { ReviewUiStatus } from "../ui-protocol.ts"
 
 export interface ReviewTheme {
-  backgroundPanel: RGBA
-  text: RGBA
-  textMuted: RGBA
-  info: RGBA
-  success: RGBA
-  error: RGBA
+  backgroundPanel: ColorInput
+  text: ColorInput
+  textMuted: ColorInput
+  info: ColorInput
+  success: ColorInput
+  error: ColorInput
 }
 export const SPINNER = ["◐", "◓", "◑", "◒"] as const
 

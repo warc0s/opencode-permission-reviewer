@@ -1,15 +1,23 @@
-import { afterEach, expect, spyOn, test } from "bun:test"
+import { afterEach, expect, mock, test } from "bun:test"
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { OpenCode, type OpenCodeClient } from "@opencode/client"
-import { Service } from "@opencode/client/service"
-import { connectV2Host, validateHostEndpoint } from "../src/opencode/v2/connection.ts"
+import {
+  connectV2Host,
+  hostCompatibleFetch,
+  validateHostEndpoint,
+} from "../src/opencode/v2/connection.ts"
 
 const hostUrl = "OPENCODE_PERMISSION_REVIEWER_HOST_URL"
 const password = "OPENCODE_PASSWORD"
 const legacyPassword = "OPENCODE_SERVER_PASSWORD"
+const stateHome = "XDG_STATE_HOME"
 const originalEnv = {
   [hostUrl]: process.env[hostUrl],
   [password]: process.env[password],
   [legacyPassword]: process.env[legacyPassword],
+  [stateHome]: process.env[stateHome],
 }
 
 afterEach(() => {
@@ -23,6 +31,26 @@ function fakeClient(actualIdentity: string): OpenCodeClient {
   return {
     rpc: () => ({ identity: async () => actualIdentity }),
   } as unknown as OpenCodeClient
+}
+
+/** The bundled client exposes `make` as an accessor, which bun's spyOn
+ *  cannot mock and whose setter ignores assignments; redefining the
+ *  property works and the original descriptor restores cleanly. */
+function stubMake(impl: () => OpenCodeClient) {
+  const descriptor = Object.getOwnPropertyDescriptor(OpenCode, "make")!
+  const make = mock(impl)
+  Object.defineProperty(OpenCode, "make", {
+    value: make,
+    enumerable: descriptor.enumerable ?? false,
+    configurable: true,
+    writable: true,
+  })
+  return {
+    make,
+    restore: () => {
+      Object.defineProperty(OpenCode, "make", descriptor)
+    },
+  }
 }
 
 test("explicit V2 host URLs reject embedded credentials and non-loopback HTTP", () => {
@@ -40,45 +68,192 @@ test("explicit V2 host connection rejects missing authentication", async () => {
   process.env[hostUrl] = "http://127.0.0.1:4096/"
   delete process.env[password]
   delete process.env[legacyPassword]
-  const make = spyOn(OpenCode, "make")
+  const { make, restore } = stubMake(() => fakeClient("expected"))
   try {
     await expect(
       connectV2Host("/workspace", "expected", "2.0.3", AbortSignal.timeout(1000)),
     ).rejects.toThrow("requires OPENCODE_PASSWORD")
     expect(make).not.toHaveBeenCalled()
   } finally {
-    make.mockRestore()
+    restore()
   }
 })
 
-test("discovered V2 host connection rejects missing authentication", async () => {
+test("registered V2 host connection rejects missing authentication", async () => {
   delete process.env[hostUrl]
-  const discover = spyOn(Service, "discover").mockResolvedValue({
-    url: "http://127.0.0.1:4096/",
-    auth: undefined,
-  } as Awaited<ReturnType<typeof Service.discover>>)
-  const make = spyOn(OpenCode, "make")
+  const root = await mkdtemp(join(tmpdir(), "reviewer-v2-service-"))
+  process.env[stateHome] = root
+  await mkdir(join(root, "opencode"))
+  await writeFile(
+    join(root, "opencode", "service.json"),
+    JSON.stringify({ version: "2.0.3", url: "http://127.0.0.1:4096/", pid: process.pid }),
+  )
+  const { make, restore } = stubMake(() => fakeClient("expected"))
   try {
     await expect(
       connectV2Host("/workspace", "expected", "2.0.3", AbortSignal.timeout(1000)),
-    ).rejects.toThrow("unauthenticated host")
+    ).rejects.toThrow("does not contain authentication")
     expect(make).not.toHaveBeenCalled()
   } finally {
-    discover.mockRestore()
-    make.mockRestore()
+    restore()
+    await rm(root, { recursive: true, force: true })
   }
 })
 
 test("V2 host connection rejects an instance identity mismatch", async () => {
   process.env[hostUrl] = "http://127.0.0.1:4096/"
   process.env[password] = "synthetic-host-password"
-  const make = spyOn(OpenCode, "make").mockReturnValue(fakeClient("another-instance"))
+  const { make, restore } = stubMake(() => fakeClient("another-instance"))
   try {
     await expect(
       connectV2Host("/workspace", "expected", "2.0.3", AbortSignal.timeout(1000)),
     ).rejects.toThrow("does not belong to this host generation")
     expect(make).toHaveBeenCalledTimes(1)
   } finally {
-    make.mockRestore()
+    restore()
+  }
+})
+
+test("V2 host transport retries only missing session wait endpoints with the legacy route", async () => {
+  const paths: string[] = []
+  const delegate = mock(async (input: RequestInfo | URL) => {
+    const path = new URL(input instanceof Request ? input.url : input.toString()).pathname
+    paths.push(path)
+    return new Response(null, {
+      status: path.startsWith("/api/experimental/session/ses_legacy/") ? 404 : 204,
+    })
+  }) as unknown as typeof globalThis.fetch
+  const fetch = hostCompatibleFetch(delegate)
+  await fetch(new URL("http://127.0.0.1:4096/api/experimental/session/ses_current/wait"))
+  await fetch(new URL("http://127.0.0.1:4096/api/experimental/session/ses_legacy/wait"))
+  expect(paths).toEqual([
+    "/api/experimental/session/ses_current/wait",
+    "/api/experimental/session/ses_legacy/wait",
+    "/api/session/ses_legacy/wait",
+  ])
+})
+
+test("V2 host connection falls back to a compatible registered service", async () => {
+  delete process.env[hostUrl]
+  const root = await mkdtemp(join(tmpdir(), "reviewer-v2-service-"))
+  process.env[stateHome] = root
+  await mkdir(join(root, "opencode"))
+  await writeFile(
+    join(root, "opencode", "service.json"),
+    JSON.stringify({
+      version: "2.0.3",
+      url: "http://127.0.0.1:4096/",
+      pid: process.pid,
+      password: "synthetic-service-password",
+    }),
+  )
+  const { make, restore } = stubMake(() => fakeClient("expected"))
+  try {
+    await connectV2Host("/workspace", "expected", "2.0.3", AbortSignal.timeout(1000))
+    expect(make).toHaveBeenCalledTimes(1)
+    const options = (
+      make.mock.calls as unknown as Array<[Parameters<typeof OpenCode.make>[0]]>
+    )[0]?.[0]
+    expect(options).toMatchObject({
+      baseUrl: "http://127.0.0.1:4096/",
+      headers: {
+        authorization: `Basic ${Buffer.from("opencode:synthetic-service-password").toString("base64")}`,
+      },
+    })
+  } finally {
+    restore()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test("registered V2 services must be local and belong to a live process", async () => {
+  delete process.env[hostUrl]
+  const root = await mkdtemp(join(tmpdir(), "reviewer-v2-service-"))
+  process.env[stateHome] = root
+  await mkdir(join(root, "opencode"))
+  const registration = join(root, "opencode", "service.json")
+  const { make, restore } = stubMake(() => fakeClient("expected"))
+  try {
+    await writeFile(
+      registration,
+      JSON.stringify({
+        version: "2.0.3",
+        url: "https://example.invalid/",
+        pid: process.pid,
+        password: "synthetic-service-password",
+      }),
+    )
+    await expect(
+      connectV2Host("/workspace", "expected", "2.0.3", AbortSignal.timeout(1000)),
+    ).rejects.toThrow("must use a loopback address")
+
+    await writeFile(
+      registration,
+      JSON.stringify({
+        version: "2.0.3",
+        url: "http://127.0.0.1:4096/api?redirect=external",
+        pid: process.pid,
+        password: "synthetic-service-password",
+      }),
+    )
+    await expect(
+      connectV2Host("/workspace", "expected", "2.0.3", AbortSignal.timeout(1000)),
+    ).rejects.toThrow("must be a loopback origin")
+
+    await writeFile(
+      registration,
+      JSON.stringify({
+        version: "2.0.3",
+        url: "http://127.0.0.1:4096/",
+        pid: 0,
+        password: "synthetic-service-password",
+      }),
+    )
+    await expect(
+      connectV2Host("/workspace", "expected", "2.0.3", AbortSignal.timeout(1000)),
+    ).rejects.toThrow("invalid process ID")
+
+    await writeFile(
+      registration,
+      JSON.stringify({
+        version: "2.0.3",
+        url: "http://127.0.0.1:4096/",
+        pid: 2_147_483_647,
+        password: "synthetic-service-password",
+      }),
+    )
+    await expect(
+      connectV2Host("/workspace", "expected", "2.0.3", AbortSignal.timeout(1000)),
+    ).rejects.toThrow("process that is not running")
+    expect(make).not.toHaveBeenCalled()
+  } finally {
+    restore()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test("registered V2 services must match the active host version", async () => {
+  delete process.env[hostUrl]
+  const root = await mkdtemp(join(tmpdir(), "reviewer-v2-service-"))
+  process.env[stateHome] = root
+  await mkdir(join(root, "opencode"))
+  await writeFile(
+    join(root, "opencode", "service.json"),
+    JSON.stringify({
+      version: "2.0.4",
+      url: "http://127.0.0.1:4096/",
+      pid: process.pid,
+      password: "synthetic-service-password",
+    }),
+  )
+  const { make, restore } = stubMake(() => fakeClient("expected"))
+  try {
+    await expect(
+      connectV2Host("/workspace", "expected", "2.0.3", AbortSignal.timeout(1000)),
+    ).rejects.toThrow("does not match this host version")
+    expect(make).not.toHaveBeenCalled()
+  } finally {
+    restore()
+    await rm(root, { recursive: true, force: true })
   }
 })

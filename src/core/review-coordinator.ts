@@ -23,6 +23,7 @@ import type { EvidenceProvider } from "../evidence/provider.ts"
 import { assembleEvidence, defaultEvidenceProviders } from "../context/evidence-assembler.ts"
 import type { AskDecisionSource } from "../context/ask-decisions.ts"
 import { applyEscalationDisposition } from "../escalation.ts"
+import { formatFailureReason } from "../failure-reason.ts"
 import packageInfo from "../../package.json"
 import { ScriptAnalysisRegistry } from "../verified-ssh-script.ts"
 
@@ -142,7 +143,7 @@ export class ReviewCoordinator {
       const disposed = applyEscalationDisposition(
         {
           kind: "escalate",
-          reason: error instanceof Error ? error.message : String(error),
+          reason: formatFailureReason("review coordination", error),
           decisionSource: "failure-safe",
         },
         this.config,
@@ -446,6 +447,7 @@ export class ReviewCoordinator {
                 ...(capability.writeEffects.deletion.value === true ? { deletion: true } : {}),
               },
               ...(capability.network.observed.value === true ? { networkObserved: true } : {}),
+              ...(capability.credentialRead.value === true ? { credentialRead: true } : {}),
               ...(capability.process.privilegeEscalation.value === true
                 ? { privilegeEscalation: true }
                 : {}),

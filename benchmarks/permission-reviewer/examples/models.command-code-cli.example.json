@@ -1,0 +1,12 @@
+{
+  "models": [
+    {
+      "id": "deepseek-v41-high-command-code",
+      "model": "deepseek/deepseek-v4.1-flash",
+      "transport": "command-code-cli",
+      "commandCodeBinEnv": "PRB_COMMAND_CODE_BIN",
+      "variant": "high",
+      "format": "text"
+    }
+  ]
+}

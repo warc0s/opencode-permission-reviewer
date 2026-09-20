@@ -23,20 +23,23 @@ export function validateModel(model) {
   )
   const transport = model.transport ?? "chat-completions"
   assert(
-    ["chat-completions", "opencode-v1"].includes(transport),
+    ["chat-completions", "opencode-v1", "command-code-cli"].includes(transport),
     `${model.id}: unsupported transport`,
   )
-  assert(typeof model.endpoint === "string", `${model.id}: endpoint missing`)
-  const url = new URL(model.endpoint)
-  assert(
-    !url.username && !url.password && !url.search && !url.hash,
-    "Do not put credentials, query strings or fragments in endpoint URLs.",
-  )
-  assert(
-    url.protocol === "https:" ||
-      (url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)),
-    "Use HTTPS, except for loopback local servers.",
-  )
+  if (transport !== "command-code-cli")
+    assert(typeof model.endpoint === "string", `${model.id}: endpoint missing`)
+  const url = transport === "command-code-cli" ? null : new URL(model.endpoint)
+  if (url) {
+    assert(
+      !url.username && !url.password && !url.search && !url.hash,
+      "Do not put credentials, query strings or fragments in endpoint URLs.",
+    )
+    assert(
+      url.protocol === "https:" ||
+        (url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)),
+      "Use HTTPS, except for loopback local servers.",
+    )
+  }
   assert(
     FORMATS.has(model.format ?? "text"),
     `${model.id}: format must be text, json_schema or tool`,
@@ -69,6 +72,21 @@ export function validateModel(model) {
         /^[A-Za-z_][A-Za-z0-9_]*$/.test(model.hostPasswordEnv),
       "OpenCode transport requires a hostPasswordEnv environment variable for local server authentication.",
     )
+  } else if (transport === "command-code-cli") {
+    assert(model.endpoint === undefined, "Command Code CLI transport has no endpoint.")
+    assert(model.apiKeyEnv === undefined, "Command Code CLI uses its own authenticated session.")
+    assert(model.hostPasswordEnv === undefined, "Command Code CLI has no host password.")
+    assert(model.parameters === undefined, "Command Code CLI does not accept API parameters.")
+    assert(model.format === "text", "Command Code CLI supports only the text profile.")
+    assert(
+      typeof model.variant === "string" && ["low", "high", "max"].includes(model.variant),
+      "Command Code CLI requires a supported effort variant.",
+    )
+    assert(
+      typeof model.commandCodeBinEnv === "string" &&
+        /^[A-Za-z_][A-Za-z0-9_]*$/.test(model.commandCodeBinEnv),
+      "Command Code CLI requires a binary-path environment variable.",
+    )
   } else {
     assert(model.hostPasswordEnv === undefined, "hostPasswordEnv is only for OpenCode transport.")
   }
@@ -91,6 +109,7 @@ export function validateModel(model) {
     "notes",
     "transport",
     "hostPasswordEnv",
+    "commandCodeBinEnv",
   ])
   for (const k of Object.keys(model))
     assert(

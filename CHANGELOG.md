@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-09-20
+
 ### Changed
 
 - Add a compatibility layer for every stable OpenCode V2 release from 2.0.3

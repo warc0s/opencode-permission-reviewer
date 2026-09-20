@@ -1,6 +1,6 @@
 {
   "name": "opencode-permission-reviewer",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Policy-aware permission reviewer for OpenCode V1 and V2",
   "type": "module",
   "main": "./dist/index.js",

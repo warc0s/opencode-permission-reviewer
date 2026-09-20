@@ -9,9 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Widen OpenCode V2 host support from the pinned 2.0.3 release to the range
-  `>=2.0.3 <3`: newer 2.x hosts load, while older releases, 3.x hosts, and
-  prereleases still fail loudly. Bumped `@opencode/client` to 2.0.11.
+- Add a compatibility layer for every stable OpenCode V2 release from 2.0.3
+  through 2.0.11. Service connection no longer depends on changing discovery
+  endpoints, and unverified releases still fail loudly. Bumped
+  `@opencode/client` to 2.0.11.
+- Negotiate the V2 session wait route by response, use a unique ID for each
+  isolated reviewer plugin, dispose host registrations on unload, and load TUI
+  snapshots without waiting for an unrelated host event.
 
 ### Added
 

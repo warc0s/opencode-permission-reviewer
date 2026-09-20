@@ -176,17 +176,19 @@ test("v2 permission review hook failure denies with phase and cause", async () =
   let resume: (() => void) | undefined
   let ended = false
   const events: OpenCodeEvent[] = []
+  const registration = () => ({ dispose: async () => {} })
   const ctx = {
     app: { version: "2.0.3" },
     options: {},
     location: { directory, project: { directory } },
     rpc: {
-      register: async () => ({ events: { emit: async () => {} } }),
+      register: async () => ({ events: { emit: async () => {} }, ...registration() }),
     },
-    tool: { hook: async () => {} },
+    tool: { hook: async () => registration() },
     permission: {
       hook: async (_name: string, callback: typeof evaluate) => {
         evaluate = callback
+        return registration()
       },
     },
     session: {

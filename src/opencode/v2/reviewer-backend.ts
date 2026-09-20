@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto"
 import { rm, unlink } from "node:fs/promises"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
 import type { OpenCodeClient } from "@opencode/client"
 import type { Plugin } from "@opencode/plugin"
 import { z } from "zod"
@@ -152,7 +153,9 @@ export class V2ReviewerBackend {
       })
       directory = isolated.directory
       release = isolated.release
-      await attempt.wait(waitForIsolationActive(client, directory, attempt.signal))
+      await attempt.wait(
+        waitForIsolationActive(client, directory, isolated.pluginID, attempt.signal),
+      )
       if (!dispose) throw new Error("Reviewer isolation hooks did not activate")
       const catalog = await attempt.wait(
         client.model.list({ location: { directory } }, { signal: attempt.signal }),
@@ -357,15 +360,24 @@ export class V2ReviewerBackend {
 async function waitForIsolationActive(
   client: OpenCodeClient,
   directory: string,
+  pluginID: string,
   signal: AbortSignal,
 ): Promise<void> {
+  const root = resolve(directory)
   for (;;) {
     const plugins = await client.plugin.list({ location: { directory } }, { signal })
-    const entry = plugins.data.find(
-      (plugin) =>
-        plugin.source.type === "local" &&
-        (plugin.source.path === directory || plugin.source.path === join(directory, "index.js")),
-    )
+    const entry = plugins.data.find((plugin) => {
+      if (plugin.source.type !== "local") return false
+      if ((plugin as unknown as { id?: unknown }).id === pluginID) return true
+      const path = plugin.source.path
+      if (typeof path !== "string") return false
+      try {
+        const local = resolve(path.startsWith("file:") ? fileURLToPath(path) : path)
+        return local === root || local === join(root, "index.js")
+      } catch {
+        return false
+      }
+    })
     if (entry !== undefined) {
       if (entry.state.status === "active") return
       throw new Error(`Reviewer isolation failed to activate: ${entry.state.error}`)

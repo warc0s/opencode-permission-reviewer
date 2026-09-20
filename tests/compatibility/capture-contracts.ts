@@ -4,20 +4,21 @@ import { createV2ContextReader } from "../../src/opencode/v2/context-reader.ts"
 import { hostCompatibleFetch } from "../../src/opencode/v2/connection.ts"
 import { withTimeout } from "../../src/opencode/transport.ts"
 import type { MessageWithParts } from "../../src/types.ts"
+import contracts from "./host-contracts.json"
 
 const [url, directory, hostVersion] = process.argv.slice(2)
-if (
-  !url ||
-  !directory ||
-  (hostVersion !== "2.0.3" && hostVersion !== "2.0.11") ||
-  !process.env.OPENCODE_PASSWORD
-)
+if (!url || !directory || !hostVersion || !process.env.OPENCODE_PASSWORD)
   throw new Error("Missing synthetic host settings")
+if (
+  !Object.hasOwn(contracts.v2.integrities, hostVersion) &&
+  !Object.hasOwn(contracts.v2.optionalIntegrities, hostVersion)
+)
+  throw new Error(`Unsupported fixture host ${hostVersion}`)
 const authorization = `Basic ${Buffer.from(`opencode:${process.env.OPENCODE_PASSWORD}`).toString("base64")}`
 const client = OpenCode.make({
   baseUrl: url,
   headers: { authorization },
-  fetch: hostCompatibleFetch(hostVersion),
+  fetch: hostCompatibleFetch(),
 })
 const controller = new AbortController()
 const events: OpenCodeEvent[] = []

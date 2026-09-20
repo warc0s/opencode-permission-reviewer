@@ -34,6 +34,7 @@ function fixture(
     wrongLocation?: boolean
     activationFailed?: boolean
     activationDelayed?: boolean
+    activationRepresentation?: "directory-slash" | "file-url" | "id-only" | "id-new-path"
   } = {},
 ) {
   let tool!: Tool
@@ -46,6 +47,7 @@ function fixture(
   let disposed = 0
   let checks = 0
   let setups = 0
+  let pluginID = ""
   const registration = () => ({
     dispose: async () => {
       disposed++
@@ -81,6 +83,7 @@ function fixture(
         checks++
         if (setups === 0) {
           const plugin = await import(pathToFileURL(directory + "/index.js").href)
+          pluginID = plugin.default.id
           await plugin.default.setup({ ...ctx, location: { directory } })
           setups++
         }
@@ -94,10 +97,22 @@ function fixture(
             ],
           }
         if (options.activationDelayed && checks < 3) return { data: [] }
+        const sourcePath =
+          options.activationRepresentation === "directory-slash"
+            ? directory + "/"
+            : options.activationRepresentation === "file-url"
+              ? pathToFileURL(directory + "/index.js").href
+              : options.activationRepresentation === "id-new-path"
+                ? `plugin://${pluginID}`
+                : directory + "/index.js"
         return {
           data: [
             {
-              source: { type: "local", path: directory + "/index.js" },
+              id: pluginID,
+              source:
+                options.activationRepresentation === "id-only"
+                  ? { type: "local" }
+                  : { type: "local", path: sourcePath },
               state: { status: "active" },
             },
           ],
@@ -288,6 +303,23 @@ test("isolation activation waits for the host report and fails loudly", async ()
     expect(failed.state().prompts).toBe(0)
   } finally {
     await failed.cleanup()
+  }
+})
+
+test("isolation activation accepts normalized local plugin representations", async () => {
+  for (const activationRepresentation of [
+    "directory-slash",
+    "file-url",
+    "id-only",
+    "id-new-path",
+  ] as const) {
+    const harness = fixture({ activationRepresentation })
+    try {
+      expect((await harness.run()).kind).toBe("allow")
+      expect(harness.state().prompts).toBe(1)
+    } finally {
+      await harness.cleanup()
+    }
   }
 })
 

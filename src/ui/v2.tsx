@@ -160,12 +160,6 @@ export async function setupTuiV2(ctx: Context): Promise<() => void> {
     })()
     void stream.catch(() => {})
     try {
-      const ready = ctx.client.event.subscribe({ signal: current.signal })[Symbol.asyncIterator]()
-      try {
-        await ready.next()
-      } finally {
-        await ready.return?.()
-      }
       const snapshot = object(
         await rpc.snapshot({}, { location: { directory: scopeDirectory }, signal: current.signal }),
       )

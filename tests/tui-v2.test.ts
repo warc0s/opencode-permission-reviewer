@@ -114,8 +114,8 @@ test("TUI restores authoritative snapshots after disconnect and isolates routes,
     },
     client: {
       event: {
-        subscribe: async function* () {
-          yield { type: "connected" }
+        subscribe: () => {
+          throw new Error("TUI snapshot loading must not depend on a generic host event")
         },
       },
       rpc: () => ({

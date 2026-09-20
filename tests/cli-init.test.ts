@@ -94,6 +94,7 @@ describe("cli init", () => {
       ["2.0.3", true],
       ["2.0.4", true],
       ["2.0.11", true],
+      ["2.0.12", false],
       ["2.0.3-beta.1", false],
       ["3.0.0", false],
     ] as const) {

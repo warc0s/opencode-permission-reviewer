@@ -10,14 +10,21 @@ from test_v2_reviewer import model_server  # noqa: F401
 
 import pytest
 
+V2_VERSIONS = (
+    [os.environ["V2_HOST_VERSION"]]
+    if os.environ.get("V2_HOST_VERSION")
+    else ["2.0.3", "2.0.11"]
+)
 
-def test_v2_isolated_server(launch_host, activate_host, probe_package):
-    binary = os.environ.get("OPENCODE_V2_2_0_3")
+
+@pytest.mark.parametrize("host_version", V2_VERSIONS)
+def test_v2_isolated_server(launch_host, activate_host, probe_package, host_version):
+    binary = os.environ.get(f"OPENCODE_V2_{host_version.replace('.', '_')}")
     if not binary:
-        pytest.fail("Set OPENCODE_V2_2_0_3 to the pinned OpenCode binary")
+        pytest.fail(f"Set the pinned OpenCode {host_version} binary")
     host = launch_host("v2", binary, {"plugins": [probe_package]})
     activate_host(host, "v2")
-    assert (host["project"] / "host-probe.txt").read_text() == "setup:v2:2.0.3\n"
+    assert (host["project"] / "host-probe.txt").read_text() == f"setup:v2:{host_version}\n"
     capabilities = json.loads((host["project"] / "host-capabilities.json").read_text())
     assert capabilities == {
         "sessionRemove": False,
@@ -27,7 +34,7 @@ def test_v2_isolated_server(launch_host, activate_host, probe_package):
     }
 
 
-@pytest.mark.parametrize("host_version", ["2.0.3", "2.0.11"])
+@pytest.mark.parametrize("host_version", V2_VERSIONS)
 def test_native_context_fork_and_form_contracts(launch_host, model_server, host_version):
     binary = os.environ[f"OPENCODE_V2_{host_version.replace('.', '_')}"]
     provider = {"providers": {"fixture": {

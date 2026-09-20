@@ -21,7 +21,7 @@ import { V2AskDecisions } from "./event-codec.ts"
 import { REVIEWER_PROMPT_VERSION } from "../../policy.ts"
 import { satisfies } from "semver"
 import packageInfo from "../../../package.json"
-import { SUPPORTED_V2_RANGE } from "../host-guard.ts"
+import { VERIFIED_V2_RANGE } from "../host-guard.ts"
 import { ScriptAnalysisRegistry } from "../../verified-ssh-script.ts"
 
 type Context = Parameters<Plugin.Plugin["setup"]>[0]
@@ -46,9 +46,9 @@ export async function setupWithServices(
     ): Pick<V2ReviewerBackend, "owns" | "review" | "waitForIdle">
   },
 ): Promise<() => Promise<void>> {
-  if (!satisfies(ctx.app.version, SUPPORTED_V2_RANGE))
+  if (!satisfies(ctx.app.version, VERIFIED_V2_RANGE))
     throw new Error(
-      `Unsupported OpenCode V2 host ${ctx.app.version}; supported range is ${SUPPORTED_V2_RANGE}`,
+      `Unsupported OpenCode V2 host ${ctx.app.version}; verified range is ${VERIFIED_V2_RANGE}`,
     )
   const directory = ctx.location.directory
   const config = services.loadConfig(ctx.options, directory, "unknown")
@@ -77,6 +77,7 @@ export async function setupWithServices(
   const statuses = new Map<string, ReviewUiStatus>()
   let revision = 0
   let disposed = false
+  let cleanupStarted = false
   let eventStreamHealthy = true
   let connectionState: "not-probed" | "verified" | "failed" = "not-probed"
   const subscription = new AbortController()
@@ -84,6 +85,7 @@ export async function setupWithServices(
     console.error(`[opencode-permission-reviewer] ${message}`, details ?? "")
   const audit = createAuditWriter(config, log)
   const effectiveConfigHash = createHash("sha256").update(JSON.stringify(config)).digest("hex")
+  const registrations: Array<{ dispose(): Promise<void> }> = []
   const rpc = await ctx.rpc.register(ReviewerRpc, {
     identity: async () => identity,
     status: async () => ({
@@ -107,6 +109,7 @@ export async function setupWithServices(
     }),
     snapshot: async () => ({ generation, revision, directory, reviews: [...statuses.values()] }),
   })
+  registrations.push(rpc)
   const publish = async (status: ReviewUiStatus) => {
     statuses.set(status.requestID, status)
     if (statuses.size > 256) {
@@ -123,14 +126,18 @@ export async function setupWithServices(
   }
   const key = (sessionID: string, messageID: string, id: string) =>
     `${sessionID}:${messageID}:${id}`
-  await ctx.tool.hook("execute.before", (event) => {
-    if (tools.size >= 512) tools.delete(tools.keys().next().value!)
-    // Retain the event object so subsequent hooks' input replacement is visible.
-    tools.set(key(event.sessionID, event.messageID, event.id), event)
-  })
-  await ctx.tool.hook("execute.after", (event) => {
-    tools.delete(key(event.sessionID, event.messageID, event.id))
-  })
+  registrations.push(
+    await ctx.tool.hook("execute.before", (event) => {
+      if (tools.size >= 512) tools.delete(tools.keys().next().value!)
+      // Retain the event object so subsequent hooks' input replacement is visible.
+      tools.set(key(event.sessionID, event.messageID, event.id), event)
+    }),
+  )
+  registrations.push(
+    await ctx.tool.hook("execute.after", (event) => {
+      tools.delete(key(event.sessionID, event.messageID, event.id))
+    }),
+  )
   const eventTask = (async () => {
     for await (const event of ctx.event.subscribe({ signal: subscription.signal })) {
       // The setup context is typed by the oldest supported host SDK while
@@ -153,7 +160,7 @@ export async function setupWithServices(
       eventStreamHealthy = false
       if (!disposed) for (const { attempt } of requests.values()) attempt.close("cancelled")
     })
-  await ctx.permission.hook("evaluate", async (input) => {
+  const permissionRegistration = await ctx.permission.hook("evaluate", async (input) => {
     if (input.effect !== "ask") return
     if (disposed || !eventStreamHealthy) {
       input.effect = "deny"
@@ -428,9 +435,18 @@ export async function setupWithServices(
     pending.work = work
     await work
   })
+  registrations.push(permissionRegistration)
   return async () => {
+    if (cleanupStarted) return
+    cleanupStarted = true
     disposed = true
     subscription.abort()
+    await Promise.allSettled(
+      registrations
+        .splice(0)
+        .reverse()
+        .map((registration) => Promise.resolve().then(() => registration.dispose())),
+    )
     for (const { attempt } of requests.values()) attempt.close("cancelled")
     await Promise.allSettled([...requests.values()].map((request) => request.work))
     await withTimeout(Promise.allSettled([...notifications]), 2000).catch((error) =>

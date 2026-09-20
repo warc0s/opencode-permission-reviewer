@@ -18,7 +18,27 @@ print the required variables. They never replace an existing installation or
 edit shell aliases. CI receives these paths through `GITHUB_ENV`.
 
 The V2 server and TUI compile against the minimum supported plugin SDK while
-the real-host matrix exercises both the minimum and reference host binaries.
+the real-host matrix exercises the minimum and reference host binaries.
+
+To verify every stable release in the closed V2 window locally without making
+CI install all nine hosts, run the sequential window harness. It installs one
+host at a time, verifies its integrity, runs the real-host tests, and removes
+the disposable installation before continuing:
+
+```bash
+PYTHON=/path/to/python-with-pytest \
+  bun tests/compatibility/verify-v2-window.ts
+```
+
+The default command and CI remain limited to the minimum and reference V2
+hosts. The optional window verifies the intermediate releases on demand.
+
+`tests/live-v2-smoke.ts` is the paid-provider smoke for a fresh V2 service. Its
+fixture uses a placeholder plugin path that must point at the checkout before
+starting the host. Pass the registered service password through
+`REVIEWER_LIVE_PASSWORD`; set `REVIEWER_LIVE_AUDIT_PATH` only when trusted
+global config overrides the default audit path. The smoke proves a real allow
+and execution, an LLM denial, and a deterministic emergency-brake denial.
 
 The variables must point to the actual host executable. Do not point them at a
 profile launcher that overwrites `HOME`, `XDG_*`, or `OPENCODE_CONFIG*`: that

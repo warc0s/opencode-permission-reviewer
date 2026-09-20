@@ -13,6 +13,32 @@ import time
 
 import pytest
 
+V2_VERSIONS = (
+    [os.environ["V2_HOST_VERSION"]]
+    if os.environ.get("V2_HOST_VERSION")
+    else ["2.0.3", "2.0.11"]
+)
+V2_CASES = [
+    (version, "json_schema", outcome)
+    for version in V2_VERSIONS
+    for outcome in ("allow", "deny", "service")
+] + (
+    [
+        ("2.0.3", "text", "allow"),
+        ("2.0.3", "json_schema", "ambiguous"),
+        ("2.0.3", "json_schema", "low-confidence-deny"),
+        ("2.0.3", "json_schema", "prior-deny"),
+        ("2.0.3", "json_schema", "later-deny"),
+        ("2.0.3", "json_schema", "interrupted"),
+        ("2.0.3", "json_schema", "retained"),
+        ("2.0.3", "json_schema", "brake"),
+        ("2.0.3", "json_schema", "schema-retry"),
+        ("2.0.11", "json_schema", "interrupted"),
+    ]
+    if not os.environ.get("V2_HOST_VERSION")
+    else []
+)
+
 
 @pytest.fixture
 def model_server():
@@ -76,24 +102,7 @@ def model_server():
     thread.join(timeout=5)
 
 
-@pytest.mark.parametrize("host_version,output_format,decision_outcome", [
-    ("2.0.3", "json_schema", "allow"),
-    ("2.0.3", "text", "allow"),
-    ("2.0.3", "json_schema", "deny"),
-    ("2.0.3", "json_schema", "ambiguous"),
-    ("2.0.3", "json_schema", "low-confidence-deny"),
-    ("2.0.3", "json_schema", "prior-deny"),
-    ("2.0.3", "json_schema", "later-deny"),
-    ("2.0.3", "json_schema", "interrupted"),
-    ("2.0.3", "json_schema", "retained"),
-    ("2.0.3", "json_schema", "brake"),
-    ("2.0.3", "json_schema", "schema-retry"),
-    ("2.0.3", "json_schema", "service"),
-    ("2.0.11", "json_schema", "allow"),
-    ("2.0.11", "json_schema", "deny"),
-    ("2.0.11", "json_schema", "interrupted"),
-    ("2.0.11", "json_schema", "service"),
-])
+@pytest.mark.parametrize("host_version,output_format,decision_outcome", V2_CASES)
 def test_v2_reviewer_applies_and_cleans_up(launch_host, activate_host, model_server, host_version, output_format, decision_outcome, tmp_path):
     expected_effect = decision_outcome
     if decision_outcome == "ambiguous":

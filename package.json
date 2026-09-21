@@ -86,7 +86,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.0",
     "@opencode-ai/plugin": "1.18.31",
-    "@opencode/plugin": "2.0.3",
+    "@opencode/plugin": "2.0.8",
     "@types/bun": "^1.3.0",
     "@types/semver": "7.8.0",
     "eslint": "^10.8.0",
@@ -118,6 +118,6 @@
     "@opentui/core": "0.5.11",
     "@opentui/solid": "0.5.11",
     "solid-js": "1.9.12",
-    "zod": "4.1.8"
+    "zod": "4.6.5"
   }
 }

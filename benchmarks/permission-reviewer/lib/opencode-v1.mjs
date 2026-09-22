@@ -3,6 +3,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { safeError } from "./util.mjs"
 
+const INSTANCE_DISPOSE_ATTEMPTS = 3
+
 /** Send a benchmark prompt through an actual OpenCode V1 host, never through its OAuth tokens. */
 export async function requestOpenCodeV1(
   model,
@@ -15,6 +17,7 @@ export async function requestOpenCodeV1(
     ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)])
     : AbortSignal.timeout(timeoutMs)
   let sessionID
+  let outcome
   const password = process.env[model.hostPasswordEnv]
   if (!password) {
     await rm(directory, { recursive: true })
@@ -83,7 +86,7 @@ export async function requestOpenCodeV1(
       tokens: info.tokens ?? null,
       parts: textParts.map((part) => ({ type: "text", text: part.text })),
     }
-    return {
+    outcome = {
       ok: true,
       status: 200,
       raw,
@@ -97,7 +100,7 @@ export async function requestOpenCodeV1(
       usage: usage ?? null,
     }
   } catch (error) {
-    return {
+    outcome = {
       ok: false,
       status: typeof error.status === "number" ? error.status : null,
       error: safeError(error),
@@ -118,6 +121,27 @@ export async function requestOpenCodeV1(
         // The benchmark never converts cleanup failures into an approval.
       }
     }
+    let disposalError
+    for (let attempt = 0; attempt < INSTANCE_DISPOSE_ATTEMPTS; attempt++) {
+      try {
+        await call("POST", "/instance/dispose", undefined, AbortSignal.timeout(5000))
+        disposalError = undefined
+        break
+      } catch (error) {
+        disposalError = error
+      }
+    }
+    if (disposalError) {
+      outcome = {
+        ok: false,
+        status: typeof disposalError.status === "number" ? disposalError.status : null,
+        error: `OpenCode instance cleanup failed after ${INSTANCE_DISPOSE_ATTEMPTS} attempts: ${safeError(disposalError)}`,
+        rawText: "",
+        latencyMs: performance.now() - started,
+        halt: true,
+      }
+    }
     await rm(directory, { recursive: true })
   }
+  return outcome
 }

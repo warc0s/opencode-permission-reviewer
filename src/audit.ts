@@ -312,6 +312,14 @@ export function createAuditWriter(
               answer: redactSecrets(decision.answer),
             })),
           }),
+      ...(record.reviewerEscalatedFrom === undefined
+        ? {}
+        : {
+            reviewerEscalatedFrom: {
+              ...record.reviewerEscalatedFrom,
+              reason: redactSecrets(boundedReason(record.reviewerEscalatedFrom.reason)),
+            },
+          }),
     }
     try {
       appendAuditLine(path, `${JSON.stringify(sanitized)}\n`)

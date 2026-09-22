@@ -10,12 +10,12 @@ import type {
 } from "../types.ts"
 import { DECISION_SCHEMA_VERSION } from "../decision.ts"
 import { REVIEWER_PROMPT_VERSION } from "../policy.ts"
-import { reviewBudgetMs } from "../config.ts"
+import { isSystemOneReviewerModel, reviewBudgetMs } from "../config.ts"
 import { evaluateReview } from "./review-engine.ts"
 import { ReviewAttempt } from "./review-attempt.ts"
 import { ReviewLimiter } from "./review-limiter.ts"
 import { createV1ContextReader } from "../opencode/v1/context-reader.ts"
-import { V1ReviewerBackend } from "../opencode/v1/reviewer-backend.ts"
+import { createV1ReviewerBackend, type V1ReviewBackend } from "../opencode/v1/backend-factory.ts"
 import { createUiStatus, type ReviewUiStatus } from "../ui-protocol.ts"
 import type { RuntimeContext } from "../opencode/types.ts"
 import { isAlreadyResolvedError, withTimeout } from "../opencode/transport.ts"
@@ -54,7 +54,7 @@ export class ReviewCoordinator {
   private stopped = false
   private readonly limiter = new ReviewLimiter()
   private readonly pending = new Map<string, Promise<unknown>>()
-  private readonly backend: V1ReviewerBackend
+  private readonly backend: V1ReviewBackend
   /**
    * Request IDs that a human (or any other reply source) resolved while the
    * automatic review was still in flight. The in-flight review must then give
@@ -81,7 +81,7 @@ export class ReviewCoordinator {
     askDecisions?: AskDecisionSource,
   ) {
     this.log = logger ?? (() => {})
-    this.backend = new V1ReviewerBackend(ctx, config, this.log, (envelope, ms) =>
+    this.backend = createV1ReviewerBackend(ctx, config, this.log, (envelope, ms) =>
       this.recordReviewerMs(envelope, ms),
     )
     this.providers = providers ?? defaultEvidenceProviders()
@@ -186,14 +186,24 @@ export class ReviewCoordinator {
     request: PermissionRequest,
     reason: string,
     decision?: ReviewDecision,
-    extras?: Pick<ReviewExecutionResult, "reviewerOutcome" | "escalationDisposition">,
+    extras?: Pick<
+      ReviewExecutionResult,
+      "reviewerOutcome" | "escalationDisposition" | "reviewerModel"
+    >,
   ): Promise<ReviewExecutionResult | undefined> {
     if (this.isSuperseded(request)) return this.supersedeResult()
     const accepted = await this.safeReply(request, "reject", reason)
     if (!accepted) return this.supersedeResult()
     // Publish the terminal phase only after OpenCode accepted the reply: the
     // UI must not claim a denial that the server never recorded.
-    await this.emit(request, "denied", reason, decision, extras?.escalationDisposition)
+    await this.emit(
+      request,
+      "denied",
+      reason,
+      decision,
+      extras?.escalationDisposition,
+      extras?.reviewerModel,
+    )
     return undefined
   }
 
@@ -218,6 +228,7 @@ export class ReviewCoordinator {
         result.reason,
         result.decision,
         result.escalationDisposition,
+        result.reviewerModel,
       )
       return result
     }
@@ -230,6 +241,7 @@ export class ReviewCoordinator {
         ...(result.escalationDisposition === undefined
           ? {}
           : { escalationDisposition: result.escalationDisposition }),
+        ...(result.reviewerModel === undefined ? {} : { reviewerModel: result.reviewerModel }),
       })
       if (superseded) return superseded
       return result
@@ -237,7 +249,14 @@ export class ReviewCoordinator {
 
     // Escalate → leave for human. Do not reply.
     if (this.isSuperseded(request)) return this.supersedeResult()
-    await this.emit(request, "manual", result.reason, result.decision, result.escalationDisposition)
+    await this.emit(
+      request,
+      "manual",
+      result.reason,
+      result.decision,
+      result.escalationDisposition,
+      result.reviewerModel,
+    )
     this.log("review escalated to user", { requestID: request.id, reason: result.reason })
     return result
   }
@@ -372,7 +391,10 @@ export class ReviewCoordinator {
       promptVersion: REVIEWER_PROMPT_VERSION,
       decisionSource,
       actionHash: actionHash(request),
-      reviewerModel: this.config.model,
+      reviewerModel: result.reviewerModel ?? this.config.model,
+      ...(result.reviewerEscalatedFrom === undefined
+        ? {}
+        : { reviewerEscalatedFrom: result.reviewerEscalatedFrom }),
       timestamp: new Date().toISOString(),
       durationMs: Math.max(0, Date.now() - startedAt),
       requestID: request.id,
@@ -549,12 +571,18 @@ export class ReviewCoordinator {
     reason?: string,
     decision?: ReviewDecision,
     escalationDisposition?: ReviewExecutionResult["escalationDisposition"],
+    reviewerModel?: string,
   ): Promise<void> {
     if (!this.ctx.publishUiStatus) return
     const actor = this.attempts.get(request.id)?.evidence.actor
     const status = createUiStatus(request, phase, {
-      model: this.config.model,
-      variant: this.config.variant,
+      model: reviewerModel ?? this.config.model,
+      variant:
+        reviewerModel && reviewerModel !== this.config.model
+          ? (this.config.escalationReviewer?.variant ?? this.config.variant)
+          : isSystemOneReviewerModel(this.config.model)
+            ? "system-one"
+            : this.config.variant,
       timeoutMs: reviewBudgetMs(this.config),
       ...(reason === undefined ? {} : { reason }),
       ...(decision === undefined ? {} : { decision }),

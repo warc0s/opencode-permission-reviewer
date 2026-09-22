@@ -41,7 +41,14 @@ describe("escalation disposition helper", () => {
 
   test("escalationMode deny converts escalate to deny and preserves reason", () => {
     const result = applyEscalationDisposition(
-      escalate({ reason: "low confidence on medium risk" }),
+      escalate({
+        reason: "low confidence on medium risk",
+        reviewerModel: "openai/gpt-5.6-luna",
+        reviewerEscalatedFrom: {
+          model: "opencode/jev-1.13-free",
+          reason: "System One confidence was low.",
+        },
+      }),
       cfg({ escalationMode: "deny" }),
     )
     expect(result.kind).toBe("deny")
@@ -50,6 +57,8 @@ describe("escalation disposition helper", () => {
     // Fail-safe without structured decision must not invent risk/confidence.
     expect(result.reviewerOutcome).toBeUndefined()
     expect(result.decision).toBeUndefined()
+    expect(result.reviewerModel).toBe("openai/gpt-5.6-luna")
+    expect(result.reviewerEscalatedFrom?.model).toBe("opencode/jev-1.13-free")
   })
 
   test("LLM escalate→deny keeps original decision.outcome escalate", () => {

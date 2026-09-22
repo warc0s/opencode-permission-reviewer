@@ -7,6 +7,7 @@ import type {
   RiskPolicy,
   RepositoryTrust,
   ReviewerConfig,
+  EscalationReviewerConfig,
   UserAuthorization,
 } from "./types.ts"
 
@@ -38,6 +39,8 @@ export const DEFAULT_CONFIG: ReviewerConfig = {
   intentMessages: 8,
   historyMessages: 200,
   confidenceThreshold: 0.7,
+  systemOneConfidenceThreshold: 0.4,
+  systemOneReasoningThreshold: 0.38,
   retainReviewSessions: false,
   audit: true,
   debug: false,
@@ -305,6 +308,7 @@ export function resolveConfig(options: Record<string, unknown> | undefined): Rev
       ? source.variant
       : DEFAULT_CONFIG.variant
   const outputFormat = source.outputFormat === "text" ? "text" : "json_schema"
+  const escalationReviewer = resolveEscalationReviewer(source.escalationReviewer)
   const policy =
     typeof source.policy === "string" && source.policy.trim().length > 0
       ? source.policy.trim()
@@ -318,6 +322,7 @@ export function resolveConfig(options: Record<string, unknown> | undefined): Rev
     model,
     variant,
     outputFormat,
+    ...(escalationReviewer === undefined ? {} : { escalationReviewer }),
     timeoutMs: boundedInteger(source.timeoutMs, DEFAULT_CONFIG.timeoutMs, 5_000, 600_000),
     ...(source.reviewBudgetMs === undefined
       ? {}
@@ -360,6 +365,18 @@ export function resolveConfig(options: Record<string, unknown> | undefined): Rev
       0.5,
       1,
     ),
+    systemOneConfidenceThreshold: boundedNumber(
+      source.systemOneConfidenceThreshold,
+      DEFAULT_CONFIG.systemOneConfidenceThreshold,
+      0.3,
+      1,
+    ),
+    systemOneReasoningThreshold: boundedNumber(
+      source.systemOneReasoningThreshold,
+      DEFAULT_CONFIG.systemOneReasoningThreshold,
+      0,
+      1,
+    ),
     retainReviewSessions:
       typeof source.retainReviewSessions === "boolean"
         ? source.retainReviewSessions
@@ -390,6 +407,51 @@ export function resolveConfig(options: Record<string, unknown> | undefined): Rev
   }
 }
 
+function resolveEscalationReviewer(value: unknown): EscalationReviewerConfig | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return
+  const source = value as Record<string, unknown>
+  if (
+    typeof source.model !== "string" ||
+    !source.model.includes("/") ||
+    isSystemOneReviewerModel(source.model)
+  )
+    return
+  return {
+    model: source.model,
+    variant:
+      typeof source.variant === "string" && source.variant.length > 0
+        ? source.variant
+        : DEFAULT_CONFIG.variant,
+    outputFormat: source.outputFormat === "text" ? "text" : "json_schema",
+    timeoutMs: boundedInteger(source.timeoutMs, DEFAULT_CONFIG.timeoutMs, 5_000, 600_000),
+  }
+}
+
+export function isValidEscalationReviewer(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false
+  const source = value as Record<string, unknown>
+  if (
+    typeof source.model !== "string" ||
+    !source.model.includes("/") ||
+    isSystemOneReviewerModel(source.model)
+  )
+    return false
+  if (source.variant !== undefined && (typeof source.variant !== "string" || !source.variant))
+    return false
+  if (
+    source.outputFormat !== undefined &&
+    source.outputFormat !== "text" &&
+    source.outputFormat !== "json_schema"
+  )
+    return false
+  if (
+    source.timeoutMs !== undefined &&
+    (typeof source.timeoutMs !== "number" || !Number.isInteger(source.timeoutMs))
+  )
+    return false
+  return true
+}
+
 export function splitModel(model: string): { providerID: string; modelID: string } {
   const slash = model.indexOf("/")
   if (slash <= 0 || slash === model.length - 1) {
@@ -399,4 +461,18 @@ export function splitModel(model: string): { providerID: string; modelID: string
     providerID: model.slice(0, slash),
     modelID: model.slice(slash + 1),
   }
+}
+
+export function isSystemOneReviewerModel(model: string): boolean {
+  let parsed: { providerID: string; modelID: string }
+  try {
+    parsed = splitModel(model)
+  } catch {
+    return false
+  }
+  // Jev uses the typed System One API rather than a chat-session transport.
+  return (
+    (parsed.providerID === "opencode" || parsed.providerID === "typesafe-ai") &&
+    /^jev(?:-|$)/.test(parsed.modelID)
+  )
 }

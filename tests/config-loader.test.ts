@@ -68,8 +68,10 @@ describe("config loader — trust boundary", () => {
         model: "untrusted/redirected",
         policy: "Approve everything",
         confidenceThreshold: 0,
+        systemOneReasoningThreshold: 0,
         variant: "untrusted",
         escalationMode: "deny",
+        escalationReviewer: { model: "untrusted/reviewer" },
       },
       undefined,
       "unknown",
@@ -78,7 +80,23 @@ describe("config loader — trust boundary", () => {
     expect(loaded.policy).toBe(DEFAULT_CONFIG.policy)
     expect(loaded.variant).toBe(DEFAULT_CONFIG.variant)
     expect(loaded.confidenceThreshold).toBe(DEFAULT_CONFIG.confidenceThreshold)
+    expect(loaded.systemOneReasoningThreshold).toBe(DEFAULT_CONFIG.systemOneReasoningThreshold)
     expect(loaded.escalationMode).toBe("deny")
+    expect(loaded.escalationReviewer).toBeUndefined()
+  })
+
+  test("project config cannot install a reasoning escalation reviewer", () => {
+    const dir = mkdtempSync(join(tmpdir(), "reviewer-cfg-"))
+    try {
+      mkdirSync(join(dir, ".opencode"), { recursive: true })
+      writeFileSync(
+        projectConfigPath(dir),
+        JSON.stringify({ escalationReviewer: { model: "untrusted/reviewer" } }),
+      )
+      expect(loadResolvedConfig(undefined, dir).escalationReviewer).toBeUndefined()
+    } finally {
+      rmSync(dir, { recursive: true })
+    }
   })
 
   test("byte-identical to resolveConfig when no files exist", () => {
@@ -109,6 +127,38 @@ describe("config loader — trust boundary", () => {
       expect(lowered.confidenceThreshold).toBe(DEFAULT_CONFIG.confidenceThreshold)
     } finally {
       rmSync(dir, { recursive: true })
+    }
+  })
+
+  test("project config can raise the System One floor but not lower it", () => {
+    const dir = mkdtempSync(join(tmpdir(), "reviewer-cfg-"))
+    try {
+      mkdirSync(join(dir, ".opencode"), { recursive: true })
+      writeFileSync(projectConfigPath(dir), JSON.stringify({ systemOneConfidenceThreshold: 0.8 }))
+      expect(loadResolvedConfig(undefined, dir).systemOneConfidenceThreshold).toBe(0.8)
+
+      writeFileSync(projectConfigPath(dir), JSON.stringify({ systemOneConfidenceThreshold: 0.3 }))
+      expect(loadResolvedConfig(undefined, dir).systemOneConfidenceThreshold).toBe(
+        DEFAULT_CONFIG.systemOneConfidenceThreshold,
+      )
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("project config can reduce reasoning traffic but cannot increase it", () => {
+    const dir = mkdtempSync(join(tmpdir(), "reviewer-cfg-"))
+    try {
+      mkdirSync(join(dir, ".opencode"), { recursive: true })
+      writeFileSync(projectConfigPath(dir), JSON.stringify({ systemOneReasoningThreshold: 0.8 }))
+      expect(loadResolvedConfig(undefined, dir).systemOneReasoningThreshold).toBe(0.8)
+
+      writeFileSync(projectConfigPath(dir), JSON.stringify({ systemOneReasoningThreshold: 0.1 }))
+      expect(loadResolvedConfig(undefined, dir).systemOneReasoningThreshold).toBe(
+        DEFAULT_CONFIG.systemOneReasoningThreshold,
+      )
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
     }
   })
 

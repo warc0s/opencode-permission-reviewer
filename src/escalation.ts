@@ -80,6 +80,10 @@ export function applyEscalationDisposition(
     ...(result.reviewSessionID === undefined ? {} : { reviewSessionID: result.reviewSessionID }),
     ...(result.decisionSource === undefined ? {} : { decisionSource: result.decisionSource }),
     ...(reviewerOutcome === undefined ? {} : { reviewerOutcome }),
+    ...(result.reviewerModel === undefined ? {} : { reviewerModel: result.reviewerModel }),
+    ...(result.reviewerEscalatedFrom === undefined
+      ? {}
+      : { reviewerEscalatedFrom: result.reviewerEscalatedFrom }),
     escalationDisposition: "deny",
   }
 }

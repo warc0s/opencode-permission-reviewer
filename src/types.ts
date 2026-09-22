@@ -119,6 +119,13 @@ export interface PolicyTrace {
 
 export type ReviewerOutputFormat = "json_schema" | "text"
 
+export interface EscalationReviewerConfig {
+  model: string
+  variant: string
+  outputFormat: ReviewerOutputFormat
+  timeoutMs: number
+}
+
 export interface ReviewerConfig {
   model: string
   variant: string
@@ -126,6 +133,14 @@ export interface ReviewerConfig {
    *  OpenCode's structured-output format (requires provider support); `text`
    *  asks the model to emit JSON in plain text and parses it locally. */
   outputFormat: ReviewerOutputFormat
+  /** Optional reasoning reviewer for valid System One decisions that remain
+   *  uncertain or conflict with deterministic review gates. */
+  escalationReviewer?: EscalationReviewerConfig
+  /** Calibrated outcome-confidence floor for System One decisions. */
+  systemOneConfidenceThreshold: number
+  /** Minimum combined non-escalate probability for routing an explicit
+   *  System One escalation to the optional reasoning reviewer. */
+  systemOneReasoningThreshold: number
   timeoutMs: number
   /** Total review budget, including context, queueing, and retries. */
   reviewBudgetMs?: number
@@ -201,7 +216,7 @@ export interface ReviewEnvelope {
   policyTrace?: PolicyTrace
   /** Per-phase timing captured during evidence assembly (context/enrichment).
    *  The reviewer and reply phases are timed in the coordinator. */
-  timings?: { contextMs?: number; enrichmentMs?: number }
+  timings?: { contextMs?: number; enrichmentMs?: number; reviewerMs?: number; replyMs?: number }
   /** False when a material part of the action under review (e.g. an elided
    *  command segment) never reached the rendered evidence. Blocking: the
    *  coordinator must not auto-approve an action the reviewer could not see
@@ -220,7 +235,12 @@ export interface ReviewEnvelope {
 /** Which layer produced the final decision for a request. Threaded into the
  *  audit record so reports can split outcomes by source. */
 export type DecisionSource =
-  "emergency-brake" | "deterministic-policy" | "llm-reviewer" | "manual-superseded" | "failure-safe"
+  | "emergency-brake"
+  | "deterministic-policy"
+  | "llm-reviewer"
+  | "system-one-reviewer"
+  | "manual-superseded"
+  | "failure-safe"
 
 export interface ReviewAuditRecord {
   /**
@@ -281,8 +301,10 @@ export interface ReviewAuditRecord {
    * manual or deny. Absent for explicit deny, allow, and manual-superseded.
    */
   escalationDisposition?: EscalationDisposition
-  /** The reviewer model used for this request (config.model). */
+  /** The model that produced the final reviewer decision. */
   reviewerModel?: string
+  /** Present when a System One result was handed to a reasoning reviewer. */
+  reviewerEscalatedFrom?: { model: string; reason: string }
   /** Per-phase timings. Absent on legacy v1 records and on deterministic paths
    *  that never reach that phase. */
   timings?: { contextMs?: number; enrichmentMs?: number; reviewerMs?: number; replyMs?: number }
@@ -365,6 +387,10 @@ export interface ReviewExecutionResult {
   reviewSessionID?: string
   /** Which layer produced this result; threaded into the audit record. */
   decisionSource?: DecisionSource
+  /** Actual model that produced the final reviewer decision. */
+  reviewerModel?: string
+  /** Primary model and routing reason when a second reviewer was used. */
+  reviewerEscalatedFrom?: { model: string; reason: string }
   /**
    * Structured outcome from the reviewer LLM before gates/disposition.
    * Absent when no valid structured decision was produced.

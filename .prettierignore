@@ -6,3 +6,6 @@ tests/live-fixture/
 *.lock
 *.log
 plan_*.md
+/benchmarks/permission-reviewer/runs/
+/benchmarks/permission-reviewer/reviews/
+/benchmarks/permission-reviewer/models.local.json

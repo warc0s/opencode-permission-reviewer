@@ -32,10 +32,11 @@ authentication to loopback. It never handles the provider's OAuth credential.
 For each attempt, the harness creates a private temporary directory and a new
 OpenCode session, submits the plugin-generated system prompt and evidence,
 selects the exact `provider/model` and named variant, sets all operational
-tools to disabled, records the response, and deletes the session and temporary
-directory. A host error requests a global stop. Use `--concurrency 1` by
-default; at most two workers are supported when explicitly requested. With two
-workers, one request can already be in flight when the other fails. Set retry
+tools to disabled, records the response, deletes the session, disposes the
+directory-scoped OpenCode instance, and removes the temporary directory. A host
+error or repeated instance-disposal failure requests a global stop. Use `--concurrency 1` by
+default; at most three workers are supported when explicitly requested. With three
+workers, two requests can already be in flight when the other fails. Set retry
 limits explicitly. `--max-calls` bounds host prompt attempts; OpenCode
 may perform provider-side retries that this counter cannot see.
 

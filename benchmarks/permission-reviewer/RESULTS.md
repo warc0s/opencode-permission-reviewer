@@ -6,25 +6,30 @@ cases with the same plugin-produced prompt and evidence hashes. Invalid model
 outputs remain missing decisions in the score. Transport pilots are diagnostics
 and are not included in the scores.
 
-| Model               | Effort | Model/100 | Reachable/100 | Core/100 | JSON valid (%) | Critical approvals | Unsupported approvals | Attempts | Mean host latency |
-| ------------------- | ------ | --------: | ------------: | -------: | -------------: | -----------------: | --------------------: | -------: | ----------------: |
-| GPT-5.6 Luna        | high   |     96.77 |         96.85 |    96.68 |         100.0% |                  0 |                     3 |      600 |            8.60 s |
-| GPT-5.6 Luna        | medium |     95.84 |         95.84 |    95.67 |         100.0% |                  0 |                     4 |      600 |            7.35 s |
-| GPT-5.6 Luna        | xhigh  |     94.89 |         94.89 |    94.72 |         100.0% |                  0 |                     8 |      600 |            9.35 s |
-| DeepSeek V4.1 Flash | high   |     92.64 |         92.63 |    93.01 |          99.5% |                  0 |                    17 |      600 |            4.46 s |
-| DeepSeek V4.1 Flash | low    |     91.67 |         91.66 |    92.53 |          99.3% |                  0 |                    19 |      600 |            4.10 s |
-| Grok 4.6            | medium |     91.58 |         91.57 |    91.41 |         100.0% |                  0 |                     2 |      601 |           15.05 s |
-| GLM-5.3-Flash       | high   |     90.69 |         90.68 |    92.07 |          98.7% |                  0 |                    27 |      600 |           21.92 s |
-| Grok 4.6            | low    |     87.65 |         87.65 |    87.49 |         100.0% |                  0 |                     3 |      604 |            6.51 s |
-| GLM-5.3-Flash       | low    |     85.31 |         85.54 |    90.24 |          90.5% |                  0 |                    25 |      655 |            5.66 s |
+| Model                      | Effort  | Model/100 | Reachable/100 | Core/100 | JSON valid (%) | Critical approvals | Unsupported approvals | Attempts | Mean host latency |
+| -------------------------- | ------- | --------: | ------------: | -------: | -------------: | -----------------: | --------------------: | -------: | ----------------: |
+| GPT-5.6 Luna               | high    |     96.77 |         96.85 |    96.68 |         100.0% |                  0 |                     3 |      600 |            8.60 s |
+| GPT-5.6 Luna               | medium  |     95.84 |         95.84 |    95.67 |         100.0% |                  0 |                     4 |      600 |            7.35 s |
+| GPT-5.6 Luna               | xhigh   |     94.89 |         94.89 |    94.72 |         100.0% |                  0 |                     8 |      600 |            9.35 s |
+| Muse Spark 1.3 Contributor | high    |     94.72 |         94.71 |    94.55 |          99.7% |                  0 |                    13 |      600 |           23.07 s |
+| MiMo V2.6 Flash Reasoning  | default |     94.05 |         94.04 |    95.17 |          98.2% |                  0 |                    13 |      600 |           13.85 s |
+| Muse Spark 1.3 Contributor | medium  |     93.27 |         93.26 |    93.45 |          98.0% |                  0 |                    14 |      600 |           25.45 s |
+| DeepSeek V4.1 Flash        | high    |     92.64 |         92.63 |    93.01 |          99.5% |                  0 |                    17 |      600 |            4.46 s |
+| DeepSeek V4.1 Flash        | low     |     91.67 |         91.66 |    92.53 |          99.3% |                  0 |                    19 |      600 |            4.10 s |
+| Grok 4.6                   | medium  |     91.58 |         91.57 |    91.41 |         100.0% |                  0 |                     2 |      601 |           15.05 s |
+| GLM-5.3-Flash              | high    |     90.69 |         90.68 |    92.07 |          98.7% |                  0 |                    27 |      600 |           21.92 s |
+| MiMo V2.6 Flash            | none    |     90.07 |         90.10 |    91.70 |          91.5% |                  0 |                    13 |      606 |            7.48 s |
+| Grok 4.6                   | low     |     87.65 |         87.65 |    87.49 |         100.0% |                  0 |                     3 |      604 |            6.51 s |
+| GLM-5.3-Flash              | low     |     85.31 |         85.54 |    90.24 |          90.5% |                  0 |                    25 |      655 |            5.66 s |
+| MiMo V2.5 Reasoning        | default |     58.99 |         58.94 |    67.28 |          66.8% |                  0 |                    44 |      600 |           29.02 s |
 
 `JSON valid (%)` is the share of 600 responses that passed the decision parser, not
 the share of correct answers.
 Invalid outputs are missing decisions in `Model/100`, not successful escalations.
 
 All runs used the text profile through OpenCode V1 1.18.30 with operational
-tools disabled. Grok used SuperGrok OAuth, Luna used OpenAI OAuth, and DeepSeek
-used OpenCode Go. The `Model/100` column is the decision before plugin
+tools disabled. Grok used SuperGrok OAuth, Luna used OpenAI OAuth, and DeepSeek,
+MiMo, and Muse used OpenCode Go. The `Model/100` column is the decision before plugin
 gates; `Core/100` is the effective replay after them. No model approved a case
 labeled `deny`, and none approved any of the 159 critical cases. The
 `Unsupported approvals` column counts approvals of cases labeled `escalate`;
@@ -36,18 +41,22 @@ The family-bootstrap differences below use the same 600 synthetic cases and
 500 resamples. They express uncertainty across the authored case families, not
 real-world incident rates.
 
-| Comparison                    | Score difference | 95% interval   |
-| ----------------------------- | ---------------: | -------------- |
-| Grok medium minus Grok low    |            +3.92 | +1.54 to +6.83 |
-| Luna medium minus Grok medium |            +4.26 | +2.28 to +6.58 |
-| Luna high minus Luna medium   |            +0.92 | -0.25 to +2.32 |
-| Luna xhigh minus Luna high    |            -1.88 | -3.30 to -0.61 |
-| GLM high minus GLM low        |            +5.37 | +1.97 to +8.59 |
-| DeepSeek high minus low       |            +0.97 | -1.33 to +3.00 |
+| Comparison                     | Score difference | 95% interval     |
+| ------------------------------ | ---------------: | ---------------- |
+| Grok medium minus Grok low     |            +3.92 | +1.54 to +6.83   |
+| Luna medium minus Grok medium  |            +4.26 | +2.28 to +6.58   |
+| Luna high minus Luna medium    |            +0.92 | -0.25 to +2.32   |
+| Luna xhigh minus Luna high     |            -1.88 | -3.30 to -0.61   |
+| GLM high minus GLM low         |            +5.37 | +1.97 to +8.59   |
+| DeepSeek high minus low        |            +0.97 | -1.33 to +3.00   |
+| Muse high minus medium         |            +1.44 | -0.33 to +3.14   |
+| MiMo V2.6 minus MiMo V2.5      |           +35.06 | +30.13 to +39.29 |
+| MiMo V2.6 reasoning minus none |            +3.98 | +1.44 to +6.18   |
 
 Luna high had the highest observed score, but its advantage over Luna medium is
 not established by this interval. Luna xhigh scored below Luna high and had more
-unsupported approvals in this corpus.
+unsupported approvals in this corpus. Muse high scored above Muse medium, but
+the interval does not establish a winner between those effort levels.
 
 ## Grok 4.6, low effort
 
@@ -56,7 +65,7 @@ retries. Its harness was committed at `a1d3366`; the later Grok, Luna, and GLM
 runs used `7cf4bf2`. The DeepSeek
 runs used a later harness revision without changes to the OpenCode transport.
 The plugin source was pinned to `ed7cafd` for every run. Case, prompt, and
-evidence hashes match across all nine rows. The 95% family-bootstrap interval
+evidence hashes match across all fourteen rows. The 95% family-bootstrap interval
 for Grok low is 84.33-90.61, not a
 production incident-rate guarantee.
 
@@ -153,3 +162,47 @@ prompt and evidence hashes. High scored 0.97 points above low
 on these paired cases, but the 95% family-bootstrap interval for the difference
 is -1.33 to +3.00. This corpus does not establish a winner between those effort
 levels.
+
+## MiMo V2.5 Reasoning, default effort
+
+MiMo scored 58.99, placed last, and produced valid decisions for only 66.8% of
+the corpus. It made no dangerous or critical approvals, but had 44 unsupported
+approvals and the highest mean latency in the table. It is not recommended for
+day-to-day permission review while the output-validity problem remains.
+
+## MiMo V2.6 Flash Reasoning, default effort
+
+MiMo V2.6 Flash Reasoning scored 94.05 and placed fifth. It made no dangerous or
+critical approvals, had 13 unsupported approvals, and returned valid decisions
+for 98.2% of the corpus. It scored 35.06 points above MiMo V2.5; the paired
+interval of +30.13 to +39.29 establishes a substantial improvement on this
+corpus. MiMo V2.6 Flash Reasoning is a strong day-to-day permission-review
+candidate and replaces V2.5 as the MiMo version worth considering.
+
+## MiMo V2.6 Flash, no reasoning
+
+Without reasoning, MiMo V2.6 Flash scored 90.07 and placed eleventh. It made no
+dangerous or critical approvals and had 13 unsupported approvals, but only
+91.5% of its responses were valid JSON. All 600 scored responses reported zero
+reasoning tokens. Mean host latency fell from 13.85 s to 7.48 s, while the score
+fell by 3.98 points; the paired interval of +1.44 to +6.18 favors reasoning on
+this corpus.
+
+For day-to-day permission review, the reasoning configuration is recommended.
+The no-reasoning mode is useful only when latency matters more than decision
+quality and invalid output is handled conservatively as escalation.
+
+## Muse Spark 1.3 Contributor
+
+High scored 94.72 and placed fourth; medium scored 93.27 and placed sixth. Both
+made zero dangerous or critical approvals. High had 13 unsupported approvals
+and medium had 14. The observed 1.44-point advantage for high is not established
+by the paired interval, so this corpus does not show that high is meaningfully
+better than medium.
+
+OpenCode Go currently classifies Muse Spark 1.3 Contributor as training-enabled
+and not zero-data-retention: prompts and completions may be used to train future
+Meta models. This benchmark uses only synthetic data. For day-to-day use, this
+is a strong option for public repositories and other non-sensitive work. It is
+not recommended for confidential source code or private data. See the official
+[OpenCode Go privacy table](https://opencode.ai/docs/go/).

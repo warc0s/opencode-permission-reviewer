@@ -20,7 +20,7 @@ import pytest
 V2_VERSIONS = (
     [os.environ["V2_HOST_VERSION"]]
     if os.environ.get("V2_HOST_VERSION")
-    else ["2.0.3", "2.0.11"]
+    else ["2.0.3", "2.0.11", "2.0.14"]
 )
 
 from test_v2_reviewer import model_server  # noqa: F401
@@ -72,6 +72,7 @@ def terminal(arguments, env):
     ("v1", "1.18.29"),
     ("v1", "1.18.30"),
     ("v1", "1.18.31"),
+    ("v1", "1.18.32"),
     *(("v2", version) for version in V2_VERSIONS),
 ])
 def test_tui_renders_review_state(launch_host, activate_host, model_server, generation, version):

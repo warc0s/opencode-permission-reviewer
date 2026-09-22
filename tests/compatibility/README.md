@@ -7,8 +7,10 @@ in a disposable Python environment, and set these executable paths:
 export OPENCODE_V1_1_18_29=/absolute/path/to/opencode-1.18.29
 export OPENCODE_V1_1_18_30=/absolute/path/to/opencode-1.18.30
 export OPENCODE_V1_1_18_31=/absolute/path/to/opencode-1.18.31
+export OPENCODE_V1_1_18_32=/absolute/path/to/opencode-1.18.32
 export OPENCODE_V2_2_0_3=/absolute/path/to/opencode-2.0.3
 export OPENCODE_V2_2_0_11=/absolute/path/to/opencode-2.0.11
+export OPENCODE_V2_2_0_14=/absolute/path/to/opencode-2.0.14
 python -m pytest tests/compatibility -q
 ```
 
@@ -20,8 +22,8 @@ edit shell aliases. CI receives these paths through `GITHUB_ENV`.
 The V2 server and TUI compile against the minimum supported plugin SDK while
 the real-host matrix exercises the minimum and reference host binaries.
 
-To verify every currently published stable V2 release locally without making
-CI install all nine hosts, run the sequential window harness. It installs one
+To verify every pinned stable V2 release locally without making CI install the
+full compatibility window, run the sequential window harness. It installs one
 host at a time, verifies its integrity, runs the real-host tests, and removes
 the disposable installation before continuing:
 

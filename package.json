@@ -118,6 +118,6 @@
     "@opentui/core": "0.5.11",
     "@opentui/solid": "0.5.11",
     "solid-js": "1.9.12",
-    "zod": "4.1.8"
+    "zod": "4.6.5"
   }
 }

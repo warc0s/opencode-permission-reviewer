@@ -2,16 +2,17 @@
   "v1": {
     "package": "opencode-ai",
     "minimum": "1.18.29",
-    "reference": "1.18.31",
+    "reference": "1.18.32",
     "integrities": {
       "1.18.29": "sha512-syIDVwlrYTgTOXzZe9SkInJWethbq6l3SNC762UeXyO0a9V0wGfd+U4yACvppwNBnhIsl0j2QPYYCyLpNaSomg==",
       "1.18.30": "sha512-oLcOLQE4XzDKy6T5L5d1RdVJvXHXwVlD4hRF5V317JbUQorrl2EyDdGZk5kbgv675J9FXp8usg92MZbEWhh6gQ==",
-      "1.18.31": "sha512-J95feefeWwtIaw3irx76WjzWcgQXxmuHmDVphvs5ep9X30fBJ6T6bFhw50i9Kx50MG/xPn5w2pafXIfNtdry9w=="
+      "1.18.31": "sha512-J95feefeWwtIaw3irx76WjzWcgQXxmuHmDVphvs5ep9X30fBJ6T6bFhw50i9Kx50MG/xPn5w2pafXIfNtdry9w==",
+      "1.18.32": "sha512-SCrZWdq44y/EoH2+fE4HLcXS+DzpVqHPzmXk3p2RrufYy8LWvpfhRhKtijb5ktvx8r94ScqToqwHxR0BwS65OQ=="
     },
     "minimumSdk": {
       "package": "@opencode-ai/plugin",
-      "version": "1.18.31",
-      "integrity": "sha512-Rdc1bPK06PByaGyGd0kf7JUZ4pTkexz2OOUNlqZWLpHOiMEZ+/rFGjt46ypZ3QwA697gNdWwwwQbHbKG5NMwGA=="
+      "version": "1.18.32",
+      "integrity": "sha512-JJXaTHmkiU9EAshJOFuIkZsAuvBcLw46BAErePeER8bPeO2LL2uGyBRt4tuLJjJ2N7v1vlZgfvAD7bWKupke1A=="
     },
     "entrypoint": "server",
     "permission": "permission.asked"
@@ -19,10 +20,11 @@
   "v2": {
     "package": "@opencode/cli",
     "minimum": "2.0.3",
-    "reference": "2.0.11",
+    "reference": "2.0.14",
     "integrities": {
       "2.0.3": "sha512-FC4+2a5kwdKS2o/pIcGCscpSQB7PuhBObwGMfqnx/2XtoaZBMtSq/99nuEdeDNAFvy1qyK6mp2hwvoiMWsiI4w==",
-      "2.0.11": "sha512-7hnjVw7+zlcjt34hXFQ+aWuLiG20iq/nKq3O9SRwq2Dahch5RNI+Q3mbj5X3db5l1Cn1U6WcvEF2u7kQFo7JLw=="
+      "2.0.11": "sha512-7hnjVw7+zlcjt34hXFQ+aWuLiG20iq/nKq3O9SRwq2Dahch5RNI+Q3mbj5X3db5l1Cn1U6WcvEF2u7kQFo7JLw==",
+      "2.0.14": "sha512-bA/dHw2+ZKD+ghhh2qrYvMF15v2uHSLCwSpsIs5rbI8J2tx69bJxuLd2J/DEWu5yUkgbElOtsVik2Uco1G7Z/A=="
     },
     "optionalIntegrities": {
       "2.0.4": "sha512-2b1WYZoKewgKxMmMG+Lv3V7f/aZVQCULYq35x0Q8JHp1fBLK3EZVvRvp30YxurM2PVIGYnqletf2Gezykq5izQ==",

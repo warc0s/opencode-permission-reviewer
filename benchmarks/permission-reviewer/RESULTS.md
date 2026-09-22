@@ -6,22 +6,22 @@ cases with the same plugin-produced prompt and evidence hashes. Invalid model
 outputs remain missing decisions in the score. Transport pilots are diagnostics
 and are not included in the scores.
 
-| Model                      | Effort  | Model/100 | Reachable/100 | Core/100 | JSON valid (%) | Critical approvals | Unsupported approvals | Attempts | Mean host latency |
-| -------------------------- | ------- | --------: | ------------: | -------: | -------------: | -----------------: | --------------------: | -------: | ----------------: |
-| GPT-5.6 Luna               | high    |     96.77 |         96.85 |    96.68 |         100.0% |                  0 |                     3 |      600 |            8.60 s |
-| GPT-5.6 Luna               | medium  |     95.84 |         95.84 |    95.67 |         100.0% |                  0 |                     4 |      600 |            7.35 s |
-| GPT-5.6 Luna               | xhigh   |     94.89 |         94.89 |    94.72 |         100.0% |                  0 |                     8 |      600 |            9.35 s |
-| Muse Spark 1.3 Contributor | high    |     94.72 |         94.71 |    94.55 |          99.7% |                  0 |                    13 |      600 |           23.07 s |
-| MiMo V2.6 Flash Reasoning  | default |     94.05 |         94.04 |    95.17 |          98.2% |                  0 |                    13 |      600 |           13.85 s |
-| Muse Spark 1.3 Contributor | medium  |     93.27 |         93.26 |    93.45 |          98.0% |                  0 |                    14 |      600 |           25.45 s |
-| DeepSeek V4.1 Flash        | high    |     92.64 |         92.63 |    93.01 |          99.5% |                  0 |                    17 |      600 |            4.46 s |
-| DeepSeek V4.1 Flash        | low     |     91.67 |         91.66 |    92.53 |          99.3% |                  0 |                    19 |      600 |            4.10 s |
-| Grok 4.6                   | medium  |     91.58 |         91.57 |    91.41 |         100.0% |                  0 |                     2 |      601 |           15.05 s |
-| GLM-5.3-Flash              | high    |     90.69 |         90.68 |    92.07 |          98.7% |                  0 |                    27 |      600 |           21.92 s |
-| MiMo V2.6 Flash            | none    |     90.07 |         90.10 |    91.70 |          91.5% |                  0 |                    13 |      606 |            7.48 s |
-| Grok 4.6                   | low     |     87.65 |         87.65 |    87.49 |         100.0% |                  0 |                     3 |      604 |            6.51 s |
-| GLM-5.3-Flash              | low     |     85.31 |         85.54 |    90.24 |          90.5% |                  0 |                    25 |      655 |            5.66 s |
-| MiMo V2.5 Reasoning        | default |     58.99 |         58.94 |    67.28 |          66.8% |                  0 |                    44 |      600 |           29.02 s |
+| Model                         | Effort  | Model/100 | Reachable/100 | Core/100 | JSON valid (%) | Critical approvals | Unsupported approvals | Attempts | Mean host latency |
+| ----------------------------- | ------- | --------: | ------------: | -------: | -------------: | -----------------: | --------------------: | -------: | ----------------: |
+| GPT-5.6 Luna                  | high    |     96.77 |         96.85 |    96.68 |         100.0% |                  0 |                     3 |      600 |            8.60 s |
+| GPT-5.6 Luna                  | medium  |     95.84 |         95.84 |    95.67 |         100.0% |                  0 |                     4 |      600 |            7.35 s |
+| GPT-5.6 Luna                  | xhigh   |     94.89 |         94.89 |    94.72 |         100.0% |                  0 |                     8 |      600 |            9.35 s |
+| Muse Spark 1.3 Contributor    | high    |     94.72 |         94.71 |    94.55 |          99.7% |                  0 |                    13 |      600 |           23.07 s |
+| MiMo V2.6 Flash Reasoning     | default |     94.05 |         94.04 |    95.17 |          98.2% |                  0 |                    13 |      600 |           13.85 s |
+| Muse Spark 1.3 Contributor    | medium  |     93.27 |         93.26 |    93.45 |          98.0% |                  0 |                    14 |      600 |           25.45 s |
+| DeepSeek V4.1 Flash           | high    |     92.64 |         92.63 |    93.01 |          99.5% |                  0 |                    17 |      600 |            4.46 s |
+| DeepSeek V4.1 Flash           | low     |     91.67 |         91.66 |    92.53 |          99.3% |                  0 |                    19 |      600 |            4.10 s |
+| Grok 4.6                      | medium  |     91.58 |         91.57 |    91.41 |         100.0% |                  0 |                     2 |      601 |           15.05 s |
+| GLM-5.3-Flash                 | high    |     90.69 |         90.68 |    92.07 |          98.7% |                  0 |                    27 |      600 |           21.92 s |
+| MiMo V2.6 Flash Non-Reasoning | none    |     90.07 |         90.10 |    91.70 |          91.5% |                  0 |                    13 |      606 |            7.48 s |
+| Grok 4.6                      | low     |     87.65 |         87.65 |    87.49 |         100.0% |                  0 |                     3 |      604 |            6.51 s |
+| GLM-5.3-Flash                 | low     |     85.31 |         85.54 |    90.24 |          90.5% |                  0 |                    25 |      655 |            5.66 s |
+| MiMo V2.5 Reasoning           | default |     58.99 |         58.94 |    67.28 |          66.8% |                  0 |                    44 |      600 |           29.02 s |
 
 `JSON valid (%)` is the share of 600 responses that passed the decision parser, not
 the share of correct answers.
@@ -41,17 +41,17 @@ The family-bootstrap differences below use the same 600 synthetic cases and
 500 resamples. They express uncertainty across the authored case families, not
 real-world incident rates.
 
-| Comparison                     | Score difference | 95% interval     |
-| ------------------------------ | ---------------: | ---------------- |
-| Grok medium minus Grok low     |            +3.92 | +1.54 to +6.83   |
-| Luna medium minus Grok medium  |            +4.26 | +2.28 to +6.58   |
-| Luna high minus Luna medium    |            +0.92 | -0.25 to +2.32   |
-| Luna xhigh minus Luna high     |            -1.88 | -3.30 to -0.61   |
-| GLM high minus GLM low         |            +5.37 | +1.97 to +8.59   |
-| DeepSeek high minus low        |            +0.97 | -1.33 to +3.00   |
-| Muse high minus medium         |            +1.44 | -0.33 to +3.14   |
-| MiMo V2.6 minus MiMo V2.5      |           +35.06 | +30.13 to +39.29 |
-| MiMo V2.6 reasoning minus none |            +3.98 | +1.44 to +6.18   |
+| Comparison                              | Score difference | 95% interval     |
+| --------------------------------------- | ---------------: | ---------------- |
+| Grok medium minus Grok low              |            +3.92 | +1.54 to +6.83   |
+| Luna medium minus Grok medium           |            +4.26 | +2.28 to +6.58   |
+| Luna high minus Luna medium             |            +0.92 | -0.25 to +2.32   |
+| Luna xhigh minus Luna high              |            -1.88 | -3.30 to -0.61   |
+| GLM high minus GLM low                  |            +5.37 | +1.97 to +8.59   |
+| DeepSeek high minus low                 |            +0.97 | -1.33 to +3.00   |
+| Muse high minus medium                  |            +1.44 | -0.33 to +3.14   |
+| MiMo V2.6 minus MiMo V2.5               |           +35.06 | +30.13 to +39.29 |
+| MiMo V2.6 reasoning minus non-reasoning |            +3.98 | +1.44 to +6.18   |
 
 Luna high had the highest observed score, but its advantage over Luna medium is
 not established by this interval. Luna xhigh scored below Luna high and had more
@@ -179,9 +179,9 @@ interval of +30.13 to +39.29 establishes a substantial improvement on this
 corpus. MiMo V2.6 Flash Reasoning is a strong day-to-day permission-review
 candidate and replaces V2.5 as the MiMo version worth considering.
 
-## MiMo V2.6 Flash, no reasoning
+## MiMo V2.6 Flash Non-Reasoning
 
-Without reasoning, MiMo V2.6 Flash scored 90.07 and placed eleventh. It made no
+MiMo V2.6 Flash Non-Reasoning scored 90.07 and placed eleventh. It made no
 dangerous or critical approvals and had 13 unsupported approvals, but only
 91.5% of its responses were valid JSON. All 600 scored responses reported zero
 reasoning tokens. Mean host latency fell from 13.85 s to 7.48 s, while the score

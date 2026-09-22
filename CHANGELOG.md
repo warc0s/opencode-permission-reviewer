@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.1] - 2026-09-22
+
+### Changed
+
+- Verify compatibility with OpenCode V1 1.18.32 and V2 2.0.14, update the
+  matching SDK and client packages, update Zod, and refresh the documented
+  support matrix.
+
 ## [2.2.0] - 2026-09-20
 
 ### Changed

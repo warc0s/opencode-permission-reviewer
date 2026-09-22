@@ -1,27 +1,57 @@
 version: 2
 updates:
-  # npm dependencies — weekly checks, grouped to reduce PR noise.
+  # Bun dependencies are checked daily so OpenCode host updates surface quickly.
+  # Other packages wait through a stability window before Dependabot proposes them.
   # PRs target `dev` (the integration branch) instead of `main` so Dependabot
   # compares against the up-to-date manifest and does not re-open PRs for
   # versions already integrated.
-  - package-ecosystem: npm
+  - package-ecosystem: bun
     directory: /
     target-branch: dev
     schedule:
-      interval: weekly
-      day: monday
+      interval: daily
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
+      exclude:
+        - "@opencode-ai/*"
+        - "@opencode/*"
     groups:
-      # Non-breaking type+patch updates batch together.
+      # Keep the two supported OpenCode host generations independently reviewable.
+      opencode-v1:
+        patterns:
+          - "@opencode-ai/*"
+        update-types:
+          - minor
+          - patch
+      opencode-v2:
+        patterns:
+          - "@opencode/*"
+        update-types:
+          - minor
+          - patch
+      # Non-breaking updates outside OpenCode batch after the stability window.
       patch-and-minor:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "@opencode-ai/*"
+          - "@opencode/*"
         update-types:
           - minor
           - patch
     ignore:
-      # The shipped solid-js pin must match @opentui/solid's peerDependencies
-      # pin exactly (same version string) so npm installs of the tarball keep
-      # a single solid-js runtime. Bump it only together with @opentui/solid
-      # when upstream moves its pin.
+      # A new major represents a new host generation and needs an explicit migration.
+      - dependency-name: "@opencode-ai/*"
+        update-types:
+          - version-update:semver-major
+      - dependency-name: "@opencode/*"
+        update-types:
+          - version-update:semver-major
+      # These exact pins form one peer-compatible set. Move them together
+      # manually so package installs keep a single Solid runtime.
+      - dependency-name: "@opentui/core"
+      - dependency-name: "@opentui/solid"
       - dependency-name: solid-js
     commit-message:
       prefix: chore
@@ -34,6 +64,10 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    groups:
+      github-actions:
+        patterns:
+          - "*"
     commit-message:
       prefix: ci
       include: scope

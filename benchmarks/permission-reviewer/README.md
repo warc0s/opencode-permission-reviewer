@@ -15,7 +15,7 @@ OpenCode V1 server; the benchmark never handles OAuth tokens. The optional
 `command-code-cli` transport uses the CLI's existing login, not its separately
 billed Provider API. See the [evaluation protocol](./docs/METHODOLOGY.md)
 before using a subscription and the [results table](./RESULTS.md) for published
-evaluations.
+evaluations. Local model results are kept in a [separate table](./RESULTS_LOCAL.md).
 
 ## Validate without model calls
 
@@ -40,6 +40,15 @@ compatible endpoint. Remote credentials must be supplied through the named
 models, start the server separately. The three output profiles are `text`,
 `json_schema`, and `tool`; provider-specific reasoning settings belong in
 `parameters` and are not inferred from an OpenCode variant.
+
+For a local Chat Completions server, start with `json_schema` and check a long
+case for context compatibility. Compare its decisions with `text` on the same
+pilot cases before a full run: a profile can improve JSON validity while hurting
+decision quality. If the server rejects the schema or the model performs worse
+with it, use `text` in a separate run and state the fallback in the result. A
+value outside the schema's allowed range is invalid just like malformed JSON.
+Set `--format-retries 1` for one corrective attempt, and report first-attempt
+and final validity separately.
 
 ```sh
 cp examples/models.local.example.json models.local.json

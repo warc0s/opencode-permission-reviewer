@@ -8,7 +8,9 @@ and are not included in the scores.
 
 | Model                         | Effort  | Model/100 | Reachable/100 | Core/100 | JSON valid (%) | Critical approvals | Unsupported approvals | Attempts | Mean host latency |
 | ----------------------------- | ------- | --------: | ------------: | -------: | -------------: | -----------------: | --------------------: | -------: | ----------------: |
+| GPT-6 Luna                    | medium  |     97.17 |         97.34 |    97.17 |         100.0% |                  0 |                     2 |      600 |            8.12 s |
 | GPT-5.6 Luna                  | high    |     96.77 |         96.85 |    96.68 |         100.0% |                  0 |                     3 |      600 |            8.60 s |
+| GPT-6 Luna                    | high    |     96.02 |         96.01 |    95.84 |         100.0% |                  0 |                     0 |      644 |           11.51 s |
 | GPT-5.6 Luna                  | medium  |     95.84 |         95.84 |    95.67 |         100.0% |                  0 |                     4 |      600 |            7.35 s |
 | GPT-5.6 Luna                  | xhigh   |     94.89 |         94.89 |    94.72 |         100.0% |                  0 |                     8 |      600 |            9.35 s |
 | Muse Spark 1.3 Contributor    | high    |     94.72 |         94.71 |    94.55 |          99.7% |                  0 |                    13 |      600 |           23.07 s |
@@ -35,6 +37,10 @@ labeled `deny`, and none approved any of the 159 critical cases. The
 `Unsupported approvals` column counts approvals of cases labeled `escalate`;
 these require individual review even when the aggregate score is high.
 
+The GPT-6 runs used plugin source `dc5fd3d`; their prompts and evidence hashes
+match the earlier rows on all 600 cases. The older rows used a prior core replay,
+so cross-revision comparisons should use `Model/100`, not `Core/100`.
+
 ## Paired comparisons
 
 The family-bootstrap differences below use the same 600 synthetic cases and
@@ -43,6 +49,7 @@ real-world incident rates.
 
 | Comparison                              | Score difference | 95% interval     |
 | --------------------------------------- | ---------------: | ---------------- |
+| GPT-6 Luna medium minus high            |            +1.16 | -0.21 to +2.64   |
 | Grok medium minus Grok low              |            +3.92 | +1.54 to +6.83   |
 | Luna medium minus Grok medium           |            +4.26 | +2.28 to +6.58   |
 | Luna high minus Luna medium             |            +0.92 | -0.25 to +2.32   |
@@ -53,19 +60,35 @@ real-world incident rates.
 | MiMo V2.6 minus MiMo V2.5               |           +35.06 | +30.13 to +39.29 |
 | MiMo V2.6 reasoning minus non-reasoning |            +3.98 | +1.44 to +6.18   |
 
-Luna high had the highest observed score, but its advantage over Luna medium is
-not established by this interval. Luna xhigh scored below Luna high and had more
-unsupported approvals in this corpus. Muse high scored above Muse medium, but
-the interval does not establish a winner between those effort levels.
+GPT-6 Luna medium had the highest observed score. Its advantage over GPT-6 Luna
+high is not established by this interval. GPT-5.6 Luna high scored above its
+medium variant, but that interval also crosses zero; its xhigh variant scored
+below high and had more unsupported approvals. Muse high scored above Muse
+medium, but the interval does not establish a winner between those effort levels.
+
+## GPT-6 Luna
+
+Evaluated on 2026-09-22 through OpenCode V1 1.18.30 with OpenAI OAuth and the
+text profile. Both effort levels returned 600 valid decisions with no dangerous
+or critical approvals. Medium scored 97.17, with two unsupported approvals,
+four unnecessary escalations, and 8.12 s mean host latency. High scored 96.02,
+with no unsupported approvals, nine unnecessary escalations, and 11.51 s mean
+host latency. The paired interval does not establish a winner. Medium is the
+faster default on this corpus; high is the more conservative choice if avoiding
+unsupported approvals
+matters more than latency. High's 600 scored cases came from two segments after
+the first was interrupted. The 42 repeated controls and two interrupted calls
+are retained in the 644 recorded host attempts, not scored twice. Its latency
+is descriptive of those run conditions, not an effort-only comparison.
 
 ## Grok 4.6, low effort
 
 Evaluated on 2026-09-16 with `xai/grok-4.6`, the `low` variant, and no automatic
-retries. Its harness was committed at `a1d3366`; the later Grok, Luna, and GLM
-runs used `7cf4bf2`. The DeepSeek
-runs used a later harness revision without changes to the OpenCode transport.
-The plugin source was pinned to `ed7cafd` for every run. Case, prompt, and
-evidence hashes match across all fourteen rows. The 95% family-bootstrap interval
+retries. Its harness was committed at `a1d3366`; later Grok, GPT-5.6 Luna, and
+GLM runs used `7cf4bf2`. The DeepSeek runs used a later harness revision without
+changes to the OpenCode transport.
+The earlier plugin source was pinned to `ed7cafd`. Case, prompt, and evidence
+hashes match across all sixteen rows. The 95% family-bootstrap interval
 for Grok low is 84.33-90.61, not a
 production incident-rate guarantee.
 

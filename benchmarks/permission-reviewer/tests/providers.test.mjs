@@ -17,6 +17,21 @@ test("provider params cannot override instruction or tool boundary", () => {
   for (const key of ["messages", "tools", "model", "response_format", "api_key", "stream", "n"])
     assert.throws(() => validateModel({ ...model, parameters: { [key]: "x" } }), /Reserved/)
 })
+test("System One profile requires a Jev model and no chat-only options", () => {
+  const systemOne = {
+    id: "jev-private",
+    model: "jev-1.13",
+    endpoint: "https://opencode.ai/zen",
+    apiKeyEnv: "OPENCODE_API_KEY",
+    transport: "system-one",
+    format: "system_one",
+  }
+  assert.equal(validateModel(systemOne).transport, "system-one")
+  assert.throws(() => validateModel({ ...systemOne, model: "other-model" }), /Jev/)
+  assert.throws(() => validateModel({ ...systemOne, format: "text" }), /system_one/)
+  assert.throws(() => validateModel({ ...systemOne, variant: "high" }), /reasoning variants/)
+  assert.throws(() => validateModel({ ...systemOne, parameters: {} }), /parameters/)
+})
 test("body transmits only prompt, model, schema and declared parameters", () => {
   const p = { ...prepared, gold: "DO_NOT_SEND", family: "NO", expected: "NO" }
   const b = buildBody(model, p)

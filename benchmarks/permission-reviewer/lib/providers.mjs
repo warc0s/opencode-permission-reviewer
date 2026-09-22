@@ -11,7 +11,7 @@ const RESERVED = new Set([
   "api_key",
   "authorization",
 ])
-const FORMATS = new Set(["text", "json_schema", "tool"])
+const FORMATS = new Set(["text", "json_schema", "tool", "system_one"])
 export function validateModel(model) {
   assert(
     model && typeof model.id === "string" && /^[a-zA-Z0-9_.-]+$/.test(model.id),
@@ -23,7 +23,7 @@ export function validateModel(model) {
   )
   const transport = model.transport ?? "chat-completions"
   assert(
-    ["chat-completions", "opencode-v1", "command-code-cli"].includes(transport),
+    ["chat-completions", "opencode-v1", "command-code-cli", "system-one"].includes(transport),
     `${model.id}: unsupported transport`,
   )
   if (transport !== "command-code-cli")
@@ -42,9 +42,17 @@ export function validateModel(model) {
   }
   assert(
     FORMATS.has(model.format ?? "text"),
-    `${model.id}: format must be text, json_schema or tool`,
+    `${model.id}: format must be text, json_schema, tool or system_one`,
   )
-  if (transport === "opencode-v1") {
+  if (transport === "system-one") {
+    assert(url.protocol === "https:", "System One endpoint must use HTTPS.")
+    assert(/^jev(?:-|$)/.test(model.model), "System One transport requires a Jev model ID.")
+    assert(model.format === "system_one", "System One transport requires system_one format.")
+    assert(model.apiKeyEnv !== undefined, "System One transport requires apiKeyEnv.")
+    assert(model.parameters === undefined, "System One transport does not accept parameters.")
+    assert(model.variant === undefined, "System One models do not accept reasoning variants.")
+    assert(model.hostPasswordEnv === undefined, "System One transport has no host password.")
+  } else if (transport === "opencode-v1") {
     assert(
       url.protocol === "http:" &&
         ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) &&

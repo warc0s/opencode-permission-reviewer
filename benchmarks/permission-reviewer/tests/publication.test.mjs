@@ -90,6 +90,13 @@ test("public export rejects private, incomplete, and drifted runs", () => {
   const drifted = document()
   drifted.run.source.match = false
   assert.throws(() => publicReport(drifted), /pinned/)
+  const systemOne = document()
+  systemOne.run.models[0].transport = "system-one"
+  systemOne.run.models[0].format = "system_one"
+  assert.throws(() => publicReport(systemOne), /private/)
+  const derived = document()
+  derived.run.options.difficultSubset = { kind: "system-one-difficult" }
+  assert.throws(() => publicReport(derived), /private/)
 })
 
 test("private output handling does not chmod an existing public directory", async () => {

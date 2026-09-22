@@ -1,0 +1,13 @@
+{
+  "models": [
+    {
+      "id": "jev-113-free-private",
+      "model": "jev-1.13-free",
+      "endpoint": "https://opencode.ai/zen",
+      "apiKeyEnv": "OPENCODE_API_KEY",
+      "transport": "system-one",
+      "format": "system_one",
+      "notes": "Private evaluation only. Do not publish or export results."
+    }
+  ]
+}

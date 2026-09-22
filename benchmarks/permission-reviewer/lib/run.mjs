@@ -17,6 +17,7 @@ import { caseDigest, modelInput } from "./dataset.mjs"
 import { requestCompletion, TEXT_RETRY_NOTE, validateModel } from "./providers.mjs"
 import { requestOpenCodeV1 } from "./opencode-v1.mjs"
 import { requestCommandCodeCli } from "./command-code-cli.mjs"
+import { requestSystemOne } from "./system-one.mjs"
 import { summarize } from "./metrics.mjs"
 export const HARNESS_VERSION = "0.1.0"
 export function rowBase(c, model, repeat, fingerprint) {
@@ -102,7 +103,9 @@ export async function runBenchmark({
       ? requestOpenCodeV1(model, prepared, request)
       : model.transport === "command-code-cli"
         ? requestCommandCodeCli(model, prepared, request)
-        : requestCompletion(model, prepared, request),
+        : model.transport === "system-one"
+          ? requestSystemOne(model, prepared, request)
+          : requestCompletion(model, prepared, request),
   onProgress = () => {},
 }) {
   const cfg = {
@@ -140,6 +143,11 @@ export async function runBenchmark({
     assert(cfg.concurrency <= 3, "OpenCode subscription runs permit at most three workers.")
   if (safeModels.some((model) => model.transport === "command-code-cli"))
     assert(cfg.concurrency <= 2, "Command Code subscription runs permit at most two workers.")
+  if (safeModels.some((model) => model.transport === "system-one"))
+    assert(
+      cfg.formatRetries === 0 && cfg.concurrency <= 2,
+      "System One runs require zero format retries and at most two workers.",
+    )
   for (const m of safeModels)
     if (m.apiKeyEnv)
       assert(process.env[m.apiKeyEnv], `Missing credential environment variable ${m.apiKeyEnv}`)
@@ -178,9 +186,11 @@ export async function runBenchmark({
     options: semanticConfig,
     protocol: safeModels.some((model) => model.transport === "command-code-cli")
       ? "Command Code CLI headless transport with role-folded user prompt + actual plugin evidence/parser/core replay; NOT controlled with OpenCode V1 or permission lifecycle E2E"
-      : safeModels.some((model) => model.transport === "opencode-v1")
-        ? "OpenCode V1 session transport + actual plugin evidence/prompt/parser/core replay; NOT permission lifecycle E2E"
-        : "direct-chat-completions + actual plugin evidence/prompt/parser/core replay; NOT native OpenCode host E2E",
+      : safeModels.some((model) => model.transport === "system-one")
+        ? "System One typed-decision transport + actual plugin evidence/reconciliation/core replay; PRIVATE EVALUATION"
+        : safeModels.some((model) => model.transport === "opencode-v1")
+          ? "OpenCode V1 session transport + actual plugin evidence/prompt/parser/core replay; NOT permission lifecycle E2E"
+          : "direct-chat-completions + actual plugin evidence/prompt/parser/core replay; NOT native OpenCode host E2E",
   }
   const fingerprint = sha256(manifest),
     directory = resolve(out)
@@ -289,17 +299,24 @@ export async function runBenchmark({
         runMode:
           m.transport === "opencode-v1"
             ? "opencode-v1-session-core-replay"
-            : "live-provider-core-replay",
+            : m.transport === "system-one"
+              ? "system-one-core-replay"
+              : "live-provider-core-replay",
         pluginSourceSha256: adapter.snapshot.sourceSha256,
         reachable: p.reachable,
         promptHash: p.promptHash,
         evidenceHash: p.evidenceHash,
         actionEvidenceComplete: p.actionEvidenceComplete,
       }
-      if (cfg.storePrompts) base.prompt = { system: p.system, user: p.user }
+      if (cfg.storePrompts)
+        base.prompt =
+          m.transport === "system-one"
+            ? { state: p.systemOne.state, questions: p.systemOne.questions }
+            : { system: p.system, user: p.user }
       base.evidence = p.evidence
       let attempts = [],
         parsed = null,
+        parsedSystemOne = null,
         firstDecision = null,
         status,
         errorKind = "invalid",
@@ -394,7 +411,15 @@ export async function runBenchmark({
           break
         }
         const extracted = a.extracted ?? { text: "", protocolError: "No extracted output." }
-        const d = extracted.protocolError ? null : (adapter.parse(extracted.text) ?? null)
+        parsedSystemOne =
+          !extracted.protocolError && extracted.systemOne
+            ? (adapter.parseSystemOne(a.raw, p.config) ?? null)
+            : null
+        const d = extracted.protocolError
+          ? null
+          : extracted.systemOne
+            ? (parsedSystemOne?.decision ?? null)
+            : (adapter.parse(extracted.text ?? "") ?? null)
         if (attempts.length === 1) firstDecision = d
         if (d) {
           parsed = d
@@ -403,14 +428,14 @@ export async function runBenchmark({
         }
         errorKind = "invalid"
         status = "invalid"
-        if (parseRetries < cfg.formatRetries) {
+        if (m.transport !== "system-one" && parseRetries < cfg.formatRetries) {
           parseRetries++
           retryNote = TEXT_RETRY_NOTE
           continue
         }
         break
       }
-      const final = await adapter.finish(p, parsed, errorKind)
+      const final = await adapter.finish(p, parsed, errorKind, parsedSystemOne)
       return {
         ...base,
         status,
@@ -418,6 +443,9 @@ export async function runBenchmark({
         decision: parsed,
         firstDecision,
         exposedRationale: parsed?.rationale ?? null,
+        systemOneDifficulty: parsedSystemOne?.difficultReason ?? null,
+        systemOneReasoningRecommended:
+          parsedSystemOne?.reasoningRecommended === true && final.gated?.kind === "escalate",
         ...final,
         elapsedMs: performance.now() - start,
       }

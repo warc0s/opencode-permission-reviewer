@@ -56,6 +56,8 @@ test("OpenCode host receives the exact prompt with low variant and no operationa
       )
     } else if (request.method === "DELETE") {
       response.end("true")
+    } else if (request.method === "POST" && request.url.startsWith("/instance/dispose?")) {
+      response.end("true")
     } else {
       response.statusCode = 404
       response.end("{}")
@@ -70,7 +72,7 @@ test("OpenCode host receives the exact prompt with low variant and no operationa
     assert(result.ok)
     assert.equal(result.usage.prompt_tokens, 60)
     assert.equal(JSON.parse(result.extracted.text).outcome, "deny")
-    assert.equal(seen.length, 3)
+    assert.equal(seen.length, 4)
     assert(
       seen.every(
         (request) =>
@@ -89,13 +91,19 @@ test("OpenCode host receives the exact prompt with low variant and no operationa
     assert.deepEqual(seen[1].body.tools, { "*": false })
     assert.equal(seen[1].body.system, "SYSTEM POLICY")
     assert.deepEqual(seen[1].body.parts, [{ type: "text", text: "SYNTHETIC EVIDENCE" }])
+    assert.equal(seen[2].method, "DELETE")
+    assert(seen[2].url.startsWith("/session/ses_synthetic?"))
+    assert.equal(seen[3].method, "POST")
+    assert(seen[3].url.startsWith("/instance/dispose?"))
   } finally {
     await new Promise((resolve) => server.close(resolve))
   }
 })
 
 test("OpenCode transport errors request a stop rather than exhausting a subscription", async () => {
-  const server = createServer((_request, response) => {
+  const seen = []
+  const server = createServer((request, response) => {
+    seen.push({ method: request.method, url: request.url })
     response.statusCode = 429
     response.end("{}")
   })
@@ -108,6 +116,172 @@ test("OpenCode transport errors request a stop rather than exhausting a subscrip
     assert(!result.ok)
     assert(result.halt)
     assert.equal(result.status, 429)
+    assert.equal(seen.length, 4)
+    assert.equal(seen[0].method, "POST")
+    assert(seen[0].url.startsWith("/session?"))
+    assert(
+      seen
+        .slice(1)
+        .every(
+          (request) => request.method === "POST" && request.url.startsWith("/instance/dispose?"),
+        ),
+    )
+  } finally {
+    await new Promise((resolve) => server.close(resolve))
+  }
+})
+
+test("OpenCode instance disposal still runs when session deletion fails", async () => {
+  const seen = []
+  const server = createServer(async (request, response) => {
+    const chunks = []
+    for await (const chunk of request) chunks.push(chunk)
+    seen.push({ method: request.method, url: request.url })
+    response.setHeader("Content-Type", "application/json")
+    if (request.method === "POST" && request.url.startsWith("/session?")) {
+      response.end(JSON.stringify({ id: "ses_cleanup" }))
+    } else if (
+      request.method === "POST" &&
+      request.url.startsWith("/session/ses_cleanup/message?")
+    ) {
+      response.end(
+        JSON.stringify({
+          info: {
+            providerID: "xai",
+            modelID: "grok-4.6",
+            tokens: { input: 1, output: 1, reasoning: 0 },
+          },
+          parts: [{ type: "text", text: JSON.stringify(decision("allow")) }],
+        }),
+      )
+    } else if (request.method === "DELETE") {
+      response.statusCode = 500
+      response.end("{}")
+    } else if (request.method === "POST" && request.url.startsWith("/instance/dispose?")) {
+      response.end("true")
+    } else {
+      response.statusCode = 404
+      response.end("{}")
+    }
+  })
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve))
+  try {
+    const result = await requestOpenCodeV1(
+      { ...model, endpoint: `http://127.0.0.1:${server.address().port}/` },
+      { system: "POLICY", user: "SYNTHETIC EVIDENCE" },
+    )
+    assert(result.ok)
+    assert.equal(seen.length, 4)
+    assert.equal(seen[2].method, "DELETE")
+    assert.equal(seen[3].method, "POST")
+    assert(seen[3].url.startsWith("/instance/dispose?"))
+  } finally {
+    await new Promise((resolve) => server.close(resolve))
+  }
+})
+
+test("OpenCode instance disposal failure requests a global safety stop", async () => {
+  const seen = []
+  const server = createServer(async (request, response) => {
+    const chunks = []
+    for await (const chunk of request) chunks.push(chunk)
+    seen.push({ method: request.method, url: request.url })
+    response.setHeader("Content-Type", "application/json")
+    if (request.method === "POST" && request.url.startsWith("/session?")) {
+      response.end(JSON.stringify({ id: "ses_disposal_failure" }))
+    } else if (
+      request.method === "POST" &&
+      request.url.startsWith("/session/ses_disposal_failure/message?")
+    ) {
+      response.end(
+        JSON.stringify({
+          info: {
+            providerID: "xai",
+            modelID: "grok-4.6",
+            tokens: { input: 1, output: 1, reasoning: 0 },
+          },
+          parts: [{ type: "text", text: JSON.stringify(decision("allow")) }],
+        }),
+      )
+    } else if (request.method === "DELETE") {
+      response.end("true")
+    } else if (request.method === "POST" && request.url.startsWith("/instance/dispose?")) {
+      response.statusCode = 500
+      response.end("{}")
+    } else {
+      response.statusCode = 404
+      response.end("{}")
+    }
+  })
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve))
+  try {
+    const result = await requestOpenCodeV1(
+      { ...model, endpoint: `http://127.0.0.1:${server.address().port}/` },
+      { system: "POLICY", user: "SYNTHETIC EVIDENCE" },
+    )
+    assert(!result.ok)
+    assert(result.halt)
+    assert.equal(result.status, 500)
+    assert.match(result.error, /instance cleanup failed after 3 attempts/)
+    assert.equal(seen.length, 6)
+    assert(
+      seen
+        .slice(3)
+        .every(
+          (request) => request.method === "POST" && request.url.startsWith("/instance/dispose?"),
+        ),
+    )
+  } finally {
+    await new Promise((resolve) => server.close(resolve))
+  }
+})
+
+test("OpenCode instance disposal retries transient failures without stopping the run", async () => {
+  const seen = []
+  let disposalAttempts = 0
+  const server = createServer(async (request, response) => {
+    const chunks = []
+    for await (const chunk of request) chunks.push(chunk)
+    seen.push({ method: request.method, url: request.url })
+    response.setHeader("Content-Type", "application/json")
+    if (request.method === "POST" && request.url.startsWith("/session?")) {
+      response.end(JSON.stringify({ id: "ses_disposal_retry" }))
+    } else if (
+      request.method === "POST" &&
+      request.url.startsWith("/session/ses_disposal_retry/message?")
+    ) {
+      response.end(
+        JSON.stringify({
+          info: {
+            providerID: "xai",
+            modelID: "grok-4.6",
+            tokens: { input: 1, output: 1, reasoning: 0 },
+          },
+          parts: [{ type: "text", text: JSON.stringify(decision("allow")) }],
+        }),
+      )
+    } else if (request.method === "DELETE") {
+      response.end("true")
+    } else if (request.method === "POST" && request.url.startsWith("/instance/dispose?")) {
+      disposalAttempts++
+      if (disposalAttempts < 3) {
+        response.statusCode = 503
+        response.end("{}")
+      } else response.end("true")
+    } else {
+      response.statusCode = 404
+      response.end("{}")
+    }
+  })
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve))
+  try {
+    const result = await requestOpenCodeV1(
+      { ...model, endpoint: `http://127.0.0.1:${server.address().port}/` },
+      { system: "POLICY", user: "SYNTHETIC EVIDENCE" },
+    )
+    assert(result.ok)
+    assert.equal(disposalAttempts, 3)
+    assert.equal(seen.length, 6)
   } finally {
     await new Promise((resolve) => server.close(resolve))
   }

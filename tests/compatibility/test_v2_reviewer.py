@@ -16,7 +16,7 @@ import pytest
 V2_VERSIONS = (
     [os.environ["V2_HOST_VERSION"]]
     if os.environ.get("V2_HOST_VERSION")
-    else ["2.0.3", "2.0.11"]
+    else ["2.0.3", "2.0.11", "2.0.14"]
 )
 V2_CASES = [
     (version, "json_schema", outcome)
@@ -33,7 +33,7 @@ V2_CASES = [
         ("2.0.3", "json_schema", "retained"),
         ("2.0.3", "json_schema", "brake"),
         ("2.0.3", "json_schema", "schema-retry"),
-        ("2.0.11", "json_schema", "interrupted"),
+        ("2.0.14", "json_schema", "interrupted"),
     ]
     if not os.environ.get("V2_HOST_VERSION")
     else []

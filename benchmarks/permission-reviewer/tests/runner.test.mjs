@@ -104,7 +104,7 @@ test("a host safety stop prevents further benchmark requests", async () =>
     assert.equal(result.completedRows, 1)
   }))
 test(
-  "OpenCode transport permits two concurrent workers and caps the pool",
+  "OpenCode transport permits three concurrent workers and caps the pool",
   { timeout: 30000 },
   async () =>
     temp(async (dir) => {
@@ -120,26 +120,26 @@ test(
       }
       let active = 0
       let peak = 0
-      let releaseBoth
+      let releaseAll
       let timer
-      const bothStarted = new Promise((resolve, reject) => {
-        releaseBoth = resolve
+      const allStarted = new Promise((resolve, reject) => {
+        releaseAll = resolve
         timer = setTimeout(() => reject(new Error("Concurrent workers did not overlap")), 10000)
       })
       const configured = {
         ...base(dir),
-        cases: cases.slice(0, 2),
+        cases: cases.slice(0, 3),
         models: [hostModel],
-        options: { ...base(dir).options, concurrency: 2 },
+        options: { ...base(dir).options, concurrency: 3 },
         completion: async () => {
           active++
           peak = Math.max(peak, active)
-          if (active === 2) {
+          if (active === 3) {
             clearTimeout(timer)
-            releaseBoth()
+            releaseAll()
           }
           try {
-            await bothStarted
+            await allStarted
             return success("allow")
           } finally {
             active--
@@ -149,14 +149,14 @@ test(
       try {
         const result = await runBenchmark(configured)
         assert(result.complete)
-        assert.equal(peak, 2)
+        assert.equal(peak, 3)
         await assert.rejects(
           runBenchmark({
             ...configured,
             out: join(dir, "rejected"),
-            options: { ...configured.options, concurrency: 3 },
+            options: { ...configured.options, concurrency: 4 },
           }),
-          /at most two workers/,
+          /at most three workers/,
         )
       } finally {
         clearTimeout(timer)

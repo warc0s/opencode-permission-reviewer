@@ -21,6 +21,16 @@ export type ReasoningEscalation = (
 
 export type SystemOneInvoke = (state: SystemOneState, signal: AbortSignal) => Promise<unknown>
 
+const SYSTEM_ONE_RETRY = {
+  maxRetries: 2,
+  backoffInitialMs: 400,
+  backoffMaxMs: 800,
+  httpStatuses: new Set([503]),
+  respectRetryAfter: false,
+  apiConnectionError: false,
+  apiTimeoutError: false,
+}
+
 function reconcileReasoningEscalation(result: ReviewExecutionResult): ReviewExecutionResult {
   if (result.kind !== "allow" || result.decision?.evidence_completeness === "sufficient") {
     return result
@@ -58,7 +68,7 @@ export function createSystemOneInvoker(
     defaultModel: modelID,
     logLevel: "off",
     timeout: config.timeoutMs,
-    retry: { maxRetries: 0 },
+    retry: SYSTEM_ONE_RETRY,
     ...(fetchImpl ? { fetch: fetchImpl } : {}),
   })
   return async (state, signal) => {
@@ -67,7 +77,7 @@ export function createSystemOneInvoker(
     const { data } = await client
       .systemOne(
         { model: modelID, state, questions: SYSTEM_ONE_QUESTIONS },
-        { signal: boundedSignal, timeout: config.timeoutMs, retry: { maxRetries: 0 } },
+        { signal: boundedSignal, timeout: config.timeoutMs },
       )
       .withResponse()
     return data

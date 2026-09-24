@@ -80,6 +80,17 @@ function envelope(): ReviewEnvelope {
   }
 }
 
+async function withSyntheticCommandCodeKey<T>(run: () => Promise<T>): Promise<T> {
+  const previous = process.env.CMD_API_KEY
+  process.env.CMD_API_KEY = "synthetic-commandcode-key"
+  try {
+    return await run()
+  } finally {
+    if (previous === undefined) delete process.env.CMD_API_KEY
+    else process.env.CMD_API_KEY = previous
+  }
+}
+
 describe("System One reviewer", () => {
   test("selects only known Jev providers and model IDs", () => {
     expect(isSystemOneReviewerModel("opencode/jev-1.13-free")).toBe(true)
@@ -172,6 +183,80 @@ describe("System One reviewer", () => {
       if (typesafeKey === undefined) delete process.env.TYPESAFE_API_KEY
       else process.env.TYPESAFE_API_KEY = typesafeKey
     }
+  })
+
+  test("recovers from two temporary 503 responses with one valid Jev decision", async () => {
+    await withSyntheticCommandCodeKey(async () => {
+      const config = resolveConfig({ model: "commandcode/typesafe/jev" })
+      const state = {
+        trustedPolicy: { reviewer: "policy", tenant: "tenant" },
+        untrustedEvidence: "synthetic evidence",
+      }
+      let calls = 0
+      const invoke = createSystemOneInvoker(config, async () => {
+        calls++
+        return calls < 3
+          ? Response.json(
+              { error: { message: "Upstream temporarily unavailable" } },
+              { status: 503 },
+            )
+          : Response.json({ ...response(), model: "typesafe/jev" })
+      })
+      const raw = await invoke(state, new AbortController().signal)
+      expect(calls).toBe(3)
+      expect(parseSystemOneReview(raw, config)?.decision.outcome).toBe("allow")
+    })
+  }, 10_000)
+
+  test("keeps an exhausted 503 fail-closed and does not retry authentication failures", async () => {
+    await withSyntheticCommandCodeKey(async () => {
+      const config = resolveConfig({ model: "commandcode/typesafe/jev", escalationMode: "deny" })
+      let calls = 0
+      const failed = createSystemOneInvoker(config, async () => {
+        calls++
+        return Response.json(
+          { error: { message: "Upstream temporarily unavailable" } },
+          { status: 503 },
+        )
+      })
+      const backend = new SystemOneReviewerBackend(config, undefined, undefined, failed)
+      const result = await backend.review(envelope(), new ReviewAttempt("generation", 10_000))
+      expect(calls).toBe(3)
+      expect(result.kind).toBe("deny")
+      expect(result.decisionSource).toBe("failure-safe")
+
+      calls = 0
+      const unauthorized = createSystemOneInvoker(config, async () => {
+        calls++
+        return Response.json({ error: { message: "Invalid API key" } }, { status: 401 })
+      })
+      await expect(
+        unauthorized(
+          { trustedPolicy: { reviewer: "policy", tenant: "tenant" }, untrustedEvidence: "" },
+          new AbortController().signal,
+        ),
+      ).rejects.toMatchObject({ status: 401 })
+      expect(calls).toBe(1)
+    })
+  }, 10_000)
+
+  test("cancellation during a 503 backoff prevents another request", async () => {
+    await withSyntheticCommandCodeKey(async () => {
+      const config = resolveConfig({ model: "commandcode/typesafe/jev" })
+      let calls = 0
+      const invoke = createSystemOneInvoker(config, async () => {
+        calls++
+        return Response.json({ error: { message: "Unavailable" } }, { status: 503 })
+      })
+      const controller = new AbortController()
+      const pending = invoke(
+        { trustedPolicy: { reviewer: "policy", tenant: "tenant" }, untrustedEvidence: "" },
+        controller.signal,
+      )
+      setTimeout(() => controller.abort(new Error("Review cancelled")), 20)
+      await expect(pending).rejects.toThrow(/aborted/)
+      expect(calls).toBe(1)
+    })
   })
 
   test("builds a complete fixed question set", () => {

@@ -264,8 +264,10 @@ goes there only when Jev assigns enough combined probability to `allow` or
 `deny` to make a second opinion useful. Clear escalations remain human reviews
 instead of paying for another model that is unlikely to resolve them. Without
 `escalationReviewer`, final escalations follow `escalationMode` and the failure
-settings. Transport, authentication, timeout, and invalid-response failures
-never invoke the second model. The built-in default reviewer remains Luna.
+settings. A 503 response gets up to two short retries within `timeoutMs`;
+authentication errors, other transport failures, timeouts, and invalid responses
+do not trigger those retries or invoke the second model. Exhausted 503s still
+follow the failure settings. The built-in default reviewer remains Luna.
 
 `systemOneConfidenceThreshold` applies to Jev's outcome confidence, not the
 lowest confidence among all descriptive fields. Supporting classifications are

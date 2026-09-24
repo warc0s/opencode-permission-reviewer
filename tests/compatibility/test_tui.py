@@ -20,7 +20,7 @@ import pytest
 V2_VERSIONS = (
     [os.environ["V2_HOST_VERSION"]]
     if os.environ.get("V2_HOST_VERSION")
-    else ["2.0.3", "2.0.11", "2.0.14"]
+    else ["2.0.3", "2.0.11", "2.0.15"]
 )
 
 from test_v2_reviewer import model_server  # noqa: F401

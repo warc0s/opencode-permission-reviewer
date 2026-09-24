@@ -50,7 +50,7 @@ the host and configuration.
 ### Requirements
 
 - [Bun](https://bun.sh) ≥ 1.3.0 (CI runs 1.3.0 and 1.3.5)
-- [OpenCode](https://opencode.ai) V1 `>=1.18.29 <2` (**tested with 1.18.32**), or V2 `>=2.0.3 <3` (**tested with 2.0.14**)
+- [OpenCode](https://opencode.ai) V1 `>=1.18.29 <2` (**tested with 1.18.32**), or V2 `>=2.0.3 <3` (**tested with 2.0.15**)
 - `git` on `PATH` (only used for read-only Git-state enrichment; missing git
   degrades gracefully)
 - A model provider configured in OpenCode, exposing a model that follows JSON
@@ -544,7 +544,7 @@ binary, blocked, or truncated evidence) remains a reviewer decision.
 | Component             | Supported          | Notes                                                      |
 | --------------------- | ------------------ | ---------------------------------------------------------- |
 | OpenCode V1           | `>=1.18.29 <2`     | Dual object entrypoint; verified with **1.18.32**          |
-| OpenCode V2           | `>=2.0.3 <3`       | Compatibility layer; tested through **2.0.14**             |
+| OpenCode V2           | `>=2.0.3 <3`       | Compatibility layer; tested through **2.0.15**             |
 | `@opencode-ai/plugin` | `>=1.18.29 <2`     | Optional V1 peer dependency                                |
 | Bun                   | `>=1.3.0`          | Declared in `engines.bun`; CI runs **1.3.0** and **1.3.5** |
 | TUI overlay           | OpenCode V1 and V2 | Separate host adapters, shared raw TSX presentation        |

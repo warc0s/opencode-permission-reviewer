@@ -188,11 +188,11 @@ One API instead. For V1, put shared options in the global
 server reads that file and the TUI receives effective settings from the server.
 The model options are:
 
-- **`model`** — in `provider/model` form. Chat models must match a configured
+- **`model`**: in `provider/model` form. Chat models must match a configured
   OpenCode provider; supported Jev IDs use the direct System One API below.
-- **`variant`** — reasoning effort the model supports (`max`, `high`, `medium`,
+- **`variant`**: reasoning effort the model supports (`max`, `high`, `medium`,
   `low`, `none`). Passed straight through to OpenCode.
-- **`outputFormat`** — how the reviewer returns its decision: `json_schema`
+- **`outputFormat`**: how the reviewer returns its decision: `json_schema`
   (default; uses OpenCode's structured output, needs provider support) or
   `text` (ask the model to emit JSON in plain text and parse it locally). Use
   `text` for models that reject the `json_schema` format, e.g.

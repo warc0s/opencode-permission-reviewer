@@ -123,9 +123,7 @@ describe("cli init", () => {
     const { code, stdout } = await run(["--print", "--project", project], { HOME: home })
     expect(code).toBe(0)
     const entry = JSON.parse(stdout)
-    expect(Array.isArray(entry)).toBe(true)
-    expect(typeof entry[0]).toBe("string")
-    expect(entry[1].model).toBe("openai/gpt-5.6-luna")
+    expect(typeof entry).toBe("string")
   })
 
   test("--yes creates the config file with schema and plugin", async () => {
@@ -136,7 +134,7 @@ describe("cli init", () => {
     const cfg = JSON.parse(readFileSync(join(project, "opencode.json"), "utf8"))
     expect(cfg.$schema).toBe("https://opencode.ai/config.json")
     expect(Array.isArray(cfg.plugin)).toBe(true)
-    expect(cfg.plugin[0][1].model).toBe("openai/gpt-5.6-luna")
+    expect(typeof cfg.plugin[0]).toBe("string")
   })
 
   test("noop when already registered", async () => {

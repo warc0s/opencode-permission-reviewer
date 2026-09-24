@@ -81,7 +81,7 @@ def test_tui_renders_review_state(launch_host, activate_host, model_server, gene
     provider = {"providers": {"fixture": {
         "package": "@opencode/ai/providers/openai-compatible",
         "settings": {"baseURL": model_server["url"], "apiKey": "synthetic-fixture"},
-        "models": {"reviewer": {"name": "Fixture reviewer", "variants": [{"id": "max", "settings": {}}],
+        "models": {"reviewer": {"name": "Fixture reviewer", "variants": [{"id": "max", "settings": {}}, {"id": "medium", "settings": {}}],
             "capabilities": {"tools": True, "input": ["text"], "output": ["text"]},
             "limit": {"context": 32000, "output": 1000}}},
     }}}
@@ -90,7 +90,7 @@ def test_tui_renders_review_state(launch_host, activate_host, model_server, gene
             "options": {"baseURL": model_server["url"], "apiKey": "synthetic-fixture"},
             "models": {name: {"name": name, "limit": {"context": 32000, "output": 1000}} for name in ["reviewer", "driver"]},
         }}}
-    config = {"plugins": [package]} if generation == "v2" else {"plugin": [[package, {"model": "fixture/reviewer"}]], "permission": {"bash": "ask"}}
+    config = {"plugins": [package]} if generation == "v2" else {"plugin": [package], "permission": {"bash": "ask"}}
     host = launch_host(generation, binary, config,
         reviewer={"model": "fixture/reviewer", "timeoutMs": 10000, "reviewBudgetMs": 20000}, global_config=provider)
     activate_host(host, generation)

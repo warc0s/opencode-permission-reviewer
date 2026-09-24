@@ -26,8 +26,8 @@ export const DEFAULT_RISK_POLICY: RiskPolicy = {
 }
 
 export const DEFAULT_CONFIG: ReviewerConfig = {
-  model: "openai/gpt-5.6-luna",
-  variant: "max",
+  model: "openai/gpt-6-luna",
+  variant: "medium",
   outputFormat: "json_schema",
   timeoutMs: 120_000,
   maxContextChars: 32_000,

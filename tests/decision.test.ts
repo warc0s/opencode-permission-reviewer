@@ -183,9 +183,9 @@ describe("decision parsing and invariants", () => {
 })
 
 describe("configuration", () => {
-  test("defaults to Luna at maximum reasoning", () => {
-    expect(resolveConfig(undefined).model).toBe("openai/gpt-5.6-luna")
-    expect(resolveConfig(undefined).variant).toBe("max")
+  test("defaults to GPT-6 Luna at medium reasoning", () => {
+    expect(resolveConfig(undefined).model).toBe("openai/gpt-6-luna")
+    expect(resolveConfig(undefined).variant).toBe("medium")
     expect(resolveConfig(undefined).outputFormat).toBe("json_schema")
   })
 

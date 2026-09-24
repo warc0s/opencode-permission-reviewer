@@ -102,37 +102,30 @@ npm package name after `bun add` / `npm install`:
 // opencode.json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": [
-    [
-      "/absolute/path/to/opencode-permission-reviewer",
-      // or: "opencode-permission-reviewer"
-      {
-        "model": "openai/gpt-5.6-luna", // default reviewer; override with any provider/model
-        "variant": "max",
-        "timeoutMs": 120000,
-      },
-    ],
-  ],
+  "plugin": ["/absolute/path/to/opencode-permission-reviewer"],
+  // or: "plugin": ["opencode-permission-reviewer"],
   "permission": {
     "bash": "ask", // at least one ask rule, or the plugin is a no-op
   },
 }
 ```
 
-For the optional TUI overlay, register the **same** plugin block in your
-`tui.json` (`~/.config/opencode/tui.json`). Keep `model`, `variant`, and
-`timeoutMs` **identical** in both files so the watchdog and server agree:
+For the optional TUI overlay, register the plugin in your `tui.json`
+(`~/.config/opencode/tui.json`). Both V1 components read the global
+`permission-reviewer.jsonc`, so put shared reviewer settings there rather
+than repeating them in the two plugin entries. The built-in default is
+`openai/gpt-6-luna` at `medium` reasoning. To override it for both, use:
+
+```jsonc
+// ~/.config/opencode/permission-reviewer.jsonc
+{ "model": "provider/model", "variant": "medium", "timeoutMs": 120000 }
+```
 
 ```jsonc
 // tui.json
 {
   "$schema": "https://opencode.ai/tui.json",
-  "plugin": [
-    [
-      "/absolute/path/to/opencode-permission-reviewer",
-      { "model": "openai/gpt-5.6-luna", "variant": "max", "timeoutMs": 120000 },
-    ],
-  ],
+  "plugin": ["/absolute/path/to/opencode-permission-reviewer"],
 }
 ```
 
@@ -188,9 +181,9 @@ review; by default it is `2 * timeoutMs + 60000`. Retries consume this budget.
 
 The reviewer is a normal OpenCode model invocation (every tool denied at the
 session-permission level), so it can be **any model from any provider you have
-configured**. In V1, keep shared options identical in `opencode.json` and
-`tui.json` when using the overlay. In V2, configure reviewer settings in the
-trusted global `permission-reviewer.jsonc`; the TUI reads them from the server.
+configured**. For V1, put shared options in the global
+`permission-reviewer.jsonc`; both the server and TUI read it. For V2, the
+server reads that file and the TUI receives effective settings from the server.
 The model options are:
 
 - **`model`** — in `provider/model` form. Must match a configured provider and
@@ -202,11 +195,10 @@ The model options are:
   `text` (ask the model to emit JSON in plain text and parse it locally). Use
   `text` for models that reject the `json_schema` format, e.g.
   `opencode-go/deepseek-v4-flash`.
-- **`timeoutMs`**: review timeout; match it across the V1 config files.
+- **`timeoutMs`**: review timeout; keep it in the shared config for V1.
 
-The default reviewer is **`openai/gpt-5.6-luna`** (`max` reasoning) — a real
-model that follows JSON schemas well. Override `model` to use any other
-provider/model you have configured; whichever you pick should follow structured
+The default reviewer is **`openai/gpt-6-luna`** (`medium` reasoning). Override
+`model` to use any other provider/model you have configured; whichever you pick should follow structured
 output reliably. Model mistakes can cause unsupported approvals as well as
 unnecessary escalations, so compare both safety errors and format validity.
 Higher reasoning variants may cost more or take longer without always improving
@@ -254,10 +246,10 @@ Every option is optional. Numeric/string options are clamped to safe bounds.
 
 | Option                 | Default                                                   | Bounds / type                       | Description                                                                                   |
 | ---------------------- | --------------------------------------------------------- | ----------------------------------- | --------------------------------------------------------------------------------------------- |
-| `model`                | `openai/gpt-5.6-luna`                                     | `provider/model`                    | Reviewer model (override with any provider/model)                                             |
-| `variant`              | `max`                                                     | non-empty string                    | Reasoning variant passed to OpenCode                                                          |
+| `model`                | `openai/gpt-6-luna`                                       | `provider/model`                    | Reviewer model (override with any provider/model)                                             |
+| `variant`              | `medium`                                                  | non-empty string                    | Reasoning variant passed to OpenCode                                                          |
 | `outputFormat`         | `json_schema`                                             | `json_schema` / `text`              | How the reviewer returns its decision (`text` for models without structured output)           |
-| `timeoutMs`            | `120000`                                                  | `5000`–`600000`                     | Review timeout (match across V1 config files)                                                 |
+| `timeoutMs`            | `120000`                                                  | `5000`–`600000`                     | Review timeout; put shared V1 settings in the global config                                   |
 | `confidenceThreshold`  | `0.7`                                                     | `0.5`–`1`                           | Minimum confidence to auto-act; below it escalates                                            |
 | `maxContextChars`      | `32000`                                                   | `4000`–`200000`                     | Total transcript evidence budget                                                              |
 | `maxPartChars`         | `8000`                                                    | `500`–`50000`                       | Per-message-part budget                                                                       |
@@ -582,7 +574,7 @@ binary, blocked, or truncated evidence) remains a reviewer decision.
 
 | Symptom                                       | Likely cause                                                                      | Fix                                                                                                                                                                         |
 | --------------------------------------------- | --------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Every `ask` escalates after a long wait       | Reviewer model not found / provider not configured                                | Check the model ID in V1's `opencode.json` (and `tui.json` if used), or V2's trusted global `permission-reviewer.jsonc`                                                     |
+| Every `ask` escalates after a long wait       | Reviewer model not found / provider not configured                                | Check the model ID in the global `permission-reviewer.jsonc` (or any V1 inline override)                                                                                    |
 | Plugin does nothing                           | No `ask` rule in the host permission policy                                       | Set a V1 `"bash": "ask"` rule or a V2 shell permission with `effect: "ask"`                                                                                                 |
 | TUI overlay never appears                     | Wrong TUI config; stale process; or host without Solid/OpenTUI pipeline           | Check V1 `tui.json` or V2 global `cli.json`. The overlay is raw TSX (`dist/tui/tui.tsx`); a prebundled `dist/tui.js` does not render. Fully restart OpenCode after rebuilds |
 | Startup error: "authenticated SDK transport…" | OpenCode V1 outside `>=1.18.29 <2`, or an SDK change that hides the raw transport | Upgrade OpenCode and `@opencode-ai/plugin` into the supported range; report the version in an issue                                                                         |

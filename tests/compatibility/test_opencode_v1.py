@@ -34,7 +34,7 @@ def test_v1_reviewer_applies_decision(launch_host, version, model_server, outcom
         "models": {name: {"name": name, "limit": {"context": 32000, "output": 1000}}
                    for name in ["reviewer", "driver"]},
     }}}
-    plugins = [[package, {"model": "fixture/reviewer"}]]
+    plugins = [package]
     if outcome == "brake":
         # A metadata-only tool makes this test safe even if review incorrectly allows it.
         probe = tmp_path / "brake-probe"

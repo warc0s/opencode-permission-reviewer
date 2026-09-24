@@ -34,8 +34,8 @@ describe("runtime decisions", () => {
     const prompt = harness.client.prompts[0] as {
       body: { model: unknown; variant: string; tools: Record<string, boolean> }
     }
-    expect(prompt.body.model).toEqual({ providerID: "openai", modelID: "gpt-5.6-luna" })
-    expect(prompt.body.variant).toBe("max")
+    expect(prompt.body.model).toEqual({ providerID: "openai", modelID: "gpt-6-luna" })
+    expect(prompt.body.variant).toBe("medium")
     expect(
       Object.entries(prompt.body.tools)
         .filter(([, enabled]) => enabled)

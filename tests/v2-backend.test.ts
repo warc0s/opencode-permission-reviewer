@@ -208,7 +208,7 @@ function fixture(
     ctx,
     config({
       model: "fixture/reviewer",
-      ...(options.variant ? { variant: options.variant } : {}),
+      variant: options.variant ?? "max",
       outputFormat: options.format ?? "json_schema",
       retainReviewSessions: options.retain ?? false,
     }),

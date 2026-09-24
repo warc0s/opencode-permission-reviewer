@@ -126,7 +126,7 @@ def test_v2_reviewer_applies_and_cleans_up(launch_host, activate_host, model_ser
     provider = {"providers": {"fixture": {
         "package": "@opencode/ai/providers/openai-compatible",
         "settings": {"baseURL": model_server["url"], "apiKey": "synthetic-fixture"},
-        "models": {"reviewer": {"name": "Fixture reviewer", "variants": [{"id": "max", "settings": {}}],
+            "models": {"reviewer": {"name": "Fixture reviewer", "variants": [{"id": "max", "settings": {}}, {"id": "medium", "settings": {}}],
             "capabilities": {"tools": True, "input": ["text"], "output": ["text"]},
             "limit": {"context": 32000, "output": 1000}}},
     }}}

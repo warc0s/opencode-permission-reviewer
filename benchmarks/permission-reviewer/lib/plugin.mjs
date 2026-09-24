@@ -1,15 +1,15 @@
 import { readFile, readdir } from "node:fs/promises"
+import { execFileSync } from "node:child_process"
 import { resolve, join } from "node:path"
 import { pathToFileURL } from "node:url"
 import { createHash } from "node:crypto"
 import { assert, sha256 } from "./util.mjs"
 
-export const PINNED_COMMIT = "dc5fd3d820dd72c0406fd46fc1dd8f0875189fc2"
 // Git blob hashes of the security-critical files actually inspected for this kit.
 export const PINNED_BLOBS = {
   "src/policy.ts": "641e81586e738cfdee64c61bb341529707eac4eb",
   "src/context.ts": "e099dacaacca78ad4474bd35d36a291c190df256",
-  "src/config.ts": "21147ed99fb5499f584f5033cc5a2b6fc660ddf6",
+  "src/config.ts": "1aba599aedd942bf1377b15137e3c0a007aef878",
   "src/decision.ts": "ad3443f3bf2ca1b34b3b23e8115c79148e19238b",
   "src/policy/policy-engine.ts": "b4470dc188d956cc0ed25454c2d34465110fe1be",
   "src/escalation.ts": "ad900880c33f8b78f2f636ce4aa18f0c42d40911",
@@ -46,8 +46,18 @@ export async function sourceSnapshot(repo) {
     if (actual !== expected) differences.push({ path, expected, actual })
   }
   const packageJSON = JSON.parse(await readFile(resolve(repo, "package.json"), "utf8"))
+  let pinnedCommit = null
+  try {
+    // The blob map gates source parity; record the checked-out commit for provenance.
+    pinnedCommit = execFileSync("git", ["-C", resolve(repo), "rev-parse", "HEAD"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim()
+  } catch {
+    // A source copy can still be compared by its file hashes without Git metadata.
+  }
   return {
-    pinnedCommit: PINNED_COMMIT,
+    pinnedCommit,
     packageVersion: packageJSON.version,
     inspectedBlobDifferences: differences,
     sourceSha256: sha256(files),

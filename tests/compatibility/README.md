@@ -35,12 +35,13 @@ PYTHON=/path/to/python-with-pytest \
 The default command and CI remain limited to the minimum and reference V2
 hosts. The optional window verifies the intermediate releases on demand.
 
-`tests/live-v2-smoke.ts` is the paid-provider smoke for a fresh V2 service. Its
+`tests/live-v2-smoke.ts` is the paid-provider smoke for a fresh V2 host. Its
 fixture uses a placeholder plugin path that must point at the checkout before
-starting the host. Pass the registered service password through
-`REVIEWER_LIVE_PASSWORD`; set `REVIEWER_LIVE_AUDIT_PATH` only when trusted
-global config overrides the default audit path. The smoke proves a real allow
-and execution, an LLM denial, and a deterministic emergency-brake denial.
+starting the host. Set `REVIEWER_LIVE_DIRECTORY` when running against a
+disposable fixture copy, `REVIEWER_LIVE_PASSWORD` for a registered service,
+and `REVIEWER_LIVE_AUDIT_PATH` when trusted global config overrides the
+default audit path. The smoke proves a real allow and execution, an LLM denial,
+and a deterministic emergency-brake denial.
 
 The variables must point to the actual host executable. Do not point them at a
 profile launcher that overwrites `HOME`, `XDG_*`, or `OPENCODE_CONFIG*`: that

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-09-24
+
 ### Added
 
 - Add Jev as a reviewer model choice through OpenCode Zen, TypeSafe AI, or the

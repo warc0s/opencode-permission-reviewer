@@ -241,7 +241,13 @@ export function parseSystemOneReview(
 ): ParsedSystemOneReview | undefined {
   if (typeof response !== "object" || response === null || Array.isArray(response)) return
   const raw = response as Record<string, unknown>
-  if (typeof raw.model !== "string" || !/^jev(?:-|$)/.test(raw.model)) return
+  if (
+    typeof raw.model !== "string" ||
+    (config.model === "commandcode/typesafe/jev"
+      ? raw.model !== "typesafe/jev"
+      : !/^jev(?:-|$)/.test(raw.model))
+  )
+    return
   if (typeof raw.answers !== "object" || raw.answers === null || Array.isArray(raw.answers)) return
   const answers = raw.answers as Record<string, unknown>
   const expected = Object.keys(SYSTEM_ONE_QUESTIONS)

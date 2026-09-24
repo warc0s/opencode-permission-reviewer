@@ -27,8 +27,8 @@ export const DEFAULT_RISK_POLICY: RiskPolicy = {
 }
 
 export const DEFAULT_CONFIG: ReviewerConfig = {
-  model: "openai/gpt-5.6-luna",
-  variant: "max",
+  model: "openai/gpt-6-luna",
+  variant: "medium",
   outputFormat: "json_schema",
   timeoutMs: 120_000,
   maxContextChars: 32_000,
@@ -472,7 +472,8 @@ export function isSystemOneReviewerModel(model: string): boolean {
   }
   // Jev uses the typed System One API rather than a chat-session transport.
   return (
-    (parsed.providerID === "opencode" || parsed.providerID === "typesafe-ai") &&
-    /^jev(?:-|$)/.test(parsed.modelID)
+    ((parsed.providerID === "opencode" || parsed.providerID === "typesafe-ai") &&
+      /^jev(?:-|$)/.test(parsed.modelID)) ||
+    (parsed.providerID === "commandcode" && parsed.modelID === "typesafe/jev")
   )
 }

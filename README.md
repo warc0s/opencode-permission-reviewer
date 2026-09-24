@@ -48,7 +48,7 @@ the host and configuration.
 ### Requirements
 
 - [Bun](https://bun.sh) ≥ 1.3.0 (CI runs 1.3.0 and 1.3.5)
-- [OpenCode](https://opencode.ai) V1 `>=1.18.29 <2` (**tested with 1.18.32**), or V2 `>=2.0.3 <3` (**tested with 2.0.14**)
+- [OpenCode](https://opencode.ai) V1 `>=1.18.29 <2` (**tested with 1.18.32**), or V2 `>=2.0.3 <3` (**tested with 2.0.15**)
 - `git` on `PATH` (only used for read-only Git-state enrichment; missing git
   degrades gracefully)
 - A model provider configured in OpenCode, exposing a model that follows JSON
@@ -101,37 +101,30 @@ npm package name after `bun add` / `npm install`:
 // opencode.json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": [
-    [
-      "/absolute/path/to/opencode-permission-reviewer",
-      // or: "opencode-permission-reviewer"
-      {
-        "model": "openai/gpt-5.6-luna", // default reviewer; override with any provider/model
-        "variant": "max",
-        "timeoutMs": 120000,
-      },
-    ],
-  ],
+  "plugin": ["/absolute/path/to/opencode-permission-reviewer"],
+  // or: "plugin": ["opencode-permission-reviewer"],
   "permission": {
     "bash": "ask", // at least one ask rule, or the plugin is a no-op
   },
 }
 ```
 
-For the optional TUI overlay, register the **same** plugin block in your
-`tui.json` (`~/.config/opencode/tui.json`). Keep `model`, `variant`, and
-`timeoutMs` **identical** in both files so the watchdog and server agree:
+For the optional TUI overlay, register the plugin in your `tui.json`
+(`~/.config/opencode/tui.json`). Both V1 components read the global
+`permission-reviewer.jsonc`, so put shared reviewer settings there rather
+than repeating them in the two plugin entries. The built-in default is
+`openai/gpt-6-luna` at `medium` reasoning. To override it for both, use:
+
+```jsonc
+// ~/.config/opencode/permission-reviewer.jsonc
+{ "model": "provider/model", "variant": "medium", "timeoutMs": 120000 }
+```
 
 ```jsonc
 // tui.json
 {
   "$schema": "https://opencode.ai/tui.json",
-  "plugin": [
-    [
-      "/absolute/path/to/opencode-permission-reviewer",
-      { "model": "openai/gpt-5.6-luna", "variant": "max", "timeoutMs": 120000 },
-    ],
-  ],
+  "plugin": ["/absolute/path/to/opencode-permission-reviewer"],
 }
 ```
 
@@ -190,13 +183,13 @@ review; by default it is `2 * timeoutMs + 60000`. Retries consume this budget.
 By default the reviewer is a normal OpenCode model invocation with every tool
 denied at the session-permission level, so it can be **any model from any
 provider you have configured**. Jev models automatically use the typed System
-One API instead. In V1, keep shared options identical in `opencode.json` and
-`tui.json` when using the overlay. In V2, configure reviewer settings in the
-trusted global `permission-reviewer.jsonc`; the TUI reads them from the server.
+One API instead. For V1, put shared options in the global
+`permission-reviewer.jsonc`; both the server and TUI read it. For V2, the
+server reads that file and the TUI receives effective settings from the server.
 The model options are:
 
-- **`model`** — in `provider/model` form. Must match a configured provider and
-  a model that provider exposes.
+- **`model`** — in `provider/model` form. Chat models must match a configured
+  OpenCode provider; supported Jev IDs use the direct System One API below.
 - **`variant`** — reasoning effort the model supports (`max`, `high`, `medium`,
   `low`, `none`). Passed straight through to OpenCode.
 - **`outputFormat`** — how the reviewer returns its decision: `json_schema`
@@ -204,11 +197,10 @@ The model options are:
   `text` (ask the model to emit JSON in plain text and parse it locally). Use
   `text` for models that reject the `json_schema` format, e.g.
   `opencode-go/deepseek-v4-flash`.
-- **`timeoutMs`**: review timeout; match it across the V1 config files.
+- **`timeoutMs`**: review timeout; keep it in the shared config for V1.
 
-The default reviewer is **`openai/gpt-5.6-luna`** (`max` reasoning) — a real
-model that follows JSON schemas well. Override `model` to use any other
-provider/model you have configured; whichever you pick should follow structured
+The default reviewer is **`openai/gpt-6-luna`** (`medium` reasoning). Override
+`model` to use any other provider/model you have configured; whichever you pick should follow structured
 output reliably. Model mistakes can cause unsupported approvals as well as
 unnecessary escalations, so compare both safety errors and format validity.
 Higher reasoning variants may cost more or take longer without always improving
@@ -216,18 +208,46 @@ the result.
 
 ### Jev System One reviewer
 
-Set `model` to one of the supported provider/model forms and export the matching
-key in the trusted OpenCode process environment. The recommended Jev profile
-uses Luna medium only for selected, plausibly resolvable decisions:
+Set `model` in the trusted global `~/.config/opencode/permission-reviewer.jsonc`
+and put the matching key in the **OpenCode server process environment** before
+starting OpenCode. The Jev call uses the provider's System One endpoint directly;
+OpenCode's `/connect` credentials and the Command Code CLI login are not read by
+this call. The supported routes are:
+
+| Reviewer `model`                                       | Required environment variable | System One API                                                                                |
+| ------------------------------------------------------ | ----------------------------- | --------------------------------------------------------------------------------------------- |
+| `opencode/jev-1.13` (or `opencode/jev-1.13-free`)      | `OPENCODE_API_KEY`            | [OpenCode Zen](https://opencode.ai/docs/en/zen/#jev)                                          |
+| `typesafe-ai/jev-1.13.0` (or `typesafe-ai/jev-latest`) | `TYPESAFE_API_KEY`            | [TypeSafe AI](https://docs.typesafe.ai/sdk/javascript)                                        |
+| `commandcode/typesafe/jev`                             | `CMD_API_KEY`                 | [Command Code Provider API](https://commandcode.ai/docs/provider#decision-models-typesafejev) |
+
+For **Jev only**, omit `escalationReviewer`:
 
 ```jsonc
+// ~/.config/opencode/permission-reviewer.jsonc
 {
-  "model": "typesafe-ai/jev-1.13.0",
+  "model": "opencode/jev-1.13",
+  "timeoutMs": 120000,
+}
+```
+
+Replace the `model` with either of the other IDs in the table to use that
+provider. Command Code requires an API-enabled plan such as GOAT, Pro, Max,
+Team, or Provider; the Go plan has no Provider API access. Use a Command Code
+API key from Studio in `CMD_API_KEY`. Jev is a headless decision model there,
+so it cannot be selected as an interactive Command Code chat model.
+
+For **Jev with selective reasoning escalation**, add a chat model already
+configured in OpenCode:
+
+```jsonc
+// ~/.config/opencode/permission-reviewer.jsonc
+{
+  "model": "commandcode/typesafe/jev",
   "timeoutMs": 120000,
   "systemOneConfidenceThreshold": 0.4,
   "systemOneReasoningThreshold": 0.38,
   "escalationReviewer": {
-    "model": "openai/gpt-5.6-luna",
+    "model": "openai/gpt-6-luna",
     "variant": "medium",
     "outputFormat": "json_schema",
     "timeoutMs": 120000,
@@ -235,20 +255,17 @@ uses Luna medium only for selected, plausibly resolvable decisions:
 }
 ```
 
-- `opencode/jev-*` reads `OPENCODE_API_KEY` and calls OpenCode Zen.
-- `typesafe-ai/jev-*` reads `TYPESAFE_API_KEY` and calls TypeSafe AI directly.
-
 Jev receives typed state and fixed questions, not a chat session, so `variant`
 and `outputFormat` do not apply to the primary call. The plugin reconciles its
 answers with deterministic confidence and consistency checks. Straightforward
 valid decisions are enforced normally, including valid denials. A difficult
-`allow` goes to `escalationReviewer`; an explicit `escalate` goes there only
-when Jev assigns enough combined probability to `allow` or `deny` to make a
-second opinion useful. Clear escalations remain human reviews instead of paying
-for another model that is unlikely to resolve them. Transport, authentication,
-timeout, and invalid-response failures never invoke the second model and fail
-safe according to the existing failure settings. The default reviewer remains
-Luna.
+`allow` goes to `escalationReviewer` when configured; an explicit `escalate`
+goes there only when Jev assigns enough combined probability to `allow` or
+`deny` to make a second opinion useful. Clear escalations remain human reviews
+instead of paying for another model that is unlikely to resolve them. Without
+`escalationReviewer`, final escalations follow `escalationMode` and the failure
+settings. Transport, authentication, timeout, and invalid-response failures
+never invoke the second model. The built-in default reviewer remains Luna.
 
 `systemOneConfidenceThreshold` applies to Jev's outcome confidence, not the
 lowest confidence among all descriptive fields. Supporting classifications are
@@ -265,9 +282,8 @@ configuration may raise this value but cannot lower a trusted threshold.
 Some models (for example `opencode-go/deepseek-v4-flash`) do not support
 OpenCode's `json_schema` structured-output format and fail with a format error
 when it is requested. For those, set `"outputFormat": "text"` so the reviewer
-asks the model to emit its decision as plain JSON and parses it locally. For V1
-with the optional overlay, set this option identically in `opencode.json` and
-`tui.json`. For V2, set it in the trusted global `permission-reviewer.jsonc`:
+asks the model to emit its decision as plain JSON and parses it locally. Set
+this option in the trusted global `permission-reviewer.jsonc` for either host:
 
 ```jsonc
 {
@@ -302,11 +318,11 @@ Every option is optional. Numeric/string options are clamped to safe bounds.
 
 | Option                         | Default                                                   | Bounds / type                       | Description                                                                                   |
 | ------------------------------ | --------------------------------------------------------- | ----------------------------------- | --------------------------------------------------------------------------------------------- |
-| `model`                        | `openai/gpt-5.6-luna`                                     | `provider/model`                    | Reviewer model (override with any provider/model)                                             |
-| `variant`                      | `max`                                                     | non-empty string                    | Reasoning variant passed to OpenCode                                                          |
+| `model`                        | `openai/gpt-6-luna`                                       | `provider/model`                    | Reviewer model (override with any provider/model)                                             |
+| `variant`                      | `medium`                                                  | non-empty string                    | Reasoning variant passed to OpenCode                                                          |
 | `outputFormat`                 | `json_schema`                                             | `json_schema` / `text`              | How the reviewer returns its decision (`text` for models without structured output)           |
 | `escalationReviewer`           | unset                                                     | trusted object                      | Optional reasoning reviewer for valid but difficult Jev decisions                             |
-| `timeoutMs`                    | `120000`                                                  | `5000`–`600000`                     | Review timeout (match across V1 config files)                                                 |
+| `timeoutMs`                    | `120000`                                                  | `5000`–`600000`                     | Review timeout; put shared V1 settings in the global config                                   |
 | `confidenceThreshold`          | `0.7`                                                     | `0.5`–`1`                           | Minimum confidence to auto-act; below it escalates                                            |
 | `systemOneConfidenceThreshold` | `0.4`                                                     | `0.3`–`1`                           | Calibrated Jev outcome-confidence floor; below it escalates                                   |
 | `systemOneReasoningThreshold`  | `0.38`                                                    | `0`–`1`                             | Combined `allow`/`deny` probability required to send an explicit Jev escalation to reasoning  |
@@ -596,7 +612,7 @@ binary, blocked, or truncated evidence) remains a reviewer decision.
 | Component             | Supported          | Notes                                                      |
 | --------------------- | ------------------ | ---------------------------------------------------------- |
 | OpenCode V1           | `>=1.18.29 <2`     | Dual object entrypoint; verified with **1.18.32**          |
-| OpenCode V2           | `>=2.0.3 <3`       | Compatibility layer; tested through **2.0.14**             |
+| OpenCode V2           | `>=2.0.3 <3`       | Compatibility layer; verified with **2.0.15**              |
 | `@opencode-ai/plugin` | `>=1.18.29 <2`     | Optional V1 peer dependency                                |
 | Bun                   | `>=1.3.0`          | Declared in `engines.bun`; CI runs **1.3.0** and **1.3.5** |
 | TUI overlay           | OpenCode V1 and V2 | Separate host adapters, shared raw TSX presentation        |
@@ -634,7 +650,7 @@ binary, blocked, or truncated evidence) remains a reviewer decision.
 
 | Symptom                                       | Likely cause                                                                      | Fix                                                                                                                                                                         |
 | --------------------------------------------- | --------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Every `ask` escalates after a long wait       | Reviewer model not found / provider not configured                                | Check the model ID in V1's `opencode.json` (and `tui.json` if used), or V2's trusted global `permission-reviewer.jsonc`                                                     |
+| Every `ask` escalates after a long wait       | Reviewer model not found / provider not configured                                | Check the model ID in the global `permission-reviewer.jsonc` (or any V1 inline override)                                                                                    |
 | Plugin does nothing                           | No `ask` rule in the host permission policy                                       | Set a V1 `"bash": "ask"` rule or a V2 shell permission with `effect: "ask"`                                                                                                 |
 | TUI overlay never appears                     | Wrong TUI config; stale process; or host without Solid/OpenTUI pipeline           | Check V1 `tui.json` or V2 global `cli.json`. The overlay is raw TSX (`dist/tui/tui.tsx`); a prebundled `dist/tui.js` does not render. Fully restart OpenCode after rebuilds |
 | Startup error: "authenticated SDK transport…" | OpenCode V1 outside `>=1.18.29 <2`, or an SDK change that hides the raw transport | Upgrade OpenCode and `@opencode-ai/plugin` into the supported range; report the version in an issue                                                                         |

@@ -8,7 +8,8 @@
  * even though the module loads cleanly. Working TUI plugins ship raw TSX
  * for this reason.
  *
- * Only the slim TUI graph is copied (no server engine, no node builtins).
+ * Only the TUI graph is copied, including the shared config loader but not
+ * the server engine.
  */
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
@@ -22,6 +23,8 @@ const files = [
   ["src/ui/v2.tsx", "ui/v2.tsx"],
   ["src/ui/rpc.ts", "ui/rpc.ts"],
   ["src/config.ts", "config.ts"],
+  ["src/config/loader.ts", "config/loader.ts"],
+  ["src/config/jsonc.ts", "config/jsonc.ts"],
   ["src/ui-protocol.ts", "ui-protocol.ts"],
   ["src/ui-state.ts", "ui-state.ts"],
   ["src/types.ts", "types.ts"],

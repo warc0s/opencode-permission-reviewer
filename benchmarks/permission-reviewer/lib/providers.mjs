@@ -44,9 +44,26 @@ export function validateModel(model) {
     FORMATS.has(model.format ?? "text"),
     `${model.id}: format must be text, json_schema, tool or system_one`,
   )
+  if (model.graniteThinkingMode !== undefined) {
+    assert(
+      ["off", "low", "full"].includes(model.graniteThinkingMode),
+      `${model.id}: graniteThinkingMode must be off, low or full`,
+    )
+    assert(
+      transport === "chat-completions" &&
+        model.model === "granite-4.2-8b" &&
+        (model.format ?? "text") === "text" &&
+        url.protocol === "http:" &&
+        ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname),
+      `${model.id}: graniteThinkingMode requires the local Granite 4.2 8B text profile`,
+    )
+  }
   if (transport === "system-one") {
     assert(url.protocol === "https:", "System One endpoint must use HTTPS.")
-    assert(/^jev(?:-|$)/.test(model.model), "System One transport requires a Jev model ID.")
+    assert(
+      /^jev(?:-|$)/.test(model.model) || model.model === "typesafe/jev",
+      "System One transport requires a Jev model ID.",
+    )
     assert(model.format === "system_one", "System One transport requires system_one format.")
     assert(model.apiKeyEnv !== undefined, "System One transport requires apiKeyEnv.")
     assert(model.parameters === undefined, "System One transport does not accept parameters.")
@@ -111,6 +128,7 @@ export function validateModel(model) {
     "endpoint",
     "apiKeyEnv",
     "format",
+    "graniteThinkingMode",
     "parameters",
     "variant",
     "pricesPerMillion",
@@ -130,10 +148,16 @@ export function validateModel(model) {
   return { ...model, transport, format: model.format ?? "text" }
 }
 export function buildBody(model, prepared, retryNote) {
+  const lowEffort = model.graniteThinkingMode === "low" ? "\n\n{reasoning effort: low}" : ""
   const messages = [
     { role: "system", content: prepared.system },
-    { role: "user", content: prepared.user + (retryNote ? "\n\n" + retryNote : "") },
+    { role: "user", content: prepared.user + (retryNote ? "\n\n" + retryNote : "") + lowEffort },
   ]
+  // Granite's chat template uses this assistant prefix to skip the open
+  // thinking block. LM Studio ignores per-request reasoning controls for the
+  // locally loaded GGUF, so this keeps the comparison on the same endpoint.
+  if (model.graniteThinkingMode === "off")
+    messages.push({ role: "assistant", content: "<think></think>" })
   const body = { ...model.parameters, model: model.model, messages, stream: false, n: 1 }
   if (model.format === "json_schema")
     body.response_format = {

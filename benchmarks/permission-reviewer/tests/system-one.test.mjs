@@ -68,6 +68,38 @@ test("System One transport sends only typed state and questions", async () => {
   }
 })
 
+test("Command Code System One profile uses its provider endpoint and model ID", async () => {
+  process.env.PRB_SYSTEM_ONE_TEST_KEY = "synthetic-test-credential"
+  try {
+    let request
+    const result = await requestSystemOne(
+      { ...model, model: "typesafe/jev", endpoint: "https://api.commandcode.ai/provider" },
+      {
+        systemOne: {
+          state: "evidence",
+          questions: { outcome: { type: "noul", instructions: "Safe?" } },
+        },
+      },
+      {
+        fetchImpl: async (url, options) => {
+          request = { url: String(url), body: JSON.parse(String(options.body)) }
+          return Response.json({
+            model: "typesafe/jev",
+            answers: { outcome: { type: "noul", noul: 0.9 } },
+            usage: { input_tokens: 10, output_tokens: 0 },
+          })
+        },
+      },
+    )
+    assert(result.ok)
+    assert.equal(request.url, "https://api.commandcode.ai/provider/v1/systemone")
+    assert.equal(request.body.model, "typesafe/jev")
+    assert.equal(result.returnedModel, "typesafe/jev")
+  } finally {
+    delete process.env.PRB_SYSTEM_ONE_TEST_KEY
+  }
+})
+
 test("System One transport redacts a credential echoed by an error", async () => {
   process.env.PRB_SYSTEM_ONE_TEST_KEY = "synthetic-test-credential"
   try {

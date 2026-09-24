@@ -1,17 +1,23 @@
 import { homedir } from "node:os"
 import { OpenCode } from "@opencode/client"
+import { splitModel } from "../src/config.ts"
 import type { ReviewAuditRecord } from "../src/types.ts"
 
 const baseUrl = process.argv[2] ?? "http://127.0.0.1:4096"
-const directory = new URL("./live-v2-fixture", import.meta.url).pathname.replace(/\/$/, "")
+const directory =
+  process.env.REVIEWER_LIVE_DIRECTORY ??
+  new URL("./live-v2-fixture", import.meta.url).pathname.replace(/\/$/, "")
 const password = process.env.REVIEWER_LIVE_PASSWORD
-if (!password) throw new Error("Set REVIEWER_LIVE_PASSWORD from the registered test service")
 
 const client = OpenCode.make({
   baseUrl,
-  headers: {
-    authorization: `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`,
-  },
+  ...(password
+    ? {
+        headers: {
+          authorization: `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`,
+        },
+      }
+    : {}),
 })
 const permissions = [{ action: "shell", resource: "*", effect: "ask" as const }]
 
@@ -46,9 +52,10 @@ async function session(title: string, model?: { providerID: string; id: string }
   })
 }
 
+const driver = splitModel(process.env.REVIEWER_LIVE_DRIVER_MODEL ?? "openai/gpt-6-luna")
 const safe = await session("permission-reviewer-v2-live-safe", {
-  providerID: "opencode",
-  id: "mimo-v2.5-free",
+  providerID: driver.providerID,
+  id: driver.modelID,
 })
 await client.session.prompt({
   sessionID: safe.id,

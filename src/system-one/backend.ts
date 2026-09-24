@@ -35,18 +35,31 @@ function reconcileReasoningEscalation(result: ReviewExecutionResult): ReviewExec
   }
 }
 
-function createInvoker(config: ReviewerConfig): SystemOneInvoke {
+export function createSystemOneInvoker(
+  config: ReviewerConfig,
+  fetchImpl?: TypeSafeClient["fetch"],
+): SystemOneInvoke {
   const { providerID, modelID } = splitModel(config.model)
-  const keyName = providerID === "opencode" ? "OPENCODE_API_KEY" : "TYPESAFE_API_KEY"
+  const keyName =
+    providerID === "opencode"
+      ? "OPENCODE_API_KEY"
+      : providerID === "commandcode"
+        ? "CMD_API_KEY"
+        : "TYPESAFE_API_KEY"
   const apiKey = process.env[keyName]?.trim()
   if (!apiKey) throw new Error(`Missing ${keyName} for System One reviewer ${config.model}`)
   const client = new TypeSafeClient({
     apiKey,
-    ...(providerID === "opencode" ? { baseURL: "https://opencode.ai/zen" } : {}),
+    ...(providerID === "opencode"
+      ? { baseURL: "https://opencode.ai/zen" }
+      : providerID === "commandcode"
+        ? { baseURL: "https://api.commandcode.ai/provider" }
+        : {}),
     defaultModel: modelID,
     logLevel: "off",
     timeout: config.timeoutMs,
     retry: { maxRetries: 0 },
+    ...(fetchImpl ? { fetch: fetchImpl } : {}),
   })
   return async (state, signal) => {
     const deadline = AbortSignal.timeout(config.timeoutMs)
@@ -109,7 +122,7 @@ export class SystemOneReviewerBackend {
         untrustedEvidence: evidence.text,
       }
       const response = await attempt.wait(
-        (this.invoke ?? createInvoker(this.config))(state, attempt.signal),
+        (this.invoke ?? createSystemOneInvoker(this.config))(state, attempt.signal),
       )
       const parsed = parseSystemOneReview(response, this.config)
       if (!parsed) {

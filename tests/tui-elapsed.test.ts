@@ -1,11 +1,18 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import type { TuiPluginApi, TuiPluginMeta } from "@opencode-ai/plugin/tui"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { setGlobalConfigPathForTests } from "../src/config/loader.ts"
 import { request } from "./helpers.ts"
 import { testRender, tui } from "./tui-loader.ts"
 
 const disposers: Array<() => void> = []
+const tempDirs: string[] = []
 afterEach(() => {
   for (const dispose of disposers.splice(0)) dispose()
+  setGlobalConfigPathForTests(undefined)
+  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true })
 })
 
 type EventHandler = (event: never) => void
@@ -23,6 +30,11 @@ type EventHandler = (event: never) => void
  */
 describe("tui panel live elapsed counter", () => {
   test("elapsed seconds advance while the reviewing panel is visible", async () => {
+    const configDir = mkdtempSync(join(tmpdir(), "reviewer-tui-config-"))
+    tempDirs.push(configDir)
+    const configPath = join(configDir, "permission-reviewer.jsonc")
+    writeFileSync(configPath, JSON.stringify({ model: "fixture/shared", variant: "high" }))
+    setGlobalConfigPathForTests(configPath)
     const handlers = new Map<string, EventHandler[]>()
     let factory: (() => unknown) | undefined
 
@@ -93,6 +105,8 @@ describe("tui panel live elapsed counter", () => {
     }
 
     expect(setup.captureCharFrame()).toContain("Reviewing this permission")
+    expect(setup.captureCharFrame()).toContain("fixture/shared")
+    expect(setup.captureCharFrame()).toContain("high")
     const first = readElapsed()
     // At least two 250ms ticks pass before the second capture.
     await Bun.sleep(700)

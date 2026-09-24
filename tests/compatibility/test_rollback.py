@@ -22,7 +22,7 @@ def test_profile_rollback_preserves_config_sessions_and_audit(launch_host, activ
     provider_v2 = {"providers": {"fixture": {
         "package": "@opencode/ai/providers/openai-compatible",
         "settings": {"baseURL": model_server["url"], "apiKey": "synthetic-fixture"},
-        "models": {"reviewer": {"name": "Reviewer", "variants": [{"id": "max", "settings": {}}],
+        "models": {"reviewer": {"name": "Reviewer", "variants": [{"id": "max", "settings": {}}, {"id": "medium", "settings": {}}],
             "capabilities": {"tools": True, "input": ["text"], "output": ["text"]}, "limit": {"context": 32000, "output": 1000}}},
     }}}
     settings = {"model": "fixture/reviewer", "timeoutMs": 10000}

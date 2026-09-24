@@ -51,7 +51,7 @@ describe("doctor", () => {
       expect(exitCode).toBe(0)
       const report = JSON.parse(stdout)
       expect(report.version.package).toBeTruthy()
-      expect(report.config.model).toBe("openai/gpt-5.6-luna")
+      expect(report.config.model).toBe("openai/gpt-6-luna")
       expect(report.config.enforcementMode).toBe("observe")
     } finally {
       rmSync(home, { recursive: true })
@@ -72,7 +72,7 @@ describe("config print-effective", () => {
       expect(exitCode).toBe(0)
       const report = JSON.parse(stdout)
       expect(report.command).toBe("print-effective")
-      expect(report.config.model).toBe("openai/gpt-5.6-luna")
+      expect(report.config.model).toBe("openai/gpt-6-luna")
       expect(report.policy.ruleCount).toBe(0)
       expect(report.policy.effectivePolicyHash).toMatch(/^[0-9a-f]{16}$/)
     } finally {

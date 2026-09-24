@@ -1,5 +1,6 @@
 import { createOpencodeClient } from "@opencode-ai/sdk/v2"
 import { homedir } from "node:os"
+import { splitModel } from "../src/config.ts"
 import type { ReviewAuditRecord } from "../src/types.ts"
 
 const baseUrl = process.argv[2] ?? "http://127.0.0.1:41973"
@@ -33,10 +34,7 @@ const client = createOpencodeClient({
     : {}),
 })
 
-const [driverProviderID, ...driverModelParts] = (
-  process.env.REVIEWER_LIVE_DRIVER_MODEL ?? "opencode/mimo-v2.6-flash-free"
-).split("/")
-const driverModel = { providerID: driverProviderID!, modelID: driverModelParts.join("/") }
+const driverModel = splitModel(process.env.REVIEWER_LIVE_DRIVER_MODEL ?? "openai/gpt-6-luna")
 const isolatedPermissions = [
   { permission: "*", pattern: "*", action: "deny" as const },
   { permission: "approval_test_request", pattern: "*", action: "allow" as const },
@@ -158,7 +156,9 @@ async function answerFirstQuestion(sessionID: string, label: string): Promise<st
 
 /** Read audit records for a session, retrying until a bash review lands. */
 async function auditFor(sessionID: string, timeoutMs = 30_000): Promise<ReviewAuditRecord[]> {
-  const path = `${homedir()}/.local/share/opencode/permission-reviewer-audit.jsonl`
+  const path =
+    process.env.REVIEWER_LIVE_AUDIT_PATH ??
+    `${homedir()}/.local/share/opencode/permission-reviewer-audit.jsonl`
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     const file = Bun.file(path)

@@ -1,0 +1,13 @@
+{
+  "models": [
+    {
+      "id": "jev-commandcode-private",
+      "model": "typesafe/jev",
+      "endpoint": "https://api.commandcode.ai/provider",
+      "apiKeyEnv": "CMD_API_KEY",
+      "transport": "system-one",
+      "format": "system_one",
+      "notes": "Private evaluation only. Do not publish or export results."
+    }
+  ]
+}

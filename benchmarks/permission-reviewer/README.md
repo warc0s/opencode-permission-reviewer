@@ -16,7 +16,8 @@ OpenCode V1 server; the benchmark never handles OAuth tokens. The optional
 `command-code-cli` transport uses the CLI's existing login, not its separately
 billed Provider API. See the [evaluation protocol](./docs/METHODOLOGY.md)
 before using a subscription and the [results table](./RESULTS.md) for published
-evaluations. System One runs are private and the harness refuses to export them.
+evaluations. Local model results are kept in a [separate table](./RESULTS_LOCAL.md).
+System One runs are private and the harness refuses to export them.
 
 ## Validate without model calls
 
@@ -42,6 +43,22 @@ models, start the server separately. Chat profiles are `text`, `json_schema`,
 and `tool`; provider-specific reasoning settings belong in `parameters` and are
 not inferred from an OpenCode variant. Jev uses the separate `system_one`
 profile and accepts no reasoning variant or chat parameters.
+
+For a local Chat Completions server, start with `json_schema` and check a long
+case for context compatibility. Compare its decisions with `text` on the same
+pilot cases before a full run: a profile can improve JSON validity while hurting
+decision quality. If the server rejects the schema or the model performs worse
+with it, use `text` in a separate run and state the fallback in the result. A
+value outside the schema's allowed range is invalid just like malformed JSON.
+Set `--format-retries 1` for one corrective attempt, and report first-attempt
+and final validity separately.
+
+For a local Granite 4.2 8B text run, `graniteThinkingMode` can be `off`, `low`,
+or `full`. It applies the model's documented assistant prefill or low-effort
+user marker when the local server does not expose reasoning controls. This is a
+prompt-level profile, not a native API effort setting; verify the server's
+reasoning-token counts before scoring each mode. It is restricted to the local
+Chat Completions text transport.
 
 ```sh
 cp examples/models.local.example.json models.local.json
@@ -71,8 +88,9 @@ action. Command Code adds its own system prompt and receives the plugin policy
 and evidence together as user content, so its result is a distinct prompt
 profile, not a controlled comparison with `opencode-v1`.
 
-For a private Jev run, copy
-[`models.system-one.example.json`](./examples/models.system-one.example.json),
+For a private Jev run, copy the [OpenCode Zen
+profile](./examples/models.system-one.example.json) or the [Command Code Provider
+API profile](./examples/models.system-one-commandcode.example.json),
 export its named key, set `--concurrency 2 --format-retries 0`, and start with a
 one-case transport check. The typed response is reconciled by the same plugin
 code used at runtime. Raw prompts, answers, and scores stay local: System One

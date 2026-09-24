@@ -38,12 +38,6 @@ type PluginEntry =
   | [string, Record<string, unknown>]
   | { package: string; options?: Record<string, unknown> }
 
-const DEFAULT_PLUGIN_OPTIONS: Record<string, unknown> = {
-  model: "openai/gpt-5.6-luna",
-  variant: "max",
-  timeoutMs: 120_000,
-}
-
 export async function runInit(argv: string[]): Promise<number> {
   const { values } = parseArgs({
     args: argv,
@@ -316,9 +310,7 @@ function buildEntry(pkg: PackageInfo, npm: boolean, host: HostGeneration): Plugi
     const name = `${pkg.name}@^${pkg.version}`
     return host === "v2" ? { package: name, options: {} } : name
   }
-  return host === "v2"
-    ? { package: pkg.root, options: {} }
-    : [pkg.root, { ...DEFAULT_PLUGIN_OPTIONS }]
+  return host === "v2" ? { package: pkg.root, options: {} } : pkg.root
 }
 
 function resolveTargets(

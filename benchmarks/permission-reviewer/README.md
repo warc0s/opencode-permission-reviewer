@@ -50,6 +50,13 @@ value outside the schema's allowed range is invalid just like malformed JSON.
 Set `--format-retries 1` for one corrective attempt, and report first-attempt
 and final validity separately.
 
+For a local Granite 4.2 8B text run, `graniteThinkingMode` can be `off`, `low`,
+or `full`. It applies the model's documented assistant prefill or low-effort
+user marker when the local server does not expose reasoning controls. This is a
+prompt-level profile, not a native API effort setting; verify the server's
+reasoning-token counts before scoring each mode. It is restricted to the local
+Chat Completions text transport.
+
 ```sh
 cp examples/models.local.example.json models.local.json
 bun cli.mjs render --repo ../.. --models models.local.json --out runs/render

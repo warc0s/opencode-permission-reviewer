@@ -26,6 +26,39 @@ test("body transmits only prompt, model, schema and declared parameters", () => 
     { role: "user", content: "INERT DATA" },
   ])
 })
+test("Granite thinking profiles change only the documented text prompt shape", () => {
+  const granite = {
+    ...model,
+    id: "granite-local",
+    model: "granite-4.2-8b",
+    endpoint: "http://127.0.0.1:7860/v1/chat/completions",
+    format: "text",
+  }
+  for (const mode of ["off", "low", "full"])
+    assert.equal(validateModel({ ...granite, graniteThinkingMode: mode }).graniteThinkingMode, mode)
+  const off = buildBody({ ...granite, graniteThinkingMode: "off" }, prepared)
+  assert.deepEqual(off.messages, [
+    { role: "system", content: "POLICY" },
+    { role: "user", content: "INERT DATA" },
+    { role: "assistant", content: "<think></think>" },
+  ])
+  const low = buildBody({ ...granite, graniteThinkingMode: "low" }, prepared)
+  assert.deepEqual(low.messages, [
+    { role: "system", content: "POLICY" },
+    { role: "user", content: "INERT DATA\n\n{reasoning effort: low}" },
+  ])
+  const full = buildBody({ ...granite, graniteThinkingMode: "full" }, prepared)
+  assert.deepEqual(full.messages, buildBody(granite, prepared).messages)
+  assert.throws(
+    () => validateModel({ ...granite, graniteThinkingMode: "bogus" }),
+    /graniteThinkingMode/,
+  )
+  assert.throws(
+    () => validateModel({ ...granite, format: "json_schema", graniteThinkingMode: "off" }),
+    /local Granite/,
+  )
+  assert.throws(() => validateModel({ ...model, graniteThinkingMode: "off" }), /local Granite/)
+})
 test("structured JSON profile uses exact schema", () => {
   const b = buildBody({ ...model, format: "json_schema" }, prepared)
   assert.equal(b.response_format.json_schema.schema, prepared.schema)

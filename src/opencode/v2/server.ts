@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto"
 import type { Plugin } from "@opencode/plugin"
 import type { OpenCodeEvent } from "@opencode/client"
 import { loadResolvedConfig } from "../../config/loader.ts"
-import { reviewBudgetMs } from "../../config.ts"
+import { isSystemOneReviewerModel, reviewBudgetMs } from "../../config.ts"
 import { createAuditWriter } from "../../audit.ts"
 import { applyEscalationDisposition } from "../../escalation.ts"
 import { formatFailureReason } from "../../failure-reason.ts"
@@ -15,7 +15,7 @@ import type { ReviewEnvelope, ReviewExecutionResult } from "../../types.ts"
 import { connectV2Host } from "./connection.ts"
 import { createV2ContextReader } from "./context-reader.ts"
 import { normalizeV2Permission } from "./permission-codec.ts"
-import { V2ReviewerBackend } from "./reviewer-backend.ts"
+import { createV2ReviewerBackend, type V2ReviewBackend } from "./backend-factory.ts"
 import { withTimeout } from "../transport.ts"
 import { V2AskDecisions } from "./event-codec.ts"
 import { REVIEWER_PROMPT_VERSION } from "../../policy.ts"
@@ -30,7 +30,7 @@ export async function setup(ctx: Context): Promise<() => Promise<void>> {
   return setupWithServices(ctx, {
     loadConfig: loadResolvedConfig,
     connect: connectV2Host,
-    createBackend: (context, config) => new V2ReviewerBackend(context, config),
+    createBackend: createV2ReviewerBackend,
   })
 }
 
@@ -40,10 +40,7 @@ export async function setupWithServices(
   services: {
     loadConfig: typeof loadResolvedConfig
     connect: typeof connectV2Host
-    createBackend(
-      context: Context,
-      config: ReturnType<typeof loadResolvedConfig>,
-    ): Pick<V2ReviewerBackend, "owns" | "review" | "waitForIdle">
+    createBackend(context: Context, config: ReturnType<typeof loadResolvedConfig>): V2ReviewBackend
   },
 ): Promise<() => Promise<void>> {
   if (!satisfies(ctx.app.version, SUPPORTED_V2_RANGE))
@@ -52,6 +49,7 @@ export async function setupWithServices(
     )
   const directory = ctx.location.directory
   const config = services.loadConfig(ctx.options, directory, "unknown")
+  const systemOneReviewer = isSystemOneReviewerModel(config.model)
   const generation = randomUUID()
   const identity = randomUUID()
   const backend = services.createBackend(ctx, config)
@@ -94,18 +92,20 @@ export async function setupWithServices(
       generation,
       directory,
       adapter: "permission.evaluate",
-      backend: "v2-isolated-session",
+      backend: systemOneReviewer ? "system-one" : "v2-isolated-session",
       active: !disposed,
       pending: requests.size,
       revision,
-      outputFormat: config.outputFormat,
+      outputFormat: systemOneReviewer ? "system_one" : config.outputFormat,
       model: config.model,
-      variant: config.variant,
+      variant: systemOneReviewer ? "system-one" : config.variant,
       configDegraded: config.configDegraded ?? [],
       effectiveConfigHash,
       connection: connectionState,
       eventConnection: eventStreamHealthy ? "connected" : "unavailable",
-      capabilities: { structuredTool: true, text: true, retention: true, nativeJsonSchema: false },
+      capabilities: systemOneReviewer
+        ? { structuredTool: false, text: false, retention: false, nativeJsonSchema: false }
+        : { structuredTool: true, text: true, retention: true, nativeJsonSchema: false },
     }),
     snapshot: async () => ({ generation, revision, directory, reviews: [...statuses.values()] }),
   })
@@ -237,7 +237,7 @@ export async function setupWithServices(
         await publish(
           createUiStatus(request, "reviewing", {
             model: config.model,
-            variant: config.variant,
+            variant: systemOneReviewer ? "system-one" : config.variant,
             timeoutMs: budget,
           }),
         )
@@ -319,8 +319,13 @@ export async function setupWithServices(
               normalized!.request,
               result.kind === "allow" ? "approved" : result.kind === "deny" ? "denied" : "manual",
               {
-                model: config.model,
-                variant: config.variant,
+                model: result.reviewerModel ?? config.model,
+                variant:
+                  result.reviewerModel && result.reviewerModel !== config.model
+                    ? (config.escalationReviewer?.variant ?? config.variant)
+                    : isSystemOneReviewerModel(config.model)
+                      ? "system-one"
+                      : config.variant,
                 timeoutMs: budget,
                 reason: result.reason,
                 ...(result.decision ? { decision: result.decision } : {}),
@@ -335,7 +340,10 @@ export async function setupWithServices(
             decisionSchemaVersion: 2,
             pluginVersion: packageInfo.version,
             promptVersion: REVIEWER_PROMPT_VERSION,
-            reviewerModel: config.model,
+            reviewerModel: result.reviewerModel ?? config.model,
+            ...(result.reviewerEscalatedFrom
+              ? { reviewerEscalatedFrom: result.reviewerEscalatedFrom }
+              : {}),
             effectiveConfigHash,
             ...(normalized
               ? {

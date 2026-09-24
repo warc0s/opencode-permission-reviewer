@@ -183,10 +183,12 @@ describe("decision parsing and invariants", () => {
 })
 
 describe("configuration", () => {
-  test("defaults to Luna at maximum reasoning", () => {
-    expect(resolveConfig(undefined).model).toBe("openai/gpt-5.6-luna")
-    expect(resolveConfig(undefined).variant).toBe("max")
+  test("defaults to GPT-6 Luna at medium reasoning", () => {
+    expect(resolveConfig(undefined).model).toBe("openai/gpt-6-luna")
+    expect(resolveConfig(undefined).variant).toBe("medium")
     expect(resolveConfig(undefined).outputFormat).toBe("json_schema")
+    expect(resolveConfig(undefined).systemOneConfidenceThreshold).toBe(0.4)
+    expect(resolveConfig(undefined).systemOneReasoningThreshold).toBe(0.38)
   })
 
   test("resolves the output format", () => {
@@ -197,14 +199,41 @@ describe("configuration", () => {
     expect(resolveConfig({ outputFormat: 42 }).outputFormat).toBe("json_schema")
   })
 
+  test("resolves an optional reasoning escalation reviewer", () => {
+    const value = resolveConfig({
+      escalationReviewer: {
+        model: "openai/gpt-5.6-luna",
+        variant: "high",
+        outputFormat: "text",
+        timeoutMs: 30_000,
+      },
+    })
+    expect(value.escalationReviewer).toEqual({
+      model: "openai/gpt-5.6-luna",
+      variant: "high",
+      outputFormat: "text",
+      timeoutMs: 30_000,
+    })
+    expect(resolveConfig({ escalationReviewer: { model: "invalid" } }).escalationReviewer).toBe(
+      undefined,
+    )
+    expect(
+      resolveConfig({ escalationReviewer: { model: "typesafe-ai/jev-1.13.0" } }).escalationReviewer,
+    ).toBeUndefined()
+  })
+
   test("bounds unsafe numeric options", () => {
     const value = resolveConfig({
       timeoutMs: 1,
       confidenceThreshold: -10,
+      systemOneConfidenceThreshold: -10,
+      systemOneReasoningThreshold: 10,
       transcriptMessages: 1_000_000,
     })
     expect(value.timeoutMs).toBe(5_000)
     expect(value.confidenceThreshold).toBe(0.5)
+    expect(value.systemOneConfidenceThreshold).toBe(0.3)
+    expect(value.systemOneReasoningThreshold).toBe(1)
     expect(value.transcriptMessages).toBe(100)
   })
 

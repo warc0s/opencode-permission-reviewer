@@ -7,6 +7,7 @@ import {
   resolveConfig,
   DEFAULT_CONFIG,
   DEFAULT_RISK_POLICY,
+  isValidEscalationReviewer,
 } from "../config.ts"
 import type { PolicyRule, ReviewerConfig } from "../types.ts"
 import type { InlineOptionsTrust } from "./sources.ts"
@@ -144,9 +145,12 @@ export function projectConfigPath(directory: string): string {
  *  applies and inline (trusted, most specific) wins over the project. */
 const TRUST_BOUNDARY_KEYS = new Set([
   "confidenceThreshold",
+  "systemOneConfidenceThreshold",
+  "systemOneReasoningThreshold",
   "audit",
   "auditPath",
   "model",
+  "escalationReviewer",
   "policy",
   "repositoryTrust",
   "actorProfiles",
@@ -190,6 +194,15 @@ export function loadResolvedConfig(
   } else if (globalLayer.status === "read-error") {
     degraded.push("global config file exists but could not be read")
   } else if (globalLayer.status === "ok") {
+    if (
+      globalLayer.raw.escalationReviewer !== undefined &&
+      !isValidEscalationReviewer(globalLayer.raw.escalationReviewer)
+    ) {
+      degraded.push("global config escalationReviewer is invalid and was ignored")
+      console.warn(
+        "permission-reviewer: global config escalationReviewer is invalid and was ignored; automatic approval stays disabled until it is fixed",
+      )
+    }
     const invalidRules = countInvalidPolicyRules(globalLayer.raw.policyRules)
     if (invalidRules > 0) {
       degraded.push(
@@ -241,6 +254,12 @@ export function loadResolvedConfig(
   // inline policyRules treatment above). resolveConfig still clamps the value
   // to the safe default; this only records that the trusted input was lost.
   if (inlineTrust === "trusted" && inlineOptions !== undefined) {
+    if (
+      inlineOptions.escalationReviewer !== undefined &&
+      !isValidEscalationReviewer(inlineOptions.escalationReviewer)
+    ) {
+      degraded.push("inline config escalationReviewer is invalid and was ignored")
+    }
     const inlineEnforcement = inlineOptions.enforcementMode
     if (
       inlineEnforcement !== undefined &&
@@ -325,19 +344,19 @@ function mergeWithTrustBoundary(
   // field must stay authoritative for the loader that computes it).
   delete clamped.configDegraded
 
-  // confidenceThreshold: project can raise but not lower it; non-numeric
-  // values (including null) are ignored so they cannot reset the threshold.
-  if (hasKey(clamped, "confidenceThreshold")) {
-    if (
-      typeof clamped.confidenceThreshold !== "number" ||
-      !Number.isFinite(clamped.confidenceThreshold)
-    ) {
-      delete clamped.confidenceThreshold
-    } else if (
-      typeof trusted.confidenceThreshold === "number" &&
-      clamped.confidenceThreshold < trusted.confidenceThreshold
-    ) {
-      clamped.confidenceThreshold = trusted.confidenceThreshold
+  // Confidence floors: project config can raise but not lower them; non-numeric
+  // values (including null) are ignored so they cannot reset a trusted floor.
+  for (const key of [
+    "confidenceThreshold",
+    "systemOneConfidenceThreshold",
+    "systemOneReasoningThreshold",
+  ] as const) {
+    if (hasKey(clamped, key)) {
+      if (typeof clamped[key] !== "number" || !Number.isFinite(clamped[key])) {
+        delete clamped[key]
+      } else if (typeof trusted[key] === "number" && clamped[key] < trusted[key]) {
+        clamped[key] = trusted[key]
+      }
     }
   }
 
@@ -355,6 +374,7 @@ function mergeWithTrustBoundary(
   // trusted decisions. A repository must not choose where code/context is sent
   // for review, nor rewrite the policy the reviewer enforces.
   delete clamped.model
+  delete clamped.escalationReviewer
   delete clamped.policy
 
   // repositoryTrust: the project layer may only declare its own repository

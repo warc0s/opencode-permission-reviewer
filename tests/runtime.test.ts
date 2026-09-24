@@ -34,8 +34,8 @@ describe("runtime decisions", () => {
     const prompt = harness.client.prompts[0] as {
       body: { model: unknown; variant: string; tools: Record<string, boolean> }
     }
-    expect(prompt.body.model).toEqual({ providerID: "openai", modelID: "gpt-5.6-luna" })
-    expect(prompt.body.variant).toBe("max")
+    expect(prompt.body.model).toEqual({ providerID: "openai", modelID: "gpt-6-luna" })
+    expect(prompt.body.variant).toBe("medium")
     expect(
       Object.entries(prompt.body.tools)
         .filter(([, enabled]) => enabled)
@@ -594,7 +594,13 @@ describe("event boundary", () => {
       directory: "/workspace/project",
       worktree: "/workspace/project",
     }
-    const hooks = await server(input as never, { retainReviewSessions: false, audit: false })
+    const hooks = await server(input as never, {
+      model: "openai/gpt-5.6-luna",
+      variant: "max",
+      outputFormat: "json_schema",
+      retainReviewSessions: false,
+      audit: false,
+    })
     await hooks.event?.({ event: { type: "permission.asked", properties: request() } as never })
     await completion
     await hooks.dispose?.()

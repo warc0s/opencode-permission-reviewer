@@ -1,7 +1,8 @@
 /** @jsxImportSource @opentui/solid */
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import { createSignal, Show } from "solid-js"
-import { DEFAULT_CONFIG, resolveConfig, reviewBudgetMs } from "./config.ts"
+import { DEFAULT_CONFIG, reviewBudgetMs } from "./config.ts"
+import { loadResolvedConfig } from "./config/loader.ts"
 // Import the normalizer directly. Going through ./runtime.ts would evaluate the
 // whole server engine (coordinator, git/ssh evidence, node:child_process) inside
 // the TUI process for a single unused re-export.
@@ -36,7 +37,7 @@ function notifyManual(api: TuiPluginApi, status: ReviewUiStatus): void {
 }
 
 export const tui: TuiPlugin = async (api, options) => {
-  const config = resolveConfig(options)
+  const config = loadResolvedConfig(options)
   const state = new ReviewUiState({
     model: config.model,
     variant: config.variant,

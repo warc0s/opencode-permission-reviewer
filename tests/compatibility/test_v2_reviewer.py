@@ -16,7 +16,7 @@ import pytest
 V2_VERSIONS = (
     [os.environ["V2_HOST_VERSION"]]
     if os.environ.get("V2_HOST_VERSION")
-    else ["2.0.3", "2.0.11", "2.0.14"]
+    else ["2.0.3", "2.0.11", "2.0.15"]
 )
 V2_CASES = [
     (version, "json_schema", outcome)
@@ -33,7 +33,8 @@ V2_CASES = [
         ("2.0.3", "json_schema", "retained"),
         ("2.0.3", "json_schema", "brake"),
         ("2.0.3", "json_schema", "schema-retry"),
-        ("2.0.14", "json_schema", "interrupted"),
+        ("2.0.15", "json_schema", "interrupted"),
+        ("2.0.15", "json_schema", "brake"),
     ]
     if not os.environ.get("V2_HOST_VERSION")
     else []
@@ -125,7 +126,7 @@ def test_v2_reviewer_applies_and_cleans_up(launch_host, activate_host, model_ser
     provider = {"providers": {"fixture": {
         "package": "@opencode/ai/providers/openai-compatible",
         "settings": {"baseURL": model_server["url"], "apiKey": "synthetic-fixture"},
-        "models": {"reviewer": {"name": "Fixture reviewer", "variants": [{"id": "max", "settings": {}}],
+            "models": {"reviewer": {"name": "Fixture reviewer", "variants": [{"id": "max", "settings": {}}, {"id": "medium", "settings": {}}],
             "capabilities": {"tools": True, "input": ["text"], "output": ["text"]},
             "limit": {"context": 32000, "output": 1000}}},
     }}}

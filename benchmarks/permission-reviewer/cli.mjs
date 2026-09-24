@@ -18,6 +18,7 @@ import { runBenchmark, rowBase } from "./lib/run.mjs"
 import { compareRows, printSummary, summarize } from "./lib/metrics.mjs"
 import { exportReview } from "./lib/audit.mjs"
 import { publicReport } from "./lib/publication.mjs"
+import { systemOneDifficultSubset } from "./lib/subsets.mjs"
 const ROOT = dirname(fileURLToPath(import.meta.url))
 const BOOLS = new Set([
   "resume",
@@ -54,6 +55,7 @@ const VALUES = new Set([
   "bootstrap",
   "sample",
   "track",
+  "difficult-from",
 ])
 function args(argv) {
   const out = {}
@@ -85,7 +87,7 @@ async function main() {
   const command = process.argv[2] ?? "help"
   if (["help", "--help", "-h"].includes(command)) {
     console.log(
-      `PRB-600: permission model benchmark, audited source/core replay.\n\nCommands:\n  node cli.mjs validate\n  node cli.mjs baseline --out runs/smoke [--oracle]\n  bun cli.mjs render --repo /path/plugin --models models.local.json --out runs/render\n  bun cli.mjs run --repo /path/plugin --models models.local.json --out runs/comparison\n  node cli.mjs score --run runs/comparison\n  node cli.mjs audit --run runs/comparison --out reviews/manual.jsonl\n  node cli.mjs compare --left RUN --left-model ID --right RUN --right-model ID\n  node cli.mjs export-public --run runs/comparison --out reviews/public.json\n\nrun: --split all|dev|validation|holdout, --category NAME, --id ID, --limit N,\n     --repeats 1, --concurrency 2, --seed 17, --max-calls 1200,\n     --min-request-delay-ms 0, --max-request-delay-ms 0,\n     --timeout-ms 120000, --http-retries 1, --format-retries 1,\n     --track reviewer|system, --bootstrap 500, --resume, --allow-drift\nAll fixture commands are inert data. Requests go only to configured provider or local OpenCode host URLs.\nLive evaluation requires Bun and the plugin checkout.\nbaseline is a metric-only test, NOT model performance or host integration.\n`,
+      `PRB-600: permission model benchmark, audited source/core replay.\n\nCommands:\n  node cli.mjs validate\n  node cli.mjs baseline --out runs/smoke [--oracle]\n  bun cli.mjs render --repo /path/plugin --models models.local.json --out runs/render\n  bun cli.mjs run --repo /path/plugin --models models.local.json --out runs/comparison\n  node cli.mjs score --run runs/comparison\n  node cli.mjs audit --run runs/comparison --out reviews/manual.jsonl\n  node cli.mjs compare --left RUN --left-model ID --right RUN --right-model ID\n  node cli.mjs export-public --run runs/comparison --out reviews/public.json\n\nrun: --split all|dev|validation|holdout, --category NAME, --id ID, --limit N,\n     --repeats 1, --concurrency 2, --seed 17, --max-calls 1200,\n     --min-request-delay-ms 0, --max-request-delay-ms 0,\n     --timeout-ms 120000, --http-retries 1, --format-retries 1,\n     --track reviewer|system, --bootstrap 500, --difficult-from SYSTEM_ONE_RUN,\n     --resume, --allow-drift\nAll fixture commands are inert data. Requests go only to configured provider or local OpenCode host URLs.\nLive evaluation requires Bun and the plugin checkout.\nbaseline is a metric-only test, NOT model performance or host integration.\n`,
     )
     return
   }
@@ -149,12 +151,29 @@ async function main() {
     return
   }
   const data = await loadDataset(resolve(a.data ?? resolve(ROOT, "data/cases.jsonl")))
+  let difficultSubset
+  if (a["difficult-from"] !== undefined) {
+    assert(command === "run", "--difficult-from is supported only by run.")
+    assert(
+      a.split === undefined &&
+        a.category === undefined &&
+        a.id === undefined &&
+        a.limit === undefined,
+      "--difficult-from already defines the complete subset; do not combine filters.",
+    )
+    difficultSubset = systemOneDifficultSubset(
+      await readJSON(resolve(a["difficult-from"], "results.json")),
+      data.hash,
+      data.cases.length,
+    )
+  }
   const limit =
     a.limit === undefined ? undefined : numberArg(a.limit, 1, 1, data.cases.length, "limit")
   const cases = selectCases(data.cases, {
     split: a.split ?? "all",
     category: a.category,
     id: a.id,
+    ids: difficultSubset?.ids,
     limit,
   })
   if (command === "validate") {
@@ -238,6 +257,11 @@ async function main() {
   }
   assert(["run", "render", "parity"].includes(command), "Unknown command: " + command)
   const adapter = await openPlugin(a.repo, { allowDrift: !!a["allow-drift"] })
+  if (difficultSubset)
+    assert(
+      difficultSubset.provenance.sourcePluginSha256 === adapter.snapshot.sourceSha256,
+      "Difficult-subset source used a different plugin source.",
+    )
   if (command === "parity") {
     console.log(JSON.stringify(adapter.snapshot, null, 2))
     return
@@ -245,6 +269,11 @@ async function main() {
   assert(a.models, "Specify --models examples/models.local.example.json (copy and edit first).")
   const config = await readJSON(resolve(a.models))
   const models = (Array.isArray(config) ? config : config.models).map(validateModel)
+  if (difficultSubset)
+    assert(
+      models.every((model) => model.transport !== "system-one"),
+      "--difficult-from is for follow-up reasoning models, not another System One run.",
+    )
   assert(a.out, "Specify a new output directory via --out.")
   if (command === "render") {
     assert(!(await exists(resolve(a.out, "requests.jsonl"))), "Render file already exists.")
@@ -261,9 +290,9 @@ async function main() {
             promptHash: p.promptHash,
             evidenceHash: p.evidenceHash,
             actionEvidenceComplete: p.actionEvidenceComplete,
-            system: p.system,
-            user: p.user,
-            schema: p.schema,
+            ...(model.transport === "system-one"
+              ? { systemOne: p.systemOne }
+              : { system: p.system, user: p.user, schema: p.schema }),
           }),
         )
       }
@@ -296,6 +325,7 @@ async function main() {
     bootstrap,
     resume: !!a.resume,
     storePrompts: !a["no-prompts"],
+    ...(difficultSubset ? { difficultSubset: difficultSubset.provenance } : {}),
   }
   console.log(
     `${cases.length} cases x ${models.length} models x ${repeats} repetitions = ${total} decisions before retries; transport request cap ${options.maxCalls}.`,

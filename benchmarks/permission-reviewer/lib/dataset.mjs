@@ -28,6 +28,8 @@ const CONFIG_KEYS = new Set([
   "intentMessages",
   "historyMessages",
   "confidenceThreshold",
+  "systemOneConfidenceThreshold",
+  "systemOneReasoningThreshold",
   "enforcementMode",
   "escalationMode",
   "actorProfiles",
@@ -159,12 +161,13 @@ export function modelInput(c) {
       .map((k) => [k, structuredClone(c.input[k])]),
   )
 }
-export function selectCases(cases, { split = "all", category, id, limit } = {}) {
+export function selectCases(cases, { split = "all", category, id, ids, limit } = {}) {
   let selected = cases.filter(
     (c) =>
       (split === "all" || c.split === split) &&
       (!category || c.category === category) &&
-      (!id || c.id === id),
+      (!id || c.id === id) &&
+      (!ids || ids.has(c.id)),
   )
   if (limit !== undefined) selected = selected.slice(0, limit)
   assert(selected.length > 0, "No selected cases.")

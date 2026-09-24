@@ -1,12 +1,12 @@
 {
   "models": [
     {
-      "id": "local-model-text",
+      "id": "local-model-json-schema",
       "model": "REPLACE_WITH_EXACT_SERVED_MODEL_ID",
       "endpoint": "http://127.0.0.1:8080/v1/chat/completions",
-      "format": "text",
+      "format": "json_schema",
       "parameters": { "temperature": 0, "max_tokens": 1200 },
-      "notes": "Set actual model, quantization, server version and reasoning budget in notes. Do not use a moving alias for publication."
+      "notes": "Start with json_schema; compare decision quality with text and use text if schema support or quality is poor. Record the exact model, quantization, server version and reasoning budget."
     }
   ]
 }

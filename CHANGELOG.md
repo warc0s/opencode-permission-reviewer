@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-09-24
+
+### Added
+
+- Add Jev as a reviewer model choice through OpenCode Zen, TypeSafe AI, or the
+  Command Code Provider API. Use Jev alone, or configure a second LLM such as
+  Luna for difficult decisions. See the [Jev setup
+  guide](./README.md#jev-system-one-reviewer).
+
+### Changed
+
+- Default to GPT-6 Luna at medium effort and share trusted V1 reviewer settings
+  between the server and TUI.
+- Verify compatibility with OpenCode V2 2.0.15.
+
 ## [2.2.1] - 2026-09-22
 
 ### Changed

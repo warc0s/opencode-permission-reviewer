@@ -1,18 +1,18 @@
 import { readFile, readdir } from "node:fs/promises"
+import { execFileSync } from "node:child_process"
 import { resolve, join } from "node:path"
 import { pathToFileURL } from "node:url"
 import { createHash } from "node:crypto"
 import { assert, sha256 } from "./util.mjs"
 
-export const PINNED_COMMIT = "dc5fd3d820dd72c0406fd46fc1dd8f0875189fc2"
 // Git blob hashes of the security-critical files actually inspected for this kit.
 export const PINNED_BLOBS = {
   "src/policy.ts": "641e81586e738cfdee64c61bb341529707eac4eb",
   "src/context.ts": "e099dacaacca78ad4474bd35d36a291c190df256",
-  "src/config.ts": "21147ed99fb5499f584f5033cc5a2b6fc660ddf6",
+  "src/config.ts": "5799271b0c8ea441f96e89ce5f1c085879ba72f6",
   "src/decision.ts": "ad3443f3bf2ca1b34b3b23e8115c79148e19238b",
   "src/policy/policy-engine.ts": "b4470dc188d956cc0ed25454c2d34465110fe1be",
-  "src/escalation.ts": "ad900880c33f8b78f2f636ce4aa18f0c42d40911",
+  "src/escalation.ts": "947f5ed665600927e21be343995cdc4993a45f5a",
   "src/core/review-engine.ts": "6678bcec69c6bd32f11730ce5629c269c951179e",
   "src/emergency-brake.ts": "6f1b65a6f2b125a9e07824922a9ac57ce39ef2fc",
   "src/redact.ts": "78394b5cf92d787e92037ed9e6c44df323b8ed48",
@@ -20,6 +20,7 @@ export const PINNED_BLOBS = {
   "src/capability/bash-analyzer.ts": "f11abc52f29f44452c340a66e9e8fe39f5ebc515",
   "src/shell-lexer.ts": "5865d1917b6e61dd2da671611254e93c8de677ca",
   "src/capability/heredoc-extractor.ts": "81995fef64dde83f9a9b45c8aca2fa11518d64b6",
+  "src/system-one/review.ts": "5ab2c36e4dd19634b9de7a02ffeb9937414112e2",
 }
 const gitBlob = (bytes) =>
   createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex")
@@ -46,8 +47,18 @@ export async function sourceSnapshot(repo) {
     if (actual !== expected) differences.push({ path, expected, actual })
   }
   const packageJSON = JSON.parse(await readFile(resolve(repo, "package.json"), "utf8"))
+  let pinnedCommit = null
+  try {
+    // The blob map gates source parity; record the checked-out commit for provenance.
+    pinnedCommit = execFileSync("git", ["-C", resolve(repo), "rev-parse", "HEAD"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim()
+  } catch {
+    // A source copy can still be compared by its file hashes without Git metadata.
+  }
   return {
-    pinnedCommit: PINNED_COMMIT,
+    pinnedCommit,
     packageVersion: packageJSON.version,
     inspectedBlobDifferences: differences,
     sourceSha256: sha256(files),
@@ -87,7 +98,7 @@ export async function openPlugin(repo, { allowDrift = false, allowNode = false }
     "Inspected plugin files differ from the pinned snapshot. Use the pinned checkout or explicitly pass --allow-drift; differences are recorded.",
   )
   const load = (path) => import(pathToFileURL(resolve(repo, path)).href)
-  const [policy, context, config, decision, escalation, engine, parser, analyzer] =
+  const [policy, context, config, decision, escalation, engine, parser, analyzer, systemOne] =
     await Promise.all([
       load("src/policy.ts"),
       load("src/context.ts"),
@@ -97,6 +108,7 @@ export async function openPlugin(repo, { allowDrift = false, allowNode = false }
       load("src/core/review-engine.ts"),
       load("src/capability/command-parser.ts"),
       load("src/capability/bash-analyzer.ts"),
+      load("src/system-one/review.ts"),
     ])
   assert(
     typeof context.buildEvidenceResult === "function" &&
@@ -114,7 +126,10 @@ export async function openPlugin(repo, { allowDrift = false, allowNode = false }
         ...overrides.riskPolicy,
         allow: { ...base.riskPolicy.allow, ...overrides.riskPolicy?.allow },
       },
-      model: model?.model ?? base.model,
+      model:
+        model?.transport === "system-one" && model.model === "typesafe/jev"
+          ? "commandcode/typesafe/jev"
+          : (model?.model ?? base.model),
       variant: model?.variant ?? base.variant,
       outputFormat: model?.format === "text" ? "text" : "json_schema",
       audit: false,
@@ -207,6 +222,7 @@ export async function openPlugin(repo, { allowDrift = false, allowNode = false }
     promptVersion: policy.REVIEWER_PROMPT_VERSION,
     parse: (text) => decision.parseDecisionFromText(text),
     parseObject: (obj) => decision.parseDecision(obj),
+    parseSystemOne: (obj, cfg) => systemOne.parseSystemOneReview(obj, cfg),
     async prepare(input, model) {
       const cfg = buildConfig(input, model),
         envelope = envelopeFor(input, cfg)
@@ -233,6 +249,10 @@ export async function openPlugin(repo, { allowDrift = false, allowNode = false }
         (model?.format === "tool"
           ? "\nReturn the decision using permission_reviewer_result exactly once, then stop."
           : "")
+      const state = {
+        trustedPolicy: { reviewer: policy.REVIEWER_SYSTEM_PROMPT, tenant: tenantPolicy },
+        untrustedEvidence: evidence.text,
+      }
       return {
         config: cfg,
         envelope,
@@ -240,26 +260,39 @@ export async function openPlugin(repo, { allowDrift = false, allowNode = false }
         user,
         evidence: evidence.text,
         schema: decision.DECISION_SCHEMA,
+        systemOne: { state, questions: systemOne.SYSTEM_ONE_QUESTIONS },
         reachable: reached,
         bypass: reached ? null : preflight,
-        promptHash: sha256({
-          system,
-          user,
-          format: model?.format ?? "text",
-          schema: decision.DECISION_SCHEMA,
-        }),
+        promptHash:
+          model?.format === "system_one"
+            ? sha256({
+                state,
+                questions: systemOne.SYSTEM_ONE_QUESTIONS,
+                specVersion: systemOne.SYSTEM_ONE_SPEC_VERSION,
+              })
+            : sha256({
+                system,
+                user,
+                format: model?.format ?? "text",
+                schema: decision.DECISION_SCHEMA,
+              }),
         evidenceHash: sha256(evidence.text),
         actionEvidenceComplete: envelope.actionEvidenceComplete,
       }
     },
-    async finish(prepared, parsed, errorKind) {
+    async finish(prepared, parsed, errorKind, parsedSystemOne) {
       let result
-      if (parsed)
-        result = {
-          ...decision.enforceDecision(parsed, prepared.config),
-          decisionSource: "llm-reviewer",
-        }
-      else
+      if (parsed) {
+        result = parsedSystemOne
+          ? {
+              ...systemOne.enforceParsedSystemOneReview(parsedSystemOne, prepared.config),
+              decisionSource: "system-one-reviewer",
+            }
+          : {
+              ...decision.enforceDecision(parsed, prepared.config),
+              decisionSource: "llm-reviewer",
+            }
+      } else
         result = escalation.applyEscalationDisposition(
           {
             kind: "escalate",

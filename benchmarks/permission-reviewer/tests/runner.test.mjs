@@ -8,7 +8,7 @@ import { loadDataset } from "../lib/dataset.mjs"
 import { runBenchmark } from "../lib/run.mjs"
 import { readJSON, readJSONL } from "../lib/util.mjs"
 import { exportReview } from "../lib/audit.mjs"
-import { fakeAdapter, model, success } from "./helpers.mjs"
+import { decision, fakeAdapter, model, success } from "./helpers.mjs"
 const data = await loadDataset(fileURLToPath(new URL("../data/cases.jsonl", import.meta.url))),
   cases = data.cases.slice(0, 3)
 const base = (out) => ({
@@ -164,6 +164,112 @@ test(
       }
     }),
 )
+test("System One runner stores typed inputs, difficulty, and caps workers", async () =>
+  temp(async (dir) => {
+    process.env.PRB_TEST_SYSTEM_ONE_KEY = "synthetic-test-credential"
+    const systemOneModel = {
+      id: "jev-private",
+      model: "jev-1.13-free",
+      endpoint: "https://opencode.ai/zen",
+      apiKeyEnv: "PRB_TEST_SYSTEM_ONE_KEY",
+      transport: "system-one",
+      format: "system_one",
+    }
+    const adapter = {
+      ...fakeAdapter,
+      parseSystemOne: () => ({
+        decision: decision("escalate"),
+        difficultReason: "Synthetic difficult decision.",
+        reasoningRecommended: true,
+      }),
+      prepare: async (input) => {
+        const prepared = await fakeAdapter.prepare(input)
+        return {
+          ...prepared,
+          systemOne: {
+            state: { trustedPolicy: "TEST ONLY", untrustedEvidence: prepared.evidence },
+            questions: { outcome: { type: "choice", criteria: { allow: "yes", deny: "no" } } },
+          },
+        }
+      },
+    }
+    const run = {
+      ...base(dir),
+      cases: cases.slice(0, 1),
+      models: [systemOneModel],
+      adapter,
+      options: { ...base(dir).options, concurrency: 2, formatRetries: 0 },
+      completion: async () => ({
+        ok: true,
+        status: 200,
+        latencyMs: 1,
+        extracted: { systemOne: true },
+        raw: { model: "jev-1.13-free", answers: {} },
+      }),
+    }
+    try {
+      const result = await runBenchmark(run)
+      assert(result.complete)
+      const row = (await readJSONL(join(dir, "results.jsonl"))).rows[0]
+      assert.equal(row.runMode, "system-one-core-replay")
+      assert.equal(row.systemOneDifficulty, "Synthetic difficult decision.")
+      assert.equal(row.systemOneReasoningRecommended, true)
+      assert.equal(row.prompt.state.trustedPolicy, "TEST ONLY")
+      assert(!("system" in row.prompt))
+      await assert.rejects(
+        runBenchmark({
+          ...run,
+          out: join(dir, "rejected"),
+          options: { ...run.options, concurrency: 3 },
+        }),
+        /at most two workers/,
+      )
+    } finally {
+      delete process.env.PRB_TEST_SYSTEM_ONE_KEY
+    }
+  }))
+test("invalid System One output stays an invalid row instead of entering the text parser", async () =>
+  temp(async (dir) => {
+    process.env.PRB_TEST_SYSTEM_ONE_KEY = "synthetic-test-credential"
+    const adapter = {
+      ...fakeAdapter,
+      parseSystemOne: () => undefined,
+      prepare: async (input) => ({
+        ...(await fakeAdapter.prepare(input)),
+        systemOne: { state: {}, questions: {} },
+      }),
+    }
+    try {
+      const result = await runBenchmark({
+        ...base(dir),
+        cases: cases.slice(0, 1),
+        models: [
+          {
+            id: "jev-invalid",
+            model: "jev-1.13-free",
+            endpoint: "https://opencode.ai/zen",
+            apiKeyEnv: "PRB_TEST_SYSTEM_ONE_KEY",
+            transport: "system-one",
+            format: "system_one",
+          },
+        ],
+        adapter,
+        completion: async () => ({
+          ok: true,
+          status: 200,
+          latencyMs: 1,
+          extracted: { systemOne: true },
+          raw: { model: "jev-1.13-free", answers: {} },
+        }),
+      })
+      assert(result.complete)
+      const row = (await readJSONL(join(dir, "results.jsonl"))).rows[0]
+      assert.equal(row.status, "invalid")
+      assert.equal(row.decision, null)
+    } finally {
+      delete process.env.PRB_TEST_SYSTEM_ONE_KEY
+    }
+  }))
 test("a random serial delay stays within bounds between provider requests", async () =>
   temp(async (dir) => {
     const started = []

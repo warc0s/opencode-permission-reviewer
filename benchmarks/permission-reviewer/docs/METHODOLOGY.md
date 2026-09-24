@@ -181,6 +181,42 @@ are the maximum supported by this transport. Use a one-case pilot to verify
 the model and effort before a full run, and keep format retries disabled when
 comparing first-shot decision quality.
 
+## Jev System One transport
+
+`system-one` sends the plugin's trusted policy and untrusted evidence as typed
+state with a fixed set of choice and probability questions. It uses the small
+official TypeSafe AI SDK and never creates a chat session or exposes tools. The
+model configuration must use `format: "system_one"`, a Jev model ID, an HTTPS
+API root, and an environment-variable name for the credential. Variants and
+chat completion parameters are rejected because this API has no reasoning
+effort control.
+
+The runtime and benchmark share the same response parser and deterministic
+reconciliation rules. A complete typed response may still be marked difficult
+when its confidence is below the risk-specific floor, its signals conflict, or
+it explicitly requests escalation. The pure benchmark records that classification
+but does not call the optional runtime reasoning reviewer. Follow-up Luna runs
+must therefore use a separately selected difficult-case subset and retain the
+parent Jev run as provenance.
+
+Use `--difficult-from runs/jev-private` for those follow-up runs. The selector
+requires one complete System One model with one repeat, rejects transport-failed
+rows, verifies the corpus and plugin source, and records the parent fingerprint
+plus a hash of the selected case IDs. Run medium and high as separate immutable
+outputs with the same two-worker and retry settings. This measures the hybrid
+route without spending reasoning calls on decisions Jev already handled.
+
+Use no more than two workers and set `--format-retries 0`. The SDK performs no
+hidden retries in the benchmark; `--http-retries` is the only transport retry
+control. Start with one case, verify the returned model and usage, then run the
+complete corpus. Keep the model file ignored if it contains account-specific
+details, even though the credential itself is only read from the environment.
+
+System One evaluations are private. Raw runs, derived subsets, comparisons, and
+scores must remain local and uncommitted. The harness rejects `export-public`
+for any run containing a System One transport or format, so it cannot be added
+to the public results table through the normal publication path.
+
 ## Logs, quotas, and publication
 
 Raw `runs/` records contain prompts, evidence, model responses, host session

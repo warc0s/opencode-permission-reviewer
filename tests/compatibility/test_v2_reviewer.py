@@ -61,6 +61,7 @@ def model_server():
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             calls.append(body)
+            calls[-1]["t"] = time.monotonic()
             time.sleep(control["delay"])
             tool_name = next((tool.get("function", {}).get("name") for tool in body.get("tools", [])
                              if tool.get("function", {}).get("name") in {"permission_reviewer_result", "StructuredOutput"}), None)
@@ -272,7 +273,8 @@ for line in sys.stdin:
     # the property under test is reviewer location reuse, not review latency.
     host = launch_host("v2", binary, {"plugins": [package]},
                        reviewer={"model": "fixture/reviewer", "timeoutMs": 15000,
-                                 "reviewBudgetMs": 30000, "retainReviewSessions": True},
+                                 "reviewBudgetMs": 30000, "retainReviewSessions": True,
+                                 "debug": True},
                        global_config=provider)
     activate_host(host, "v2")
 
@@ -295,15 +297,32 @@ for line in sys.stdin:
     assert starts.exists(), "Operational MCP did not start"
     assert len(starts.read_text().splitlines()) == 1
 
+    def dump_diagnostics(index, elapsed):
+        print(f"\n[diag] review({index}) left the permission pending after {elapsed:.2f}s "
+              f"with {len(calls)} model calls", flush=True)
+        for call in calls[-6:]:
+            print(f"[diag-call] t={call.get('t')} model={call.get('model')} "
+                  f"messages={len(call.get('messages', []))}", flush=True)
+        log = host["root"] / "server.log"
+        if log.exists():
+            lines = log.read_text(errors="replace").splitlines()
+            print("\n".join(f"[server.log] {line}" for line in lines[-120:]), flush=True)
+        audit = host["root"] / "reviewer-audit.jsonl"
+        if audit.exists():
+            print(f"[audit]\n{audit.read_text()}", flush=True)
+
     def review(index):
         session = request("/api/session", {"title": f"Fixture operation {index}",
             "location": {"directory": str(host["project"])},
             "permissions": [{"action": "shell", "resource": "*", "effect": "ask"}]})
         session_id = session.get("data", session)["id"]
+        started = time.monotonic()
         outcome = request(f"/api/session/{session_id}/permission", {
             "action": "shell", "resources": ["printf *"],
             "metadata": {"command": f"printf fixture-{index}"},
         })
+        if outcome["data"]["effect"] != "allow":
+            dump_diagnostics(index, time.monotonic() - started)
         assert outcome["data"]["effect"] == "allow", outcome
         return session_id
 

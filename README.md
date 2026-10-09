@@ -166,9 +166,10 @@ of unknown provenance can only tighten security restrictions. The TUI reads
 effective settings and review status from the server.
 
 V2 uses the official authenticated client to manage isolated reviewer sessions
-for normal models. It reuses one reviewer location per backend, excludes
-configured MCP servers there, and checks that the location has no MCP servers
-before each review. Jev instead uses its direct typed API.
+for normal models. It reuses one reviewer location per backend, removes every
+MCP server there, including ones other plugins add from code, and checks that
+the location has no MCP servers before each review. Jev instead uses its direct
+typed API.
 The registered service is discovered without starting or stopping it. For an
 independent `serve`, configure `OPENCODE_PERMISSION_REVIEWER_HOST_URL` and the
 host's `OPENCODE_PASSWORD` in the trusted process environment. An identity check

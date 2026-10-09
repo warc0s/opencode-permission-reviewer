@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep MCP servers that other plugins add from code, such as
+  `@upstash/context7-opencode`, out of the OpenCode V2 reviewer Location. They
+  previously made every review fail closed.
+
 ## [2.4.0] - 2026-10-02
 
 ### Added

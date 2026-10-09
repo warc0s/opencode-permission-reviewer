@@ -43,6 +43,74 @@ V2_CASES = [
 )
 
 
+# A stdio MCP server that records each process start and its working directory, so tests
+# can count spawns and see which location started them.
+MCP_FIXTURE_SOURCE = '''import json
+import os
+import sys
+from pathlib import Path
+
+with Path(sys.argv[1]).open("a") as output:
+    output.write(str(os.getpid()) + " " + os.getcwd() + "\\n")
+
+for line in sys.stdin:
+    request = json.loads(line)
+    if "id" not in request:
+        continue
+    result = {"protocolVersion": "2025-11-25", "capabilities": {"tools": {}},
+              "serverInfo": {"name": "fixture", "version": "1"}} if request["method"] == "initialize" else {"tools": []}
+    print(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}), flush=True)
+'''
+
+
+def reviewer_provider(model_server):
+    return {"providers": {"fixture": {
+        "package": "@opencode/ai/providers/openai-compatible",
+        "settings": {"baseURL": model_server["url"], "apiKey": "synthetic-fixture"},
+        "models": {"reviewer": {"name": "Fixture reviewer", "variants": [{"id": "medium", "settings": {}}],
+            "capabilities": {"tools": True, "input": ["text"], "output": ["text"]},
+            "limit": {"context": 32000, "output": 1000}}},
+    }}}
+
+
+def request(host, path, body=None):
+    req = urllib.request.Request(host["url"] + path,
+        data=None if body is None else json.dumps(body).encode(),
+        headers={**host["headers"], "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=30) as response:
+        return json.load(response) if response.status != 204 else None
+
+
+def delete_session(host, session_id):
+    req = urllib.request.Request(host["url"] + "/api/session/" + session_id,
+        headers=host["headers"], method="DELETE")
+    with urllib.request.urlopen(req, timeout=5):
+        pass
+
+
+def mcp_servers(host, directory):
+    query = urllib.parse.urlencode({"location[directory]": str(directory)})
+    response = request(host, "/api/mcp?" + query)
+    return response.get("data", response)
+
+
+def audit_records(host):
+    try:
+        return [json.loads(line) for line in (host["root"] / "reviewer-audit.jsonl").read_text().splitlines()]
+    except (OSError, json.JSONDecodeError):
+        return []
+
+
+def audit_record(host, session_id):
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        record = next((record for record in audit_records(host) if record.get("sessionID") == session_id), None)
+        if record:
+            return record
+        time.sleep(0.05)
+    return None
+
+
 @pytest.fixture
 def model_server():
     calls = []
@@ -245,29 +313,9 @@ def test_v2_reuses_mcp_free_reviewer_location(launch_host, activate_host, model_
     package = os.environ.get("PLUGIN_PACKAGE_PATH", str(Path(__file__).resolve().parents[2]))
     starts = tmp_path / "mcp-starts.txt"
     mcp = tmp_path / "mcp.py"
-    mcp.write_text('''import json
-import os
-import sys
-from pathlib import Path
-
-with Path(sys.argv[1]).open("a") as output:
-    output.write(str(os.getpid()) + "\\n")
-
-for line in sys.stdin:
-    request = json.loads(line)
-    if "id" not in request:
-        continue
-    result = {"protocolVersion": "2025-11-25", "capabilities": {"tools": {}},
-              "serverInfo": {"name": "fixture", "version": "1"}} if request["method"] == "initialize" else {"tools": []}
-    print(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}), flush=True)
-''', encoding="utf-8")
-    provider = {"providers": {"fixture": {
-        "package": "@opencode/ai/providers/openai-compatible",
-        "settings": {"baseURL": model_server["url"], "apiKey": "synthetic-fixture"},
-        "models": {"reviewer": {"name": "Fixture reviewer", "variants": [{"id": "medium", "settings": {}}],
-            "capabilities": {"tools": True, "input": ["text"], "output": ["text"]},
-            "limit": {"context": 32000, "output": 1000}}},
-    }}, "mcp": {"servers": {"fixture": {"type": "local", "command": [sys.executable, str(mcp), str(starts)]}}}}
+    mcp.write_text(MCP_FIXTURE_SOURCE, encoding="utf-8")
+    provider = {**reviewer_provider(model_server),
+                "mcp": {"servers": {"fixture": {"type": "local", "command": [sys.executable, str(mcp), str(starts)]}}}}
     # Reviews must settle within the reviewer budget even on loaded runners;
     # the property under test is reviewer location reuse, not review latency.
     host = launch_host("v2", binary, {"plugins": [package]},
@@ -276,31 +324,19 @@ for line in sys.stdin:
                        global_config=provider)
     activate_host(host, "v2")
 
-    def request(path, body=None):
-        req = urllib.request.Request(host["url"] + path,
-            data=None if body is None else json.dumps(body).encode(),
-            headers={**host["headers"], "Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=30) as response:
-            return json.load(response) if response.status != 204 else None
-
-    def mcp_servers(directory):
-        query = urllib.parse.urlencode({"location[directory]": str(directory)})
-        response = request("/api/mcp?" + query)
-        return response.get("data", response)
-
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline and not starts.exists():
-        mcp_servers(host["project"])
+        mcp_servers(host, host["project"])
         time.sleep(0.05)
     assert starts.exists(), "Operational MCP did not start"
     assert len(starts.read_text().splitlines()) == 1
 
     def review(index):
-        session = request("/api/session", {"title": f"Fixture operation {index}",
+        session = request(host, "/api/session", {"title": f"Fixture operation {index}",
             "location": {"directory": str(host["project"])},
             "permissions": [{"action": "shell", "resource": "*", "effect": "ask"}]})
         session_id = session.get("data", session)["id"]
-        outcome = request(f"/api/session/{session_id}/permission", {
+        outcome = request(host, f"/api/session/{session_id}/permission", {
             "action": "shell", "resources": ["printf *"],
             "metadata": {"command": f"printf fixture-{index}"},
         })
@@ -312,17 +348,10 @@ for line in sys.stdin:
         operational_sessions.extend(pool.map(review, range(4)))
     operational_sessions.extend(review(index) for index in range(4, 7))
 
-    audit_path = host["root"] / "reviewer-audit.jsonl"
-    def audit_records():
-        try:
-            return [json.loads(line) for line in audit_path.read_text().splitlines()]
-        except (OSError, json.JSONDecodeError):
-            return []
-
     deadline = time.monotonic() + 10
     records = []
     while time.monotonic() < deadline:
-        records = audit_records()
+        records = audit_records(host)
         records = [record for record in records if record.get("sessionID") in operational_sessions]
         if len(records) == len(operational_sessions):
             break
@@ -330,19 +359,16 @@ for line in sys.stdin:
     assert len(records) == len(operational_sessions), records
     reviewer_ids = [record["reviewerSessionID"] for record in records]
     assert len(set(reviewer_ids)) == len(reviewer_ids)
-    locations = {request("/api/session/" + session_id)["data"]["location"]["directory"]
+    locations = {request(host, "/api/session/" + session_id)["data"]["location"]["directory"]
                  for session_id in reviewer_ids}
     assert len(locations) == 1, locations
     reviewer_directory = next(iter(locations))
     assert reviewer_directory != str(host["project"])
-    assert mcp_servers(reviewer_directory) == []
+    assert mcp_servers(host, reviewer_directory) == []
     assert len(starts.read_text().splitlines()) == 1, starts.read_text()
-    assert mcp_servers(host["project"])[0]["status"]["status"] == "connected"
+    assert mcp_servers(host, host["project"])[0]["status"]["status"] == "connected"
     for session_id in reviewer_ids:
-        req = urllib.request.Request(host["url"] + "/api/session/" + session_id,
-            headers=host["headers"], method="DELETE")
-        with urllib.request.urlopen(req, timeout=5):
-            pass
+        delete_session(host, session_id)
     new_directory = None
     if tuple(map(int, host_version.split("."))) >= (2, 0, 18):
         reload_request = urllib.request.Request(host["url"] + "/api/location/reload",
@@ -353,26 +379,114 @@ for line in sys.stdin:
         # activation; a permission evaluated in that window has no hooks and
         # would stay pending. Wait for the plugin to be active again.
         activate_host(host, "v2")
-        assert mcp_servers(reviewer_directory) == []
+        assert mcp_servers(host, reviewer_directory) == []
         reloaded_session = review(7)
-        deadline = time.monotonic() + 10
-        reloaded_record = None
-        while time.monotonic() < deadline:
-            reloaded_record = next((record for record in audit_records()
-                if record.get("sessionID") == reloaded_session), None)
-            if reloaded_record:
-                break
-            time.sleep(0.05)
+        reloaded_record = audit_record(host, reloaded_session)
         assert reloaded_record
         new_reviewer_id = reloaded_record["reviewerSessionID"]
-        new_directory = request("/api/session/" + new_reviewer_id)["data"]["location"]["directory"]
+        new_directory = request(host, "/api/session/" + new_reviewer_id)["data"]["location"]["directory"]
         assert new_directory != reviewer_directory
-        assert mcp_servers(new_directory) == []
-        req = urllib.request.Request(host["url"] + "/api/session/" + new_reviewer_id,
-            headers=host["headers"], method="DELETE")
-        with urllib.request.urlopen(req, timeout=5):
-            pass
+        assert mcp_servers(host, new_directory) == []
+        delete_session(host, new_reviewer_id)
     host["stop"]()
     shutil.rmtree(reviewer_directory, ignore_errors=True)
     if new_directory:
         shutil.rmtree(new_directory, ignore_errors=True)
+
+
+@pytest.mark.parametrize("host_version", V2_VERSIONS)
+def test_v2_strips_plugin_added_mcp_from_reviewer_location(launch_host, activate_host, model_server, host_version, tmp_path):
+    binary = os.environ[f"OPENCODE_V2_{host_version.replace('.', '_')}"]
+    package = os.environ.get("PLUGIN_PACKAGE_PATH", str(Path(__file__).resolve().parents[2]))
+    starts = tmp_path / "plugin-mcp-starts.txt"
+    mcp = tmp_path / "mcp.py"
+    mcp.write_text(MCP_FIXTURE_SOURCE, encoding="utf-8")
+    # Adds its server from setup(), as @upstash/context7-opencode does.
+    adder = tmp_path / "mcp-adder"
+    adder.mkdir()
+    (adder / "package.json").write_text(json.dumps(
+        {"name": "fixture-mcp-adder", "private": True, "type": "module", "exports": "./index.js"}), encoding="utf-8")
+    command = json.dumps([sys.executable, str(mcp), str(starts)])
+    (adder / "index.js").write_text(
+        'export default { id: "fixture-mcp-adder", async setup(ctx) {\n'
+        '  await ctx.mcp.transform((editor) => {\n'
+        f'    if (!editor.get("plugin-fixture")) editor.set("plugin-fixture", {{ type: "local", command: {command} }});\n'
+        '  });\n'
+        '  return async () => {};\n'
+        '} };\n', encoding="utf-8")
+    # Global plugins load in every location, the reviewer's temporary one included.
+    provider = {**reviewer_provider(model_server), "plugins": [str(adder)]}
+    host = launch_host("v2", binary, {"plugins": [package]},
+                       reviewer={"model": "fixture/reviewer", "timeoutMs": 15000,
+                                 "reviewBudgetMs": 30000, "retainReviewSessions": True},
+                       global_config=provider)
+    activate_host(host, "v2")
+
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and not starts.exists():
+        mcp_servers(host, host["project"])
+        time.sleep(0.05)
+    assert starts.exists(), "Plugin-added operational MCP did not start"
+    assert len(starts.read_text().splitlines()) == 1
+
+    reviewer_ids = []
+    reviewer_directories = []
+
+    def review(index):
+        session = request(host, "/api/session", {"title": f"Fixture operation {index}",
+            "location": {"directory": str(host["project"])},
+            "permissions": [{"action": "shell", "resource": "*", "effect": "ask"}]})
+        session_id = session.get("data", session)["id"]
+        outcome = request(host, f"/api/session/{session_id}/permission", {
+            "action": "shell", "resources": ["printf *"], "metadata": {"command": f"printf fixture-{index}"},
+        })
+        record = audit_record(host, session_id)
+        assert record, "The evaluation must produce an audit record"
+        if record.get("reviewerSessionID"):
+            reviewer_ids.append(record["reviewerSessionID"])
+        assert record["decisionSource"] == "llm-reviewer", record
+        assert outcome["data"]["effect"] == "allow", outcome
+        directory = request(host, "/api/session/" + record["reviewerSessionID"])["data"]["location"]["directory"]
+        reviewer_directories.append(directory)
+        assert directory != str(host["project"])
+        return directory
+
+    def assert_mcp_free(directory):
+        # A server can appear after setup when a plugin registers its transform late, so the
+        # empty inventory must hold on a later query too.
+        assert mcp_servers(host, directory) == []
+        time.sleep(1)
+        assert mcp_servers(host, directory) == []
+
+    try:
+        reviewer_directory = review(0)
+        assert_mcp_free(reviewer_directory)
+        assert len(starts.read_text().splitlines()) == 1, starts.read_text()
+        operational = mcp_servers(host, host["project"])
+        assert [server["name"] for server in operational] == ["plugin-fixture"], operational
+        assert operational[0]["status"]["status"] == "connected", operational
+        if tuple(map(int, host_version.split("."))) >= (2, 0, 18):
+            reload_request = urllib.request.Request(host["url"] + "/api/location/reload",
+                data=b"", headers=host["headers"], method="POST")
+            with urllib.request.urlopen(reload_request, timeout=30) as response:
+                assert response.status == 204
+            activate_host(host, "v2")
+            # The reload rebuilds the old reviewer location after its backend released it, so
+            # its bootstrap now runs without an activation.
+            assert_mcp_free(reviewer_directory)
+            new_directory = review(1)
+            assert new_directory != reviewer_directory
+            assert mcp_servers(host, new_directory) == []
+            # The reload restarts the operational server and changes the start count, so check
+            # that every start ran in the operational project.
+            started_in = {Path(line.split(" ", 1)[1]).resolve() for line in starts.read_text().splitlines()}
+            assert started_in == {Path(host["project"]).resolve()}, starts.read_text()
+    finally:
+        for reviewer_id in reviewer_ids:
+            try:
+                delete_session(host, reviewer_id)
+            except urllib.error.URLError:
+                pass
+        host["stop"]()
+        for directory in reviewer_directories:
+            shutil.rmtree(directory, ignore_errors=True)

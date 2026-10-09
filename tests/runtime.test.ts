@@ -498,7 +498,12 @@ describe("runtime decisions", () => {
     const harness = runtime(client)
     harness.runtime.handle(request({ id: "per_1", tool: { messageID: "m1", callID: "c1" } }))
     harness.runtime.handle(request({ id: "per_2", tool: { messageID: "m2", callID: "c2" } }))
-    await new Promise((r) => setTimeout(r, 10))
+    // Reply only once both reviews are inside the model call: a fixed sleep
+    // can fire before either arrives on a cold start, leaving per_1's prompt
+    // unresolved and waitForIdle hanging.
+    const deadline = Date.now() + 3_000
+    while (resolvers.length < 2 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 5))
+    expect(resolvers).toHaveLength(2)
     harness.runtime.handlePermissionReply({
       type: "permission.replied",
       properties: { sessionID: "ses_main", requestID: "per_2", reply: "reject" },

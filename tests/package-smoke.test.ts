@@ -429,9 +429,40 @@ describe("npm install dedupe shape", () => {
     if (unexpected.length > 0) console.log("consumer native set:", natives)
     expect(unexpected).toEqual([])
 
+    // seroval reaches the consumer tree through solid-js, which
+    // @opentui/solid peer-pins EXACTLY (1.9.12 at every published 0.5.x).
+    // GHSA-p6vx-979v-rg4c and GHSA-jp82-f5mq-hwhp (seroval fromJSON
+    // deserialization) are residual and DOCUMENTED, not fixed: seroval is only
+    // imported by the SSR renderer solid-js/web, which neither our TUI nor
+    // OpenTUI loads. When @opentui/solid moves its pin, this assertion forces
+    // the conscious version bump and doc update.
+    const solidPkg = JSON.parse(
+      readFileSync(join(installDir, "node_modules", "solid-js", "package.json"), "utf8"),
+    ) as { version: string }
+    expect(solidPkg.version).toBe("1.9.12")
+    const ssrImporters: string[] = []
+    const findSsrImports = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name)
+        if (entry.isDirectory()) {
+          findSsrImports(full)
+        } else if (
+          /\.(?:[cm]?js|tsx?)$/.test(entry.name) &&
+          readFileSync(full, "utf8").includes("solid-js/web")
+        ) {
+          ssrImporters.push(full)
+        }
+      }
+    }
+    findSsrImports(join(installDir, "node_modules", "opencode-permission-reviewer", "dist"))
+    findSsrImports(join(installDir, "node_modules", "@opentui"))
+    expect(ssrImporters).toEqual([])
+    const residualAdvisories = new Set(["GHSA-p6vx-979v-rg4c", "GHSA-jp82-f5mq-hwhp"])
+
     // npm audit over the CONSUMER tree (registry reachability required; the
     // repository's own overrides never apply here). No high or critical
-    // advisories; low ones are the documented residuals above.
+    // advisories beyond the documented seroval residuals; low ones are the
+    // documented residuals above.
     const audit = Bun.spawnSync({
       cmd: ["npm", "audit", "--prefix", installDir, "--audit-level=high", "--json"],
       cwd: installDir,
@@ -439,19 +470,29 @@ describe("npm install dedupe shape", () => {
       stderr: "pipe",
     })
     const auditText = audit.stdout.toString()
-    let vulnerabilities: Record<string, number> | undefined
+    type AuditVia = string | { url?: string; severity?: string }
+    let vulnerabilities: Record<string, { via?: AuditVia[] }> | undefined
     try {
       const parsed = JSON.parse(auditText) as {
-        metadata?: { vulnerabilities?: Record<string, number> }
+        vulnerabilities?: Record<string, { via?: AuditVia[] }>
       }
-      vulnerabilities = parsed.metadata?.vulnerabilities
+      vulnerabilities = parsed.vulnerabilities
     } catch {
       // Registry unreachable: surveillance degrades to the structural
       // checks above rather than failing the suite offline.
     }
     if (vulnerabilities !== undefined) {
-      expect(vulnerabilities.high ?? 0).toBe(0)
-      expect(vulnerabilities.critical ?? 0).toBe(0)
+      // Judge advisories, not affected packages: every dependent of a
+      // vulnerable package is itself reported at the same severity.
+      const severe = new Set<string>()
+      for (const vulnerability of Object.values(vulnerabilities)) {
+        for (const via of vulnerability.via ?? []) {
+          if (typeof via === "string") continue
+          if (via.severity !== "high" && via.severity !== "critical") continue
+          severe.add(via.url?.split("/").pop() ?? JSON.stringify(via))
+        }
+      }
+      expect([...severe].filter((id) => !residualAdvisories.has(id))).toEqual([])
     }
   }, 240_000)
 })

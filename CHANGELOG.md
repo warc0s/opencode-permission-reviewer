@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.1] - 2026-10-09
+
+### Fixed
+
+- Keep MCP servers that other plugins add from code, such as
+  `@upstash/context7-opencode`, out of the OpenCode V2 reviewer Location. They
+  previously made every review fail closed.
+
+### Changed
+
+- Bumped the `@opencode/client` runtime dependency to 2.0.26.
+
+### Security
+
+- Documented a residual advisory in the installed dependency tree: `npm audit`
+  reports GHSA-p6vx-979v-rg4c and GHSA-jp82-f5mq-hwhp in `seroval`, reached
+  through `solid-js@1.9.12`, which `@opentui/solid` pins exactly. `seroval` is
+  only imported by the SSR renderer `solid-js/web`, which this package never
+  loads, so the vulnerable code is not reachable. See the README for details.
+
 ## [2.4.0] - 2026-10-02
 
 ### Added

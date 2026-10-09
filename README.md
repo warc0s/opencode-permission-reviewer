@@ -166,9 +166,10 @@ of unknown provenance can only tighten security restrictions. The TUI reads
 effective settings and review status from the server.
 
 V2 uses the official authenticated client to manage isolated reviewer sessions
-for normal models. It reuses one reviewer location per backend, excludes
-configured MCP servers there, and checks that the location has no MCP servers
-before each review. Jev instead uses its direct typed API.
+for normal models. It reuses one reviewer location per backend, removes every
+MCP server there, including ones other plugins add from code, and checks that
+the location has no MCP servers before each review. Jev instead uses its direct
+typed API.
 The registered service is discovered without starting or stopping it. For an
 independent `serve`, configure `OPENCODE_PERMISSION_REVIEWER_HOST_URL` and the
 host's `OPENCODE_PASSWORD` in the trusted process environment. An identity check
@@ -679,8 +680,9 @@ binary, blocked, or truncated evidence) remains a reviewer decision.
   installs the published tarball in an isolated tree and freezes what a
   consumer actually gets: the platform-specific packages under `@opentui`
   (rendering only), the optional `@msgpackr-extract` accelerators, the exact
-  `@babel/core` version documented below, and an `npm audit` gate that fails
-  on any high or critical advisory. Root
+  `@babel/core` and `solid-js` versions documented below, and an `npm audit`
+  gate that fails on any high or critical advisory other than the documented
+  `seroval` residuals. Root
   `overrides` in this repository protect the development tree only; npm never
   applies a dependency's overrides to the installing application, which is
   why consumer-side guarantees live in tests against the installed tree
@@ -696,7 +698,14 @@ binary, blocked, or truncated evidence) remains a reviewer decision.
   installed version, and moving off 7.28.0 is a conscious bump (an
   `@opentui/solid` release with a fixed pin, or dropping the exact-pin
   constraint) together with this note. The development tree overrides Babel to
-  7.29.7, but that override cannot reach an npm consumer. Separately, `esbuild`
+  7.29.7, but that override cannot reach an npm consumer. Likewise,
+  `@opentui/solid` peer-pins `solid-js@1.9.12` exactly, whose `seroval`
+  dependency carries GHSA-p6vx-979v-rg4c and GHSA-jp82-f5mq-hwhp (unsafe
+  `fromJSON` deserialization, fixed in `solid-js` 1.9.16). `seroval` is only
+  imported by the SSR renderer `solid-js/web`, which neither this package nor
+  OpenTUI loads, so the vulnerable code is not reachable at runtime; the
+  consumer surveillance test pins `solid-js`, asserts that nothing imports
+  `solid-js/web`, and admits only those two advisories. Separately, `esbuild`
   (a build-time dependency here, never shipped) is root-overridden past
   GHSA-g7r4-m6w7-qqqr; that override intentionally does not reach consumers
   because consumers never install `esbuild` from this package at all.

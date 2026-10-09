@@ -165,7 +165,15 @@ async function auditFor(sessionID: string, timeoutMs = 30_000): Promise<ReviewAu
     if (await file.exists()) {
       const lines = (await file.text()).trim().split("\n").filter(Boolean)
       const records = lines
-        .map((line) => JSON.parse(line) as ReviewAuditRecord)
+        // A real audit file can hold a line cut short by an interrupted write;
+        // skip it like the audit reader does instead of failing on stale data.
+        .flatMap((line) => {
+          try {
+            return [JSON.parse(line) as ReviewAuditRecord]
+          } catch {
+            return []
+          }
+        })
         .filter((record) => record.sessionID === sessionID && record.permission === "bash")
       if (records.length > 0) return records
     }

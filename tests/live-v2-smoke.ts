@@ -33,7 +33,15 @@ async function auditFor(sessionID: string): Promise<ReviewAuditRecord> {
         .trim()
         .split("\n")
         .filter(Boolean)
-        .map((line) => JSON.parse(line) as ReviewAuditRecord)
+        // A real audit file can hold a line cut short by an interrupted write;
+        // skip it like the audit reader does instead of failing on stale data.
+        .flatMap((line) => {
+          try {
+            return [JSON.parse(line) as ReviewAuditRecord]
+          } catch {
+            return []
+          }
+        })
         .filter((record) => record.sessionID === sessionID && record.nativeAction === "shell")
       const record = records.at(-1)
       if (record) return record

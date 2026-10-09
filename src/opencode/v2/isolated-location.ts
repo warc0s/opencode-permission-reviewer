@@ -35,11 +35,16 @@ export async function createIsolatedLocation(
       throw new Error("Reviewer isolation location mismatch")
     return activate(ctx)
   })
-  // A cached location may reload after its backend releases the activation.
-  // Its bootstrap stays inert while the local config continues to exclude MCP.
-  const source = `export default { id: ${JSON.stringify(pluginID)}, setup(ctx) {
+  // The local config only disables the config MCP loader, so servers that other plugins add
+  // from code still reach this location. Global plugins set up before this one, so this
+  // transform removes their servers, and a server added later fails the inventory check.
+  // It registers before the activation lookup, so a reload after release() stays MCP-free.
+  const source = `export default { id: ${JSON.stringify(pluginID)}, async setup(ctx) {
+    await ctx.mcp.transform((editor) => {
+      for (const [name] of editor.list()) editor.remove(name);
+    });
     const activate = globalThis[Symbol.for(${JSON.stringify(KEY)})]?.get(${JSON.stringify(key)});
-    if (!activate) return Promise.resolve(async () => {});
+    if (!activate) return async () => {};
     return activate(ctx);
   } };`
   try {

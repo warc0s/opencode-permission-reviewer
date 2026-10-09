@@ -200,3 +200,91 @@ for line in sys.stdin:
     assert start_count() == 2
     assert inventory(host["project"])["fixture"]["status"] == "connected"
     assert inventory(other)["fixture"]["status"] == "connected"
+
+
+@pytest.mark.parametrize("version", V1_VERSIONS)
+def test_v1_strips_late_plugin_mcp_from_reviewer_location(launch_host, activate_host, model_server, version, tmp_path):
+    binary = os.environ["OPENCODE_V1_" + version.replace(".", "_")]
+    package = os.environ.get("PLUGIN_PACKAGE_PATH", str(Path(__file__).resolve().parents[2]))
+    starts = tmp_path / "mcp-starts.txt"
+    mcp_script = tmp_path / "mcp.py"
+    mcp_script.write_text('''import json
+import os
+import sys
+from pathlib import Path
+
+with Path(sys.argv[1]).open("a") as output:
+    output.write(os.getcwd() + "\\n")
+for line in sys.stdin:
+    request = json.loads(line)
+    if "id" not in request:
+        continue
+    result = {"protocolVersion": "2024-11-05", "capabilities": {"tools": {}},
+              "serverInfo": {"name": "fixture", "version": "1"}} if request["method"] == "initialize" else {"tools": []}
+    print(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}), flush=True)
+''', encoding="utf-8")
+
+    def hook(name):
+        command = json.dumps([sys.executable, str(mcp_script), str(starts)])
+        return ("config: async (cfg) => { cfg.mcp ??= {}; "
+                f'cfg.mcp["{name}"] ??= {{ type: "local", command: {command}, enabled: true }}; }}')
+
+    # Both sources apply after the reviewer location's own config, so their config
+    # hooks run after the isolation bootstrap: the global plugin directory (object
+    # entrypoint, as @upstash/context7-opencode ships) and OPENCODE_CONFIG_DIR, which
+    # profile launchers set (legacy function entrypoint).
+    plugin_dir = tmp_path / "late-plugin" / "config" / "opencode" / "plugin"
+    plugin_dir.mkdir(parents=True)
+    (plugin_dir / "dir-adder.js").write_text(
+        'export default { id: "dir-adder", server: async () => ({ ' + hook("dir-fixture") + " }) };\n",
+        encoding="utf-8")
+    config_dir = tmp_path / "late-config"
+    config_dir.mkdir()
+    (config_dir / "env-adder.js").write_text("export default async () => ({ " + hook("env-fixture") + " });\n",
+                                             encoding="utf-8")
+    (config_dir / "opencode.json").write_text(json.dumps({"plugin": [str(config_dir / "env-adder.js")]}),
+                                             encoding="utf-8")
+    provider = {"provider": {"fixture": {
+        "npm": "@ai-sdk/openai-compatible", "name": "Fixture",
+        "options": {"baseURL": model_server["url"], "apiKey": "synthetic-fixture"},
+        "models": {name: {"name": name, "limit": {"context": 32000, "output": 1000}}
+                   for name in ["reviewer", "driver"]},
+    }}, "plugin": [package]}
+    host = launch_host("v1", binary, {"permission": {"bash": "ask"}},
+        reviewer={"model": "fixture/reviewer", "timeoutMs": 15000, "reviewBudgetMs": 30000,
+                  "retainReviewSessions": True},
+        global_config=provider, profile="late-plugin", extra_env={"OPENCODE_CONFIG_DIR": str(config_dir)})
+    activate_host(host, "v1")
+
+    def request(path, body=None, directory=None):
+        query = urllib.parse.urlencode({"directory": str(directory or host["project"])})
+        req = urllib.request.Request(host["url"] + path + "?" + query,
+            data=None if body is None else json.dumps(body).encode(),
+            headers={**host["headers"], "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=45) as response:
+            return json.load(response) if response.status != 204 else None
+
+    operational = request("/mcp")
+    assert {name: server["status"] for name, server in operational.items()} == {
+        "dir-fixture": "connected", "env-fixture": "connected"}, operational
+    session = request("/session", {"title": "Fixture operation"})
+    request(f"/session/{session['id']}/message", {
+        "model": {"providerID": "fixture", "modelID": "driver"},
+        "parts": [{"type": "text", "text": "Run printf COMPATIBILITY_EXECUTED using bash exactly once"}],
+    })
+    audit_path = host["root"] / "reviewer-audit.jsonl"
+    record = None
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and record is None:
+        try:
+            record = next((entry for entry in map(json.loads, audit_path.read_text().splitlines())
+                           if entry.get("sessionID") == session["id"]), None)
+        except (OSError, json.JSONDecodeError):
+            pass
+        time.sleep(0.05)
+    assert record and record["decisionSource"] == "llm-reviewer" and record["outcome"] == "allow", record
+    reviewer_directory = request("/session/" + record["reviewerSessionID"])["directory"]
+    assert reviewer_directory != str(host["project"])
+    assert request("/mcp", directory=reviewer_directory) == {}
+    started_in = {Path(line).resolve() for line in starts.read_text().splitlines()}
+    assert started_in == {Path(host["project"]).resolve()}, starts.read_text()

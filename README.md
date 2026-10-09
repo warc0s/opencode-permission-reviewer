@@ -142,6 +142,12 @@ Normal models use an extra child session; Jev uses a direct typed request. Your
 model spend scales with how much your policy `ask`s. Lower the reasoning
 `variant` where supported or raise `confidenceThreshold` to taste.
 
+V1 runs normal-model reviews in one persistent isolated location. Its bootstrap
+keeps every MCP server out, including ones that plugins loaded from later config
+sources (`OPENCODE_CONFIG_CONTENT`, `OPENCODE_CONFIG_DIR`, the global plugin
+directory) add from their config hooks, and the location is checked for MCP
+servers before each review.
+
 ### Configure OpenCode V2
 
 V2 uses `plugins` with object entries. The same package supplies `setup()` for

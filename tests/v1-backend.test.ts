@@ -312,8 +312,13 @@ test("a second backend re-asserts the config in the shared, persistent location"
       } finally {
         await configFile.close()
       }
-      expect((await stat(bootstrapPath)).mode & 0o777).toBe(0o600)
-      expect(await readFile(bootstrapPath, "utf8")).toContain('Object.defineProperty(cfg, "mcp"')
+      const bootstrapFile = await open(bootstrapPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW)
+      try {
+        expect((await bootstrapFile.stat()).mode & 0o777).toBe(0o600)
+        expect(await bootstrapFile.readFile("utf8")).toContain('Object.defineProperty(cfg, "mcp"')
+      } finally {
+        await bootstrapFile.close()
+      }
       expect((await stat(base)).mode & 0o777).toBe(0o700)
     } finally {
       await second.cleanup()

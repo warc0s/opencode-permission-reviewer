@@ -15,6 +15,7 @@ import {
 import { execFileSync } from "node:child_process"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { pathToFileURL } from "node:url"
 import { V1ReviewerBackend } from "../src/opencode/v1/reviewer-backend.ts"
 import { ReviewAttempt } from "../src/core/review-attempt.ts"
 import type { ReviewEnvelope, ReviewerConfig } from "../src/types.ts"
@@ -166,13 +167,53 @@ test("the isolated location is created with config that excludes MCP", async () 
     const isolated = JSON.parse(configText) as { plugin: string[] }
     expect(isolated.plugin).toEqual(["./reviewer-isolation.js"])
     const bootstrap = await readFile(join(harness.base, "reviewer-isolation.js"), "utf8")
-    expect(bootstrap).toContain("cfg.mcp")
+    expect(bootstrap).toContain('Object.defineProperty(cfg, "mcp"')
     const configMode = (await stat(join(harness.base, "opencode.json"))).mode & 0o777
     expect(configMode).toBe(0o600)
     const bootstrapMode = (await stat(join(harness.base, "reviewer-isolation.js"))).mode & 0o777
     expect(bootstrapMode).toBe(0o600)
   } finally {
     await harness.cleanup()
+  }
+})
+
+test("the isolation bootstrap drops MCP servers added before and after its config hook", async () => {
+  const harness = fixture()
+  const pluginDir = await mkdtemp(join(tmpdir(), "reviewer-v1-later-plugin-"))
+  try {
+    expect((await harness.run()).kind).toBe("allow")
+    const url = pathToFileURL(join(harness.base, "reviewer-isolation.js"))
+    const plugin = (await import(`${url.href}?case=${Date.now()}`)) as {
+      default: () => Promise<{ config(cfg: Record<string, unknown>): Promise<void> }>
+    }
+    // A plugin whose hook ran earlier already added a server.
+    const cfg: Record<string, unknown> = {
+      model: "fixture/model",
+      mcp: { earlier: { type: "local", command: ["earlier"] } },
+    }
+    await (await plugin.default()).config(cfg)
+    // Hooks from config sources the host applies later write in every usual way,
+    // from a strict-mode module like a real plugin.
+    const laterPath = join(pluginDir, "later.mjs")
+    await write(
+      laterPath,
+      `export default (cfg) => {
+  cfg.mcp ??= {}
+  cfg.mcp.later ??= { type: "remote", url: "https://later.invalid/mcp" }
+  cfg.mcp = { replaced: { type: "local", command: ["replaced"] } }
+  Object.assign(cfg.mcp, { assigned: { type: "local", command: ["assigned"] } })
+}
+`,
+    )
+    const later = (await import(pathToFileURL(laterPath).href)) as {
+      default: (cfg: Record<string, unknown>) => void
+    }
+    expect(() => later.default(cfg)).not.toThrow()
+    expect(cfg.mcp).toEqual({})
+    expect(JSON.parse(JSON.stringify(cfg))).toEqual({ model: "fixture/model", mcp: {} })
+  } finally {
+    await harness.cleanup()
+    await rm(pluginDir, { recursive: true, force: true })
   }
 })
 
@@ -189,7 +230,7 @@ test("concurrent first reviews share one location and keep sessions independent"
     expect(isolated.plugin).toEqual(["./reviewer-isolation.js"])
     expect((await stat(configPath)).mode & 0o777).toBe(0o600)
     const bootstrap = await readFile(join(harness.base, "reviewer-isolation.js"), "utf8")
-    expect(bootstrap).toContain("cfg.mcp")
+    expect(bootstrap).toContain('Object.defineProperty(cfg, "mcp"')
   } finally {
     await harness.cleanup()
   }
@@ -271,8 +312,13 @@ test("a second backend re-asserts the config in the shared, persistent location"
       } finally {
         await configFile.close()
       }
-      expect((await stat(bootstrapPath)).mode & 0o777).toBe(0o600)
-      expect(await readFile(bootstrapPath, "utf8")).toContain("cfg.mcp = {}")
+      const bootstrapFile = await open(bootstrapPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW)
+      try {
+        expect((await bootstrapFile.stat()).mode & 0o777).toBe(0o600)
+        expect(await bootstrapFile.readFile("utf8")).toContain('Object.defineProperty(cfg, "mcp"')
+      } finally {
+        await bootstrapFile.close()
+      }
       expect((await stat(base)).mode & 0o777).toBe(0o700)
     } finally {
       await second.cleanup()

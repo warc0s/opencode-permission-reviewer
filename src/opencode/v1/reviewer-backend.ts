@@ -106,9 +106,25 @@ export class V1ReviewerBackend {
       // Publish the bootstrap before the config that references it. Atomic
       // replacements keep other backends and host processes from observing
       // empty or partial files in this shared, persistent location.
+      //
+      // Plugins from config sources the host applies after this location's own
+      // config (OPENCODE_CONFIG_CONTENT, OPENCODE_CONFIG_DIR, the global plugin
+      // directory) run their config hooks later and could add MCP servers back.
+      // An accessor that always reads as a fresh empty object and drops writes
+      // keeps every hook's servers out, whatever the hook order.
       await this.writeIsolatedFile(
         join(directory, "reviewer-isolation.js"),
-        "export default async () => ({ config: async (cfg) => { cfg.mcp = {} } })",
+        `export default async () => ({
+  config: async (cfg) => {
+    Object.defineProperty(cfg, "mcp", {
+      configurable: true,
+      enumerable: true,
+      get: () => ({}),
+      set: () => {},
+    })
+  },
+})
+`,
       )
       await this.writeIsolatedFile(
         join(directory, "opencode.json"),

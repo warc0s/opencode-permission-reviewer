@@ -7,13 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.2] - 2026-10-10
+
+### Fixed
+
+- Keep MCP servers out of the OpenCode V1 reviewer location when plugins from
+  config sources applied after it (`OPENCODE_CONFIG_CONTENT`,
+  `OPENCODE_CONFIG_DIR`, the global plugin directory) add them from their config
+  hooks. Those servers previously started inside the reviewer location and made
+  every review fail closed.
+
 ## [2.4.1] - 2026-10-09
 
 ### Fixed
 
 - Keep MCP servers that other plugins add from code, such as
   `@upstash/context7-opencode`, out of the OpenCode V2 reviewer Location. They
-  previously made every review fail closed.
+  previously made every review fail closed. (#74, thanks @cris005)
 
 ### Changed
 

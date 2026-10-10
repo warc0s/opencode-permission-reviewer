@@ -54,7 +54,7 @@ def activate_host():
 def launch_host(tmp_path):
     processes = []
 
-    def launch(generation, binary, config, reviewer=None, global_config=None, profile=None, service=False):
+    def launch(generation, binary, config, reviewer=None, global_config=None, profile=None, service=False, extra_env=None):
         executable = shutil.which(binary)
         if executable is None:
             pytest.fail(f"Host binary does not exist: {binary}")
@@ -74,6 +74,7 @@ def launch_host(tmp_path):
             "XDG_CACHE_HOME": str(root / "cache"),
             "XDG_STATE_HOME": str(root / "state"),
             "TERM": "xterm-256color",
+            **(extra_env or {}),
         }
         if config is not None:
             (project / "opencode.json").write_text(json.dumps(config), encoding="utf-8")

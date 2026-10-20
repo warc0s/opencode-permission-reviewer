@@ -375,15 +375,30 @@ function renderActionPurpose(
   )}`
 }
 
-/** Compact rendering of ask decisions, one line each (UTC time, question,
- *  answer). `undefined` when there is nothing to show so the whole section is
- *  omitted rather than padded with a placeholder. */
+/** A usable epoch-ms timestamp, or undefined for non-finite / out-of-range values. */
+function askTime(at: number): number | undefined {
+  if (!Number.isFinite(at)) return
+  const time = new Date(at).getTime()
+  return Number.isFinite(time) ? time : undefined
+}
+
+/** Render ask decisions in chronological order, one line each (full UTC ISO
+ *  timestamp, question, answer). `undefined` when there is nothing to show so
+ *  the whole section is omitted rather than padded with a placeholder. A
+ *  decision without a usable timestamp is labeled instead of being ordered or
+ *  given a fabricated time. */
 export function renderAskDecisions(decisions: AskDecision[] | undefined): string | undefined {
   if (decisions === undefined || decisions.length === 0) return
+  const ordered = [...decisions].sort(
+    (left, right) =>
+      (askTime(left.at) ?? Number.POSITIVE_INFINITY) -
+      (askTime(right.at) ?? Number.POSITIVE_INFINITY),
+  )
   const lines = []
-  for (const decision of decisions) {
-    const time = new Date(decision.at).toISOString().slice(11, 19)
-    lines.push(`[${time}Z] Q: ${decision.question} A: ${decision.answer}`)
+  for (const decision of ordered) {
+    const time = askTime(decision.at)
+    const label = time === undefined ? "[time unavailable]" : `[${new Date(time).toISOString()}]`
+    lines.push(`${label} Q: ${decision.question} A: ${decision.answer}`)
   }
   // Keep the most recent lines when the block would exceed the budget.
   const maxChars = 1_500
@@ -448,7 +463,21 @@ function renderLineage(lineage: SessionLineage, max: number): string {
   )
 }
 
-function renderIntentBlocks(blocks: IntentBlock[], max: number, limit = blocks.length): string {
+function sameIntentBlock(left: IntentBlock, right: IntentBlock): boolean {
+  return (
+    left.sessionID === right.sessionID &&
+    left.messageID === right.messageID &&
+    left.actor === right.actor &&
+    left.text === right.text
+  )
+}
+
+function renderIntentBlocks(
+  blocks: IntentBlock[],
+  max: number,
+  limit = blocks.length,
+  options?: { latest?: IntentBlock | undefined },
+): string {
   if (blocks.length === 0) return "<none />"
   const ordered = [...blocks].sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0))
   const seen = new Set<string>()
@@ -462,11 +491,20 @@ function renderIntentBlocks(blocks: IntentBlock[], max: number, limit = blocks.l
     })
     .slice(0, limit)
     .reverse()
+  // Only the caller-supplied latest trusted human instruction is marked. Other
+  // sections (delegated task, local agent context) must never inherit a
+  // "latest" marker: an agent-authored claim is not user authorization.
+  const latest = options?.latest
   return keepMostRecentBlocks(
-    distinct.map(
-      (block) =>
-        `INTENT actor=${block.actor} session=${block.sessionID} message=${block.messageID}${block.createdAt === undefined ? "" : ` created=${block.createdAt}`}\n${block.text}`,
-    ),
+    distinct.map((block, index) => {
+      const created = block.createdAt === undefined ? "" : ` created=${block.createdAt}`
+      const marker = latest !== undefined && sameIntentBlock(block, latest) ? " latest=true" : ""
+      const provenance =
+        block.provenance === undefined
+          ? "unavailable/unknown"
+          : `${block.provenance.source}/${block.provenance.confidence}`
+      return `INTENT order=${index + 1} actor=${block.actor} session=${block.sessionID} message=${block.messageID}${created} provenance=${provenance}${marker}\n${block.text}`
+    }),
     max,
   )
 }
@@ -538,7 +576,7 @@ export function actorEvidenceSections(envelope: ReviewEnvelope, config: Reviewer
   const sections = [
     `ACTOR_CONTEXT\n${renderActor(actor, cap)}`,
     `SESSION_LINEAGE\n${renderLineage(lineage, cap)}`,
-    `DIRECT_USER_INTENT\n${renderIntentBlocks(intent.directUserIntent, config.maxIntentChars, config.intentMessages)}`,
+    `DIRECT_USER_INTENT\n${renderIntentBlocks(intent.directUserIntent, config.maxIntentChars, config.intentMessages, { latest: intent.latestExplicitAuthorization })}`,
     `DELEGATED_TASK\n${renderIntentBlocks(intent.delegatedTask, cap)}`,
     `LOCAL_SESSION_CONTEXT\n${lineage.origin === "human-root" ? "<see DIRECT_USER_INTENT />" : renderIntentBlocks(intent.localSessionIntent, cap, config.intentMessages)}`,
   ]

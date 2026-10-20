@@ -552,6 +552,116 @@ describe("System One reviewer", () => {
     expect(parsed?.difficultReason).toContain("material safety signal")
   })
 
+  test("does not recommend reasoning for an allow based on insufficient authorization", () => {
+    const config = resolveConfig({ model: "opencode/jev-1.13-free" })
+    const parsed = parseSystemOneReview(
+      response({ primary_basis: choice("insufficient_authorization", [...BASIS_KEYS]) }),
+      config,
+    )
+    expect(parsed?.difficultReason).toContain("restrictive primary basis")
+    expect(parsed?.reasoningRecommended).toBe(false)
+    expect(parsed?.nonOverridableSignal).toBe(false)
+    expect(enforceParsedSystemOneReview(parsed!, config).kind).toBe("escalate")
+  })
+
+  test("keeps an allow based on insufficient authorization manual without a second opinion", async () => {
+    const config = resolveConfig({ model: "opencode/jev-1.13-free" })
+    let escalations = 0
+    const backend = new SystemOneReviewerBackend(
+      config,
+      async () => {
+        escalations++
+        return { kind: "allow", reason: "unexpected" }
+      },
+      "openai/gpt-5.6-luna",
+      async () =>
+        response({ primary_basis: choice("insufficient_authorization", [...BASIS_KEYS]) }),
+    )
+    const result = await backend.review(envelope(), new ReviewAttempt("generation", 10_000))
+    expect(escalations).toBe(0)
+    expect(result.kind).toBe("escalate")
+    expect(result.decisionSource).toBe("system-one-reviewer")
+    expect(result.reviewerOutcome).toBe("allow")
+    expect(result.escalationDisposition).toBe("manual")
+  })
+
+  test("keeps a confident deny based on insufficient authorization final without a second opinion", async () => {
+    const config = resolveConfig({ model: "opencode/jev-1.13-free" })
+    let escalations = 0
+    const backend = new SystemOneReviewerBackend(
+      config,
+      async () => {
+        escalations++
+        return { kind: "allow", reason: "unexpected" }
+      },
+      "openai/gpt-5.6-luna",
+      async () =>
+        denial(0.95, {
+          primary_basis: choice("insufficient_authorization", [...BASIS_KEYS]),
+        }),
+    )
+    const result = await backend.review(envelope(), new ReviewAttempt("generation", 10_000))
+    expect(escalations).toBe(0)
+    expect(result.kind).toBe("deny")
+    expect(result.decisionSource).toBe("system-one-reviewer")
+    expect(result.reviewerOutcome).toBe("deny")
+  })
+
+  test("applies escalationMode deny to an allow based on insufficient authorization", async () => {
+    const config = resolveConfig({
+      model: "opencode/jev-1.13-free",
+      escalationMode: "deny",
+    })
+    let escalations = 0
+    const backend = new SystemOneReviewerBackend(
+      config,
+      async () => {
+        escalations++
+        return { kind: "allow", reason: "unexpected" }
+      },
+      "openai/gpt-5.6-luna",
+      async () =>
+        response({ primary_basis: choice("insufficient_authorization", [...BASIS_KEYS]) }),
+    )
+    const result = await backend.review(envelope(), new ReviewAttempt("generation", 10_000))
+    expect(escalations).toBe(0)
+    expect(result.kind).toBe("deny")
+    expect(result.decisionSource).toBe("system-one-reviewer")
+    expect(result.reviewerOutcome).toBe("allow")
+    expect(result.decision?.outcome).toBe("allow")
+    expect(result.escalationDisposition).toBe("deny")
+  })
+
+  test("keeps safety signals manual ahead of the insufficient-authorization contradiction", async () => {
+    const config = resolveConfig({ model: "opencode/jev-1.13-free" })
+    for (const signal of ["critical", "policy"] as const) {
+      let escalations = 0
+      const backend = new SystemOneReviewerBackend(
+        config,
+        async () => {
+          escalations++
+          return { kind: "allow", reason: "unexpected" }
+        },
+        "openai/gpt-5.6-luna",
+        async () => {
+          const base = hardSignalResponse("allow", signal, 1)
+          return {
+            ...base,
+            answers: {
+              ...base.answers,
+              primary_basis: choice("insufficient_authorization", [...BASIS_KEYS]),
+            },
+          }
+        },
+      )
+      const result = await backend.review(envelope(), new ReviewAttempt("generation", 10_000))
+      expect(escalations).toBe(0)
+      expect(result.kind).toBe("escalate")
+      expect(result.decisionSource).toBe("system-one-reviewer")
+      expect(result.escalationDisposition).toBe("manual")
+    }
+  })
+
   test("rejects a choice that is not the most probable option", () => {
     const config = resolveConfig({ model: "opencode/jev-1.13-free" })
     const raw = response()

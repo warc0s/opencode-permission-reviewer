@@ -362,6 +362,11 @@ export function parseSystemOneReview(
   const nonOverridableSignal =
     decision.risk_level === "critical" || s.absolutePolicyDeny >= 0.7
   const lowOutcomeConfidence = decision.confidence < config.systemOneConfidenceThreshold
+  // An allow justified by insufficient authorization is a manual-only
+  // contradiction. A second opinion could otherwise turn it into an automatic
+  // approval, so reasoning must never be recommended for this case.
+  const manualAuthorizationContradiction =
+    decision.outcome === "allow" && basis.choice === "insufficient_authorization"
   return {
     decision,
     primaryBasis: basis.choice,
@@ -369,6 +374,7 @@ export function parseSystemOneReview(
     reasoningRecommended:
       difficultReason !== undefined &&
       !nonOverridableSignal &&
+      !manualAuthorizationContradiction &&
       (lowOutcomeConfidence ||
         decision.outcome === "allow" ||
         (decision.outcome === "escalate" &&
@@ -400,6 +406,19 @@ export function enforceParsedSystemOneReview(
       reason:
         parsed.difficultReason ??
         "System One reported a critical-risk or absolute policy-deny signal; manual review required.",
+      reviewerOutcome: parsed.decision.outcome,
+    }
+  }
+  // An allow whose primary basis is insufficient authorization is a
+  // contradiction that only manual review may resolve. Route it before the
+  // normal difficult-decision path so no secondary reviewer can approve it.
+  if (parsed.decision.outcome === "allow" && parsed.primaryBasis === "insufficient_authorization") {
+    return {
+      kind: "escalate",
+      decision: parsed.decision,
+      reason:
+        parsed.difficultReason ??
+        "System One allowed the action while its primary basis is insufficient authorization; manual review required.",
       reviewerOutcome: parsed.decision.outcome,
     }
   }

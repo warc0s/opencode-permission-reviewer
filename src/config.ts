@@ -474,6 +474,7 @@ export function isSystemOneReviewerModel(model: string): boolean {
   return (
     ((parsed.providerID === "opencode" || parsed.providerID === "typesafe-ai") &&
       /^jev(?:-|$)/.test(parsed.modelID)) ||
-    (parsed.providerID === "commandcode" && parsed.modelID === "typesafe/jev")
+    (parsed.providerID === "commandcode" && parsed.modelID === "typesafe/jev") ||
+    (parsed.providerID === "liquid-ai" && ["d1", "d1-ultra"].includes(parsed.modelID))
   )
 }

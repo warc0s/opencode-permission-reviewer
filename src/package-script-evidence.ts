@@ -1,4 +1,4 @@
-import { basename, dirname, join } from "node:path"
+import { basename, dirname, join, isAbsolute } from "node:path"
 import { lstat } from "node:fs/promises"
 import type { PermissionRequest } from "./types.ts"
 import { sourceCommand } from "./evidence/source-command.ts"
@@ -266,7 +266,27 @@ export async function enrichPackageScriptEvidence(
     }
     active.delete(key)
   }
-  for (const segment of shellCommandSegmentsWithDirectory(sourceCommand(request), directory)) {
+  const toolInput = request.metadata.toolInput
+  const capturedWorkdir =
+    typeof toolInput === "object" && toolInput !== null && !Array.isArray(toolInput)
+      ? (toolInput as Record<string, unknown>).workdir
+      : undefined
+  // The execution directory selects the manifest, but never grants new read roots.
+  // Invalid explicit directories must not fall back to a different project's manifest.
+  if (
+    capturedWorkdir !== undefined &&
+    (typeof capturedWorkdir !== "string" ||
+      !isAbsolute(capturedWorkdir) ||
+      capturedWorkdir.includes("\0"))
+  ) {
+    return {
+      text: 'PACKAGE_SCRIPT_ANALYSIS\n{"status":"unavailable","reason":"explicit shell working directory is unresolved"}',
+    }
+  }
+  for (const segment of shellCommandSegmentsWithDirectory(
+    sourceCommand(request),
+    typeof capturedWorkdir === "string" ? capturedWorkdir : directory,
+  )) {
     for (const call of calls(segment.tokens)) await visit(call, segment.directory, 0)
   }
   if (records.length === 0) return { text: "" }

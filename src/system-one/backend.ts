@@ -48,6 +48,7 @@ function reconcileReasoningEscalation(result: ReviewExecutionResult): ReviewExec
 export function createSystemOneInvoker(
   config: ReviewerConfig,
   fetchImpl?: TypeSafeClient["fetch"],
+  credentialKey?: string,
 ): SystemOneInvoke {
   const { providerID, modelID } = splitModel(config.model)
   const keyName =
@@ -55,8 +56,10 @@ export function createSystemOneInvoker(
       ? "OPENCODE_API_KEY"
       : providerID === "commandcode"
         ? "CMD_API_KEY"
-        : "TYPESAFE_API_KEY"
-  const apiKey = process.env[keyName]?.trim()
+        : providerID === "liquid-ai"
+          ? "LIQUID_API_KEY"
+          : "TYPESAFE_API_KEY"
+  const apiKey = credentialKey?.trim() || process.env[keyName]?.trim()
   if (!apiKey) throw new Error(`Missing ${keyName} for System One reviewer ${config.model}`)
   const client = new TypeSafeClient({
     apiKey,
@@ -64,7 +67,9 @@ export function createSystemOneInvoker(
       ? { baseURL: "https://opencode.ai/zen" }
       : providerID === "commandcode"
         ? { baseURL: "https://api.commandcode.ai/provider" }
-        : {}),
+        : providerID === "liquid-ai"
+          ? { baseURL: "https://api.liquid.ai/decisions" }
+          : {}),
     defaultModel: modelID,
     logLevel: "off",
     timeout: config.timeoutMs,

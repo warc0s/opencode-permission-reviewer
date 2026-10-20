@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test"
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 
 describe("explain CLI", () => {
   test("native inputs preserve evidence completeness without treating resources as shell commands", async () => {
@@ -22,23 +25,34 @@ describe("explain CLI", () => {
   })
 
   test("parses a bash fixture and prints capability + policyTrace", async () => {
-    const proc = Bun.spawn({
-      cmd: ["bun", "run", "src/cli/explain.ts"],
-      cwd: import.meta.dir + "/..",
-      stdin: new TextEncoder().encode(
-        JSON.stringify({ permission: "bash", metadata: { command: "pip install x" } }),
-      ),
-      stdout: "pipe",
-      stderr: "pipe",
-    })
-    const exitCode = await proc.exited
-    const stdout = await new Response(proc.stdout).text()
-    expect(exitCode).toBe(0)
-    const parsed = JSON.parse(stdout)
-    expect(parsed.permission).toBe("bash")
-    expect(parsed.capability.actionClass.value).toBe("package-management")
-    expect(parsed.policyTrace.mode).toBe("observe")
-    expect(parsed.policyTrace.finalRoute).toBe("review")
+    // Isolate HOME: the effective config reads the developer's global
+    // permission-reviewer.jsonc, where an enforcementMode of "enforce" would
+    // leak into this assertion. An empty HOME exercises the defaults path
+    // through the real loader without depending on the machine.
+    const home = mkdtempSync(join(tmpdir(), "reviewer-explain-"))
+    try {
+      const proc = Bun.spawn({
+        cmd: ["bun", "run", "src/cli/explain.ts"],
+        cwd: import.meta.dir + "/..",
+        env: { ...process.env, HOME: home },
+        stdin: new TextEncoder().encode(
+          JSON.stringify({ permission: "bash", metadata: { command: "pip install x" } }),
+        ),
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+      const exitCode = await proc.exited
+      const stdout = await new Response(proc.stdout).text()
+      expect(exitCode).toBe(0)
+      const parsed = JSON.parse(stdout)
+      expect(parsed.permission).toBe("bash")
+      expect(parsed.capability.actionClass.value).toBe("package-management")
+      expect(parsed.configuration).toBe("effective")
+      expect(parsed.policyTrace.mode).toBe("observe")
+      expect(parsed.policyTrace.finalRoute).toBe("review")
+    } finally {
+      rmSync(home, { recursive: true })
+    }
   })
 
   test("exits 2 on invalid JSON", async () => {

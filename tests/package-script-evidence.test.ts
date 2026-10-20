@@ -29,6 +29,26 @@ async function evidence(directory: string, command: string, maxChars = 24000) {
   ).text
 }
 
+test("captured shell workdir selects the target manifest without expanding read roots", async () => {
+  const directory = await fixture({ unrelated: "printf wrong-project" })
+  const target = join(directory, "target")
+  await mkdir(target)
+  await writeFile(join(target, "package.json"), JSON.stringify({ scripts: { typecheck: "tsc --noEmit" } }))
+  const collect = (workdir: unknown) => enrichPackageScriptEvidence(
+    request({ metadata: { command: "bun run typecheck", toolInput: { workdir } } }),
+    directory, directory, 24000,
+  )
+  const text = (await collect(target)).text
+  expect(text).toContain("tsc --noEmit")
+  expect(text).not.toContain("script is not defined")
+  for (const invalid of ["relative", "", 12, null]) {
+    expect((await collect(invalid)).text).toContain("working directory is unresolved")
+  }
+  const outside = await fixture({ typecheck: "printf outside-root" })
+  expect((await collect(outside)).text).not.toContain("printf outside-root")
+  expect(await evidence(directory, "bun run unrelated")).toContain("printf wrong-project")
+})
+
 test("manifest evidence resolves bounded local script chains and referenced code", async () => {
   const directory = await fixture({
     check: "bun run lint && bun run verify",

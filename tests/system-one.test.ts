@@ -61,6 +61,49 @@ function response(overrides: Record<string, unknown> = {}) {
   return { model: "jev-1.13.0", answers, usage: { input_tokens: 10, output_tokens: 0 } }
 }
 
+const BASIS_KEYS = [
+  "authorized_routine",
+  "authorized_reversible_change",
+  "insufficient_authorization",
+  "scope_mismatch",
+  "insufficient_evidence",
+  "destructive_effect",
+  "credential_or_private_data",
+  "security_or_privilege_change",
+  "external_or_remote_effect",
+  "trusted_policy_restriction",
+  "conflicting_evidence",
+] as const
+
+function denial(confidence: number, overrides: Record<string, unknown> = {}) {
+  return response({
+    outcome: choice("deny", ["allow", "deny", "escalate"], confidence),
+    risk_level: choice("high", ["low", "medium", "high", "critical"]),
+    primary_basis: choice("destructive_effect", [...BASIS_KEYS]),
+    ...overrides,
+  })
+}
+
+function hardSignalResponse(
+  outcome: "allow" | "escalate",
+  signal: "critical" | "policy",
+  confidence = 0.35,
+) {
+  return response({
+    outcome: choice(outcome, ["allow", "deny", "escalate"], confidence),
+    risk_level: choice(signal === "critical" ? "critical" : "high", [
+      "low",
+      "medium",
+      "high",
+      "critical",
+    ]),
+    primary_basis: choice(outcome === "allow" ? "authorized_routine" : "destructive_effect", [
+      ...BASIS_KEYS,
+    ]),
+    ...(signal === "policy" ? { absolute_policy_deny: { type: "noul", noul: 1 } } : {}),
+  })
+}
+
 function envelope(): ReviewEnvelope {
   return {
     request: {
@@ -96,6 +139,10 @@ describe("System One reviewer", () => {
     expect(isSystemOneReviewerModel("opencode/jev-1.13-free")).toBe(true)
     expect(isSystemOneReviewerModel("typesafe-ai/jev-latest")).toBe(true)
     expect(isSystemOneReviewerModel("commandcode/typesafe/jev")).toBe(true)
+    expect(isSystemOneReviewerModel("liquid-ai/d1-ultra")).toBe(true)
+    expect(isSystemOneReviewerModel("liquid-ai/d1")).toBe(true)
+    expect(isSystemOneReviewerModel("liquid-ai/d1-other")).toBe(false)
+    expect(isSystemOneReviewerModel("other/d1-ultra")).toBe(false)
     expect(isSystemOneReviewerModel("commandcode/jev-1.13")).toBe(false)
     expect(isSystemOneReviewerModel("commandcode/typesafe/other")).toBe(false)
     expect(isSystemOneReviewerModel("other/jev-1.13")).toBe(false)
@@ -121,6 +168,18 @@ describe("System One reviewer", () => {
         returnedModel: "typesafe/jev",
         keyName: "CMD_API_KEY",
         url: "https://api.commandcode.ai/provider/v1/systemone",
+      },
+      {
+        model: "liquid-ai/d1-ultra",
+        returnedModel: "d1-ultra",
+        keyName: "LIQUID_API_KEY",
+        url: "https://api.liquid.ai/decisions/v1/systemone",
+      },
+      {
+        model: "liquid-ai/d1",
+        returnedModel: "d1",
+        keyName: "LIQUID_API_KEY",
+        url: "https://api.liquid.ai/decisions/v1/systemone",
       },
     ] as const
     const previousBaseURL = process.env.TYPESAFE_BASE_URL
@@ -166,6 +225,36 @@ describe("System One reviewer", () => {
   test("rejects an unexpected returned model from Command Code", () => {
     const config = resolveConfig({ model: "commandcode/typesafe/jev" })
     expect(parseSystemOneReview({ ...response(), model: "jev-1.13" }, config)).toBeUndefined()
+  })
+
+  test("validates Liquid model identity and answers without relaxing Jev validation", () => {
+    const config = resolveConfig({ model: "liquid-ai/d1-ultra" })
+    const valid = { ...response(), model: "d1-ultra" }
+    expect(parseSystemOneReview(valid, config)?.decision.outcome).toBe("allow")
+    for (const model of ["d1", "jev-1.13", "liquid-ai/d1-ultra"]) {
+      expect(parseSystemOneReview({ ...valid, model }, config)).toBeUndefined()
+    }
+    expect(parseSystemOneReview({ ...valid, answers: {} }, config)).toBeUndefined()
+    expect(
+      parseSystemOneReview(valid, resolveConfig({ model: "typesafe-ai/jev-latest" })),
+    ).toBeUndefined()
+  })
+
+  test("requires a separate Liquid key rather than borrowing a TypeSafe key", () => {
+    const previous = process.env.LIQUID_API_KEY
+    const typesafeKey = process.env.TYPESAFE_API_KEY
+    delete process.env.LIQUID_API_KEY
+    process.env.TYPESAFE_API_KEY = "synthetic-typesafe-key"
+    try {
+      expect(() => createSystemOneInvoker(resolveConfig({ model: "liquid-ai/d1-ultra" }))).toThrow(
+        /Missing LIQUID_API_KEY/,
+      )
+    } finally {
+      if (previous === undefined) delete process.env.LIQUID_API_KEY
+      else process.env.LIQUID_API_KEY = previous
+      if (typesafeKey === undefined) delete process.env.TYPESAFE_API_KEY
+      else process.env.TYPESAFE_API_KEY = typesafeKey
+    }
   })
 
   test("does not borrow a TypeSafe key for a Command Code request", () => {
@@ -361,7 +450,7 @@ describe("System One reviewer", () => {
     ).toBe(false)
   })
 
-  test("preserves a valid deny even when its confidence marks it difficult", () => {
+  test("routes a valid low-confidence deny to secondary review", () => {
     const config = resolveConfig({ model: "opencode/jev-1.13-free" })
     const parsed = parseSystemOneReview(
       response({
@@ -384,6 +473,63 @@ describe("System One reviewer", () => {
       config,
     )
     expect(parsed?.difficultReason).toContain("below 0.40")
+    expect(parsed?.reasoningRecommended).toBe(true)
+    expect(parsed?.nonOverridableSignal).toBe(false)
+    expect(enforceParsedSystemOneReview(parsed!, config).kind).toBe("escalate")
+  })
+
+  test("keeps a critical deny deterministic despite low outcome confidence", () => {
+    const config = resolveConfig({ model: "opencode/jev-1.13-free" })
+    const parsed = parseSystemOneReview(
+      response({
+        outcome: choice("deny", ["allow", "deny", "escalate"], 0.35),
+        risk_level: choice("critical", ["low", "medium", "high", "critical"]),
+        primary_basis: choice("destructive_effect", [
+          "authorized_routine",
+          "authorized_reversible_change",
+          "insufficient_authorization",
+          "scope_mismatch",
+          "insufficient_evidence",
+          "destructive_effect",
+          "credential_or_private_data",
+          "security_or_privilege_change",
+          "external_or_remote_effect",
+          "trusted_policy_restriction",
+          "conflicting_evidence",
+        ]),
+      }),
+      config,
+    )
+    expect(parsed?.nonOverridableSignal).toBe(true)
+    expect(parsed?.reasoningRecommended).toBe(false)
+    expect(enforceParsedSystemOneReview(parsed!, config).kind).toBe("deny")
+  })
+
+  test("keeps an absolute policy deny deterministic despite low outcome confidence", () => {
+    const config = resolveConfig({ model: "opencode/jev-1.13-free" })
+    const parsed = parseSystemOneReview(
+      response({
+        outcome: choice("deny", ["allow", "deny", "escalate"], 0.35),
+        risk_level: choice("high", ["low", "medium", "high", "critical"]),
+        primary_basis: choice("destructive_effect", [
+          "authorized_routine",
+          "authorized_reversible_change",
+          "insufficient_authorization",
+          "scope_mismatch",
+          "insufficient_evidence",
+          "destructive_effect",
+          "credential_or_private_data",
+          "security_or_privilege_change",
+          "external_or_remote_effect",
+          "trusted_policy_restriction",
+          "conflicting_evidence",
+        ]),
+        absolute_policy_deny: { type: "noul", noul: 1 },
+      }),
+      config,
+    )
+    expect(parsed?.nonOverridableSignal).toBe(true)
+    expect(parsed?.reasoningRecommended).toBe(false)
     expect(enforceParsedSystemOneReview(parsed!, config).kind).toBe("deny")
   })
 
@@ -404,6 +550,116 @@ describe("System One reviewer", () => {
       config,
     )
     expect(parsed?.difficultReason).toContain("material safety signal")
+  })
+
+  test("does not recommend reasoning for an allow based on insufficient authorization", () => {
+    const config = resolveConfig({ model: "opencode/jev-1.13-free" })
+    const parsed = parseSystemOneReview(
+      response({ primary_basis: choice("insufficient_authorization", [...BASIS_KEYS]) }),
+      config,
+    )
+    expect(parsed?.difficultReason).toContain("restrictive primary basis")
+    expect(parsed?.reasoningRecommended).toBe(false)
+    expect(parsed?.nonOverridableSignal).toBe(false)
+    expect(enforceParsedSystemOneReview(parsed!, config).kind).toBe("escalate")
+  })
+
+  test("keeps an allow based on insufficient authorization manual without a second opinion", async () => {
+    const config = resolveConfig({ model: "opencode/jev-1.13-free" })
+    let escalations = 0
+    const backend = new SystemOneReviewerBackend(
+      config,
+      async () => {
+        escalations++
+        return { kind: "allow", reason: "unexpected" }
+      },
+      "openai/gpt-5.6-luna",
+      async () =>
+        response({ primary_basis: choice("insufficient_authorization", [...BASIS_KEYS]) }),
+    )
+    const result = await backend.review(envelope(), new ReviewAttempt("generation", 10_000))
+    expect(escalations).toBe(0)
+    expect(result.kind).toBe("escalate")
+    expect(result.decisionSource).toBe("system-one-reviewer")
+    expect(result.reviewerOutcome).toBe("allow")
+    expect(result.escalationDisposition).toBe("manual")
+  })
+
+  test("keeps a confident deny based on insufficient authorization final without a second opinion", async () => {
+    const config = resolveConfig({ model: "opencode/jev-1.13-free" })
+    let escalations = 0
+    const backend = new SystemOneReviewerBackend(
+      config,
+      async () => {
+        escalations++
+        return { kind: "allow", reason: "unexpected" }
+      },
+      "openai/gpt-5.6-luna",
+      async () =>
+        denial(0.95, {
+          primary_basis: choice("insufficient_authorization", [...BASIS_KEYS]),
+        }),
+    )
+    const result = await backend.review(envelope(), new ReviewAttempt("generation", 10_000))
+    expect(escalations).toBe(0)
+    expect(result.kind).toBe("deny")
+    expect(result.decisionSource).toBe("system-one-reviewer")
+    expect(result.reviewerOutcome).toBe("deny")
+  })
+
+  test("applies escalationMode deny to an allow based on insufficient authorization", async () => {
+    const config = resolveConfig({
+      model: "opencode/jev-1.13-free",
+      escalationMode: "deny",
+    })
+    let escalations = 0
+    const backend = new SystemOneReviewerBackend(
+      config,
+      async () => {
+        escalations++
+        return { kind: "allow", reason: "unexpected" }
+      },
+      "openai/gpt-5.6-luna",
+      async () =>
+        response({ primary_basis: choice("insufficient_authorization", [...BASIS_KEYS]) }),
+    )
+    const result = await backend.review(envelope(), new ReviewAttempt("generation", 10_000))
+    expect(escalations).toBe(0)
+    expect(result.kind).toBe("deny")
+    expect(result.decisionSource).toBe("system-one-reviewer")
+    expect(result.reviewerOutcome).toBe("allow")
+    expect(result.decision?.outcome).toBe("allow")
+    expect(result.escalationDisposition).toBe("deny")
+  })
+
+  test("keeps safety signals manual ahead of the insufficient-authorization contradiction", async () => {
+    const config = resolveConfig({ model: "opencode/jev-1.13-free" })
+    for (const signal of ["critical", "policy"] as const) {
+      let escalations = 0
+      const backend = new SystemOneReviewerBackend(
+        config,
+        async () => {
+          escalations++
+          return { kind: "allow", reason: "unexpected" }
+        },
+        "openai/gpt-5.6-luna",
+        async () => {
+          const base = hardSignalResponse("allow", signal, 1)
+          return {
+            ...base,
+            answers: {
+              ...base.answers,
+              primary_basis: choice("insufficient_authorization", [...BASIS_KEYS]),
+            },
+          }
+        },
+      )
+      const result = await backend.review(envelope(), new ReviewAttempt("generation", 10_000))
+      expect(escalations).toBe(0)
+      expect(result.kind).toBe("escalate")
+      expect(result.decisionSource).toBe("system-one-reviewer")
+      expect(result.escalationDisposition).toBe("manual")
+    }
   })
 
   test("rejects a choice that is not the most probable option", () => {
@@ -460,7 +716,7 @@ describe("System One reviewer", () => {
     expect(escalations).toBe(0)
   })
 
-  test("honors a valid System One deny without paying for reasoning", async () => {
+  test("honors a confident valid System One deny without paying for reasoning", async () => {
     const config = resolveConfig({ model: "opencode/jev-1.13-free" })
     let escalations = 0
     const backend = new SystemOneReviewerBackend(
@@ -472,7 +728,7 @@ describe("System One reviewer", () => {
       "openai/gpt-5.6-luna",
       async () =>
         response({
-          outcome: choice("deny", ["allow", "deny", "escalate"], 0.35),
+          outcome: choice("deny", ["allow", "deny", "escalate"], 0.95),
           primary_basis: choice("destructive_effect", [
             "authorized_routine",
             "authorized_reversible_change",
@@ -491,6 +747,222 @@ describe("System One reviewer", () => {
     const result = await backend.review(envelope(), new ReviewAttempt("generation", 10_000))
     expect(result.kind).toBe("deny")
     expect(escalations).toBe(0)
+  })
+
+  test("honors a confident contradictory deny without paying for reasoning", async () => {
+    const config = resolveConfig({ model: "opencode/jev-1.13-free" })
+    let escalations = 0
+    const backend = new SystemOneReviewerBackend(
+      config,
+      async () => {
+        escalations++
+        return { kind: "allow", reason: "unexpected" }
+      },
+      "openai/gpt-5.6-luna",
+      async () =>
+        denial(0.95, {
+          primary_basis: choice("authorized_routine", [...BASIS_KEYS]),
+        }),
+    )
+    const result = await backend.review(envelope(), new ReviewAttempt("generation", 10_000))
+    expect(result.kind).toBe("deny")
+    expect(result.decisionSource).toBe("system-one-reviewer")
+    expect(escalations).toBe(0)
+  })
+
+  test("routes a low-confidence deny to the configured second opinion", async () => {
+    const config = resolveConfig({ model: "opencode/jev-1.13-free" })
+    let escalations = 0
+    const backend = new SystemOneReviewerBackend(
+      config,
+      async () => {
+        escalations++
+        return {
+          kind: "escalate",
+          reason: "Second opinion remains uncertain.",
+          decisionSource: "llm-reviewer",
+          reviewerOutcome: "escalate",
+        }
+      },
+      "openai/gpt-5.6-luna",
+      async () => denial(0.35),
+    )
+    const result = await backend.review(envelope(), new ReviewAttempt("generation", 10_000))
+    expect(escalations).toBe(1)
+    expect(result.kind).toBe("escalate")
+    expect(result.reviewerModel).toBe("openai/gpt-5.6-luna")
+    expect(result.reviewerEscalatedFrom?.model).toBe("opencode/jev-1.13-free")
+  })
+
+  test("routes a low-confidence allow to the configured second opinion", async () => {
+    const config = resolveConfig({ model: "opencode/jev-1.13-free" })
+    let escalations = 0
+    const backend = new SystemOneReviewerBackend(
+      config,
+      async () => {
+        escalations++
+        return { kind: "deny", reason: "Second opinion denied the action." }
+      },
+      "openai/gpt-5.6-luna",
+      async () =>
+        response({ outcome: choice("allow", ["allow", "deny", "escalate"], 0.35) }),
+    )
+    const result = await backend.review(envelope(), new ReviewAttempt("generation", 10_000))
+    expect(escalations).toBe(1)
+    expect(result.kind).toBe("deny")
+    expect(result.reviewerModel).toBe("openai/gpt-5.6-luna")
+  })
+
+  test("routes a low-confidence explicit escalation to the configured second opinion", async () => {
+    const config = resolveConfig({
+      model: "opencode/jev-1.13-free",
+      systemOneReasoningThreshold: 0.9,
+    })
+    let escalations = 0
+    const backend = new SystemOneReviewerBackend(
+      config,
+      async () => {
+        escalations++
+        return { kind: "deny", reason: "Second opinion denied the action." }
+      },
+      "openai/gpt-5.6-luna",
+      async () =>
+        response({ outcome: choice("escalate", ["allow", "deny", "escalate"], 0.35) }),
+    )
+    const result = await backend.review(envelope(), new ReviewAttempt("generation", 10_000))
+    expect(escalations).toBe(1)
+    expect(result.kind).toBe("deny")
+    expect(result.reviewerModel).toBe("openai/gpt-5.6-luna")
+  })
+
+  test("does not send a critical deny to the second opinion", async () => {
+    const config = resolveConfig({ model: "opencode/jev-1.13-free" })
+    let escalations = 0
+    const backend = new SystemOneReviewerBackend(
+      config,
+      async () => {
+        escalations++
+        return { kind: "allow", reason: "unexpected" }
+      },
+      "openai/gpt-5.6-luna",
+      async () =>
+        denial(0.35, {
+          risk_level: choice("critical", ["low", "medium", "high", "critical"]),
+        }),
+    )
+    const result = await backend.review(envelope(), new ReviewAttempt("generation", 10_000))
+    expect(escalations).toBe(0)
+    expect(result.kind).toBe("deny")
+    expect(result.reviewerModel).toBe("opencode/jev-1.13-free")
+  })
+
+  test("keeps a low-confidence allow with critical risk manual without second opinion", async () => {
+    const config = resolveConfig({ model: "opencode/jev-1.13-free" })
+    let escalations = 0
+    const backend = new SystemOneReviewerBackend(
+      config,
+      async () => {
+        escalations++
+        return { kind: "allow", reason: "unexpected" }
+      },
+      "openai/gpt-5.6-luna",
+      async () => hardSignalResponse("allow", "critical"),
+    )
+    const result = await backend.review(envelope(), new ReviewAttempt("generation", 10_000))
+    expect(escalations).toBe(0)
+    expect(result.kind).toBe("escalate")
+    expect(result.decisionSource).toBe("system-one-reviewer")
+    expect(result.escalationDisposition).toBe("manual")
+  })
+
+  test("keeps a confident allow with policy deny manual without second opinion", async () => {
+    const config = resolveConfig({ model: "opencode/jev-1.13-free" })
+    let escalations = 0
+    const backend = new SystemOneReviewerBackend(
+      config,
+      async () => {
+        escalations++
+        return { kind: "allow", reason: "unexpected" }
+      },
+      "openai/gpt-5.6-luna",
+      async () => hardSignalResponse("allow", "policy", 1),
+    )
+    const result = await backend.review(envelope(), new ReviewAttempt("generation", 10_000))
+    expect(escalations).toBe(0)
+    expect(result.kind).toBe("escalate")
+    expect(result.decisionSource).toBe("system-one-reviewer")
+    expect(result.escalationDisposition).toBe("manual")
+  })
+
+  test("keeps a low-confidence escalate with critical risk manual without second opinion", async () => {
+    const config = resolveConfig({ model: "opencode/jev-1.13-free" })
+    let escalations = 0
+    const backend = new SystemOneReviewerBackend(
+      config,
+      async () => {
+        escalations++
+        return { kind: "allow", reason: "unexpected" }
+      },
+      "openai/gpt-5.6-luna",
+      async () => hardSignalResponse("escalate", "critical"),
+    )
+    const result = await backend.review(envelope(), new ReviewAttempt("generation", 10_000))
+    expect(escalations).toBe(0)
+    expect(result.kind).toBe("escalate")
+    expect(result.decisionSource).toBe("system-one-reviewer")
+    expect(result.escalationDisposition).toBe("manual")
+  })
+
+  test("keeps a low-confidence escalate with policy deny manual without second opinion", async () => {
+    const config = resolveConfig({ model: "opencode/jev-1.13-free" })
+    let escalations = 0
+    const backend = new SystemOneReviewerBackend(
+      config,
+      async () => {
+        escalations++
+        return { kind: "allow", reason: "unexpected" }
+      },
+      "openai/gpt-5.6-luna",
+      async () => hardSignalResponse("escalate", "policy"),
+    )
+    const result = await backend.review(envelope(), new ReviewAttempt("generation", 10_000))
+    expect(escalations).toBe(0)
+    expect(result.kind).toBe("escalate")
+    expect(result.decisionSource).toBe("system-one-reviewer")
+    expect(result.escalationDisposition).toBe("manual")
+  })
+
+  test("leaves a low-confidence decision manual when no second opinion is configured", async () => {
+    const config = resolveConfig({ model: "opencode/jev-1.13-free" })
+    const backend = new SystemOneReviewerBackend(
+      config,
+      undefined,
+      undefined,
+      async () => denial(0.35),
+    )
+    const result = await backend.review(envelope(), new ReviewAttempt("generation", 10_000))
+    expect(result.kind).toBe("escalate")
+    expect(result.decisionSource).toBe("system-one-reviewer")
+    expect(result.escalationDisposition).toBe("manual")
+  })
+
+  test("applies the failure config when the second opinion fails", async () => {
+    const config = resolveConfig({ model: "opencode/jev-1.13-free" })
+    let escalations = 0
+    const backend = new SystemOneReviewerBackend(
+      config,
+      async () => {
+        escalations++
+        throw new Error("synthetic second-opinion failure")
+      },
+      "openai/gpt-5.6-luna",
+      async () => denial(0.35),
+    )
+    const result = await backend.review(envelope(), new ReviewAttempt("generation", 10_000))
+    expect(escalations).toBe(1)
+    expect(result.kind).toBe("escalate")
+    expect(result.decisionSource).toBe("failure-safe")
+    expect(result.escalationDisposition).toBe("manual")
   })
 
   test("does not let a reasoning reviewer override an escalation with incomplete evidence", async () => {

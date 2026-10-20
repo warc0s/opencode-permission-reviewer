@@ -167,6 +167,8 @@ export interface ParsedSystemOneReview {
   primaryBasis: (typeof BASES)[number]
   difficultReason?: string
   reasoningRecommended: boolean
+  /** A critical-risk or explicit policy-deny signal that no second opinion may override. */
+  nonOverridableSignal: boolean
   returnedModel: string
 }
 
@@ -245,7 +247,9 @@ export function parseSystemOneReview(
     typeof raw.model !== "string" ||
     (config.model === "commandcode/typesafe/jev"
       ? raw.model !== "typesafe/jev"
-      : !/^jev(?:-|$)/.test(raw.model))
+      : config.model === "liquid-ai/d1-ultra" || config.model === "liquid-ai/d1"
+        ? raw.model !== config.model.slice("liquid-ai/".length)
+        : !/^jev(?:-|$)/.test(raw.model))
   )
     return
   if (typeof raw.answers !== "object" || raw.answers === null || Array.isArray(raw.answers)) return
@@ -355,16 +359,28 @@ export function parseSystemOneReview(
       : contradictions.length > 0
         ? `System One decision is uncertain or inconsistent: ${[...new Set(contradictions)].join("; ")}.`
         : undefined
+  const nonOverridableSignal =
+    decision.risk_level === "critical" || s.absolutePolicyDeny >= 0.7
+  const lowOutcomeConfidence = decision.confidence < config.systemOneConfidenceThreshold
+  // An allow justified by insufficient authorization is a manual-only
+  // contradiction. A second opinion could otherwise turn it into an automatic
+  // approval, so reasoning must never be recommended for this case.
+  const manualAuthorizationContradiction =
+    decision.outcome === "allow" && basis.choice === "insufficient_authorization"
   return {
     decision,
     primaryBasis: basis.choice,
     ...(difficultReason === undefined ? {} : { difficultReason }),
     reasoningRecommended:
       difficultReason !== undefined &&
-      (decision.outcome === "allow" ||
+      !nonOverridableSignal &&
+      !manualAuthorizationContradiction &&
+      (lowOutcomeConfidence ||
+        decision.outcome === "allow" ||
         (decision.outcome === "escalate" &&
           outcome.probabilities.allow + outcome.probabilities.deny >=
             config.systemOneReasoningThreshold)),
+    nonOverridableSignal,
     returnedModel: raw.model,
   }
 }
@@ -382,7 +398,32 @@ export function enforceParsedSystemOneReview(
   config: ReviewerConfig,
 ): ReviewExecutionResult {
   const enforced = enforceSystemOneDecision(parsed.decision, config)
-  if (parsed.difficultReason === undefined || enforced.kind === "deny") return enforced
+  if (parsed.nonOverridableSignal) {
+    if (enforced.kind === "deny") return enforced
+    return {
+      kind: "escalate",
+      decision: parsed.decision,
+      reason:
+        parsed.difficultReason ??
+        "System One reported a critical-risk or absolute policy-deny signal; manual review required.",
+      reviewerOutcome: parsed.decision.outcome,
+    }
+  }
+  // An allow whose primary basis is insufficient authorization is a
+  // contradiction that only manual review may resolve. Route it before the
+  // normal difficult-decision path so no secondary reviewer can approve it.
+  if (parsed.decision.outcome === "allow" && parsed.primaryBasis === "insufficient_authorization") {
+    return {
+      kind: "escalate",
+      decision: parsed.decision,
+      reason:
+        parsed.difficultReason ??
+        "System One allowed the action while its primary basis is insufficient authorization; manual review required.",
+      reviewerOutcome: parsed.decision.outcome,
+    }
+  }
+  if (parsed.difficultReason === undefined) return enforced
+  if (enforced.kind === "deny" && !parsed.reasoningRecommended) return enforced
   return {
     kind: "escalate",
     decision: parsed.decision,

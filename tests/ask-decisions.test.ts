@@ -249,6 +249,20 @@ describe("AskDecisionRegistry", () => {
     const limited = registry.recentFor(["ses_main", "ses_parent"], 1)
     expect(limited.map((d) => d.question)).toEqual(["que_2?"])
   })
+
+  test("a parent ask is visible to a child review scope, never to a sibling", () => {
+    const registry = new AskDecisionRegistry()
+    registry.observe(asked("que_parent", "ses_parent", ["Allow exact-file access?"]))
+    registry.observe(replied("que_parent", [["Yes"]]))
+    registry.observe(asked("que_sibling", "ses_sibling", ["Allow unrelated access?"]))
+    registry.observe(replied("que_sibling", [["Yes"]]))
+    expect(
+      registry.recentFor(["ses_child", "ses_parent"]).map((decision) => decision.question),
+    ).toEqual(["Allow exact-file access?"])
+    expect(registry.recentFor(["ses_sibling"]).map((decision) => decision.question)).toEqual([
+      "Allow unrelated access?",
+    ])
+  })
 })
 
 describe("renderAskDecisions", () => {
@@ -259,8 +273,19 @@ describe("renderAskDecisions", () => {
     ]
     const text = renderAskDecisions(decisions)!
     expect(text.split("\n")).toHaveLength(2)
-    expect(text).toContain("[12:01:03Z] Q: Run tests? A: Yes")
-    expect(text).toContain("[12:02:41Z] Q: Push? A: No")
+    expect(text).toContain("[2026-09-01T12:01:03.000Z] Q: Run tests? A: Yes")
+    expect(text).toContain("[2026-09-01T12:02:41.000Z] Q: Push? A: No")
+  })
+
+  test("renders the full UTC date so cross-day order is explicit", () => {
+    const decisions: AskDecision[] = [
+      { at: Date.UTC(2026, 8, 2, 0, 0, 1), question: "After midnight?", answer: "Yes" },
+      { at: Date.UTC(2026, 8, 1, 23, 59, 59), question: "Before midnight?", answer: "No" },
+    ]
+    const text = renderAskDecisions(decisions)!
+    expect(text.indexOf("Before midnight?")).toBeLessThan(text.indexOf("After midnight?"))
+    expect(text).toContain("[2026-09-01T23:59:59.000Z] Q: Before midnight? A: No")
+    expect(text).toContain("[2026-09-02T00:00:01.000Z] Q: After midnight? A: Yes")
   })
 
   test("returns undefined when there is nothing to show", () => {
@@ -278,6 +303,29 @@ describe("renderAskDecisions", () => {
     expect(text.length).toBeLessThanOrEqual(1_500)
     expect(text).not.toContain("q0 ")
     expect(text).toContain("q39")
+  })
+
+  test("orders decisions chronologically regardless of input order", () => {
+    const decisions: AskDecision[] = [
+      { at: Date.UTC(2026, 8, 1, 12, 2, 41), question: "Push?", answer: "No" },
+      { at: Date.UTC(2026, 8, 1, 12, 1, 3), question: "Run tests?", answer: "Yes" },
+    ]
+    const text = renderAskDecisions(decisions)!
+    expect(text.indexOf("Run tests?")).toBeLessThan(text.indexOf("Push?"))
+  })
+
+  test("an unavailable timestamp is labeled, never ordered or invented", () => {
+    const decisions: AskDecision[] = [
+      { at: Number.NaN, question: "Deploy?", answer: "Yes" },
+      { at: 1e20, question: "Out of range?", answer: "No" },
+      { at: Date.UTC(2026, 8, 1, 12, 1, 3), question: "Run tests?", answer: "Yes" },
+    ]
+    const text = renderAskDecisions(decisions)!
+    expect(text).toContain("[time unavailable] Q: Deploy? A: Yes")
+    expect(text).toContain("[time unavailable] Q: Out of range? A: No")
+    expect(text).not.toContain("Invalid Date")
+    expect(text.indexOf("Run tests?")).toBeLessThan(text.indexOf("Deploy?"))
+    expect(text).not.toMatch(/newer|later|after/i)
   })
 })
 

@@ -227,35 +227,42 @@ back to a manual prompt. Use a paid or subscription model instead.
 #### Liquid D1 and D1 Ultra (direct)
 
 This checkout supports `liquid-ai/d1` and `liquid-ai/d1-ultra` through Liquid's
-typed Decisions API at `https://api.liquid.ai/decisions/v1/systemone`. Set
-`model` to either ID in the trusted global
-`~/.config/opencode/permission-reviewer.jsonc`. Preserve your existing policy
-and failure settings. `variant` and `outputFormat` do not apply to this direct
-backend. No OpenCode chat-provider registration is needed.
+typed Decisions API at `https://api.liquid.ai/decisions/v1/systemone`. Set `model`
+to either ID in the trusted global
+`~/.config/opencode/permission-reviewer.jsonc`. Preserve your existing policy and
+failure settings. `variant` and `outputFormat` do not apply to this direct backend.
+No OpenCode chat-provider registration is needed.
 
-On the V2 host, credentials resolve in this order:
+The OpenCode V2 backend resolves credentials per review in this order:
 
-1. `LIQUID_API_KEY` in the OpenCode **server process environment**.
-2. The saved key for OpenCode's `liquid` provider integration, resolved at
-   review time; no separate credential file is read.
+1. A nonempty `LIQUID_API_KEY` in the OpenCode **server process environment** wins.
+   Surrounding whitespace is ignored, and a blank value counts as unset.
+2. Otherwise, the selected saved Liquid account is used. The backend reads the
+   `liquid` provider from host metadata, follows that provider's `integrationID`,
+   resolves only that integration's active connection, and accepts only `key`
+   credentials. Results from other integrations are never selected.
 
-The environment variable takes precedence. On the V1 host, set
-`LIQUID_API_KEY`; the saved-key fallback is V2-only. The plugin does not read secret
-files or copy OCX credentials. OCX's internal JEV Combo connection is not used
-by this backend. Missing credentials and invalid responses follow the existing
-failure policy; they cannot become approvals. The existing System One confidence
-thresholds are reused, not calibrated for D1 or D1 Ultra. Validate decisions on
-representative permission requests before trusting automatic approvals.
-Switching the global `model` back to its prior value rolls back the reviewer
-selection.
+Missing provider metadata, integration, active connection, key credential, or a
+blank saved key fails closed under the existing failure policy. Resolution errors
+and Liquid API errors use fixed diagnostics without response bodies; credentials
+are resolved per review and are never logged, persisted, or included in
+diagnostics or audit records. V1 has no supported active-account resolver, so V1
+still requires `LIQUID_API_KEY` in the server process environment.
+
+The plugin does not read or copy OCX credentials. OCX's internal JEV Combo
+connection is not used by this backend. Missing credentials and invalid
+responses follow the existing failure policy; they cannot become approvals.
+The existing System One confidence thresholds are reused, not calibrated for
+D1 or D1 Ultra. Validate decisions on representative permission requests before
+trusting automatic approvals. Switching the global `model` back to its prior
+value rolls back the reviewer selection.
 
 Set `model` in the trusted global `~/.config/opencode/permission-reviewer.jsonc`
 and put the matching key in the **OpenCode server process environment** before
 starting OpenCode. The Jev call uses the provider's System One endpoint directly;
 OpenCode's `/connect` credentials and the Command Code CLI login are not read by
-that call. Liquid is the V2 exception: when `LIQUID_API_KEY` is unset there it
-uses the saved OpenCode Liquid provider key described above. The supported
-routes are:
+this call, except for the V2 Liquid saved-account fallback described above. The
+supported routes are:
 
 | Reviewer `model`                                       | Required environment variable                          | System One API                                                                                |
 | ------------------------------------------------------ | ------------------------------------------------------ | --------------------------------------------------------------------------------------------- |

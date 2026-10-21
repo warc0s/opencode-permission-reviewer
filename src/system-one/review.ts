@@ -359,8 +359,7 @@ export function parseSystemOneReview(
       : contradictions.length > 0
         ? `System One decision is uncertain or inconsistent: ${[...new Set(contradictions)].join("; ")}.`
         : undefined
-  const nonOverridableSignal =
-    decision.risk_level === "critical" || s.absolutePolicyDeny >= 0.7
+  const nonOverridableSignal = decision.risk_level === "critical" || s.absolutePolicyDeny >= 0.7
   const lowOutcomeConfidence = decision.confidence < config.systemOneConfidenceThreshold
   return {
     decision,

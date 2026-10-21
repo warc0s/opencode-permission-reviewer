@@ -33,11 +33,17 @@ test("captured shell workdir selects the target manifest without expanding read 
   const directory = await fixture({ unrelated: "printf wrong-project" })
   const target = join(directory, "target")
   await mkdir(target)
-  await writeFile(join(target, "package.json"), JSON.stringify({ scripts: { typecheck: "tsc --noEmit" } }))
-  const collect = (workdir: unknown) => enrichPackageScriptEvidence(
-    request({ metadata: { command: "bun run typecheck", toolInput: { workdir } } }),
-    directory, directory, 24000,
+  await writeFile(
+    join(target, "package.json"),
+    JSON.stringify({ scripts: { typecheck: "tsc --noEmit" } }),
   )
+  const collect = (workdir: unknown) =>
+    enrichPackageScriptEvidence(
+      request({ metadata: { command: "bun run typecheck", toolInput: { workdir } } }),
+      directory,
+      directory,
+      24000,
+    )
   const text = (await collect(target)).text
   expect(text).toContain("tsc --noEmit")
   expect(text).not.toContain("script is not defined")

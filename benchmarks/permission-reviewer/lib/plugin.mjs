@@ -20,7 +20,7 @@ export const PINNED_BLOBS = {
   "src/capability/bash-analyzer.ts": "dcf60b95b18ffe3a0256a01075bd34634265bfec",
   "src/shell-lexer.ts": "eaf40e0f9a66f82e61ff4c38532c103c37f82759",
   "src/capability/heredoc-extractor.ts": "de3c1bb00f5d7e430c86845455ce6de6b1c94f6c",
-  "src/system-one/review.ts": "d2e48a2ae6247adbb88927c69573f149e90331d1",
+  "src/system-one/review.ts": "8faa1cdc52d9855d8d0271de6f5ee9a028b45fbd",
 }
 const gitBlob = (bytes) =>
   createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex")

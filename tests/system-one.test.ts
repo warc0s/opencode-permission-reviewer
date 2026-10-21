@@ -694,8 +694,7 @@ describe("System One reviewer", () => {
         return { kind: "deny", reason: "Second opinion denied the action." }
       },
       "openai/gpt-5.6-luna",
-      async () =>
-        response({ outcome: choice("allow", ["allow", "deny", "escalate"], 0.35) }),
+      async () => response({ outcome: choice("allow", ["allow", "deny", "escalate"], 0.35) }),
     )
     const result = await backend.review(envelope(), new ReviewAttempt("generation", 10_000))
     expect(escalations).toBe(1)
@@ -716,8 +715,7 @@ describe("System One reviewer", () => {
         return { kind: "deny", reason: "Second opinion denied the action." }
       },
       "openai/gpt-5.6-luna",
-      async () =>
-        response({ outcome: choice("escalate", ["allow", "deny", "escalate"], 0.35) }),
+      async () => response({ outcome: choice("escalate", ["allow", "deny", "escalate"], 0.35) }),
     )
     const result = await backend.review(envelope(), new ReviewAttempt("generation", 10_000))
     expect(escalations).toBe(1)
@@ -824,11 +822,8 @@ describe("System One reviewer", () => {
 
   test("leaves a low-confidence decision manual when no second opinion is configured", async () => {
     const config = resolveConfig({ model: "opencode/jev-1.13-free" })
-    const backend = new SystemOneReviewerBackend(
-      config,
-      undefined,
-      undefined,
-      async () => denial(0.35),
+    const backend = new SystemOneReviewerBackend(config, undefined, undefined, async () =>
+      denial(0.35),
     )
     const result = await backend.review(envelope(), new ReviewAttempt("generation", 10_000))
     expect(result.kind).toBe("escalate")

@@ -224,17 +224,52 @@ back to a manual prompt. Use a paid or subscription model instead.
 
 ### Jev System One reviewer
 
+#### Liquid D1 and D1 Ultra (direct)
+
+This checkout supports `liquid-ai/d1` and `liquid-ai/d1-ultra` through Liquid's
+typed Decisions API at `https://api.liquid.ai/decisions/v1/systemone`. Set `model`
+to either ID in the trusted global
+`~/.config/opencode/permission-reviewer.jsonc`. Preserve your existing policy and
+failure settings. `variant` and `outputFormat` do not apply to this direct backend.
+No OpenCode chat-provider registration is needed.
+
+The OpenCode V2 backend resolves credentials per review in this order:
+
+1. A nonempty `LIQUID_API_KEY` in the OpenCode **server process environment** wins.
+   Surrounding whitespace is ignored, and a blank value counts as unset.
+2. Otherwise, the selected saved Liquid account is used. The backend reads the
+   `liquid` provider from host metadata, follows that provider's `integrationID`,
+   resolves only that integration's active connection, and accepts only `key`
+   credentials. Results from other integrations are never selected.
+
+Missing provider metadata, integration, active connection, key credential, or a
+blank saved key fails closed under the existing failure policy. Resolution errors
+and Liquid API errors use fixed diagnostics without response bodies; credentials
+are resolved per review and are never logged, persisted, or included in
+diagnostics or audit records. V1 has no supported active-account resolver, so V1
+still requires `LIQUID_API_KEY` in the server process environment.
+
+The plugin does not read or copy OCX credentials. OCX's internal JEV Combo
+connection is not used by this backend. Missing credentials and invalid
+responses follow the existing failure policy; they cannot become approvals.
+The existing System One confidence thresholds are reused, not calibrated for
+D1 or D1 Ultra. Validate decisions on representative permission requests before
+trusting automatic approvals. Switching the global `model` back to its prior
+value rolls back the reviewer selection.
+
 Set `model` in the trusted global `~/.config/opencode/permission-reviewer.jsonc`
 and put the matching key in the **OpenCode server process environment** before
 starting OpenCode. The Jev call uses the provider's System One endpoint directly;
 OpenCode's `/connect` credentials and the Command Code CLI login are not read by
-this call. The supported routes are:
+this call, except for the V2 Liquid saved-account fallback described above. The
+supported routes are:
 
-| Reviewer `model`                                       | Required environment variable | System One API                                                                                |
-| ------------------------------------------------------ | ----------------------------- | --------------------------------------------------------------------------------------------- |
-| `opencode/jev-1.13` (or `opencode/jev-1.13-free`)      | `OPENCODE_API_KEY`            | [OpenCode Zen](https://opencode.ai/docs/en/zen/#jev)                                          |
-| `typesafe-ai/jev-1.13.0` (or `typesafe-ai/jev-latest`) | `TYPESAFE_API_KEY`            | [TypeSafe AI](https://docs.typesafe.ai/sdk/javascript)                                        |
-| `commandcode/typesafe/jev`                             | `CMD_API_KEY`                 | [Command Code Provider API](https://commandcode.ai/docs/provider#decision-models-typesafejev) |
+| Reviewer `model`                                       | Required environment variable                          | System One API                                                                                |
+| ------------------------------------------------------ | ------------------------------------------------------ | --------------------------------------------------------------------------------------------- |
+| `opencode/jev-1.13` (or `opencode/jev-1.13-free`)      | `OPENCODE_API_KEY`                                     | [OpenCode Zen](https://opencode.ai/docs/en/zen/#jev)                                          |
+| `typesafe-ai/jev-1.13.0` (or `typesafe-ai/jev-latest`) | `TYPESAFE_API_KEY`                                     | [TypeSafe AI](https://docs.typesafe.ai/sdk/javascript)                                        |
+| `commandcode/typesafe/jev`                             | `CMD_API_KEY`                                          | [Command Code Provider API](https://commandcode.ai/docs/provider#decision-models-typesafejev) |
+| `liquid-ai/d1` or `liquid-ai/d1-ultra`                 | `LIQUID_API_KEY` (V2 optional with saved OpenCode key) | [Liquid Decisions API](https://api.liquid.ai/decisions/v1/systemone)                          |
 
 For **Jev only**, omit `escalationReviewer`:
 
@@ -274,14 +309,18 @@ configured in OpenCode:
 Jev receives typed state and fixed questions, not a chat session, so `variant`
 and `outputFormat` do not apply to the primary call. The plugin reconciles its
 answers with deterministic confidence and consistency checks. Straightforward
-valid decisions are enforced normally, including valid denials. A difficult
-`allow` goes to `escalationReviewer` when configured; an explicit `escalate`
-goes there only when Jev assigns enough combined probability to `allow` or
-`deny` to make a second opinion useful. Clear escalations remain human reviews
-instead of paying for another model that is unlikely to resolve them. Without
-`escalationReviewer`, final escalations follow `escalationMode` and the failure
-settings. Provider failures, timeouts, and invalid responses never invoke the
-second model. The built-in default reviewer remains Luna.
+valid decisions are enforced normally, including confident valid denials. When
+the primary outcome confidence is below `systemOneConfidenceThreshold`, an
+`allow`, `deny`, or explicit `escalate` goes to `escalationReviewer` when
+configured. A confident explicit `escalate` goes there only when Jev assigns
+enough combined probability to `allow` or `deny` to make a second opinion
+useful; clear escalations remain human reviews. A critical-risk or absolute
+policy-deny signal never reaches the second model: a matching denial stays a
+denial, while a non-denial stays an escalation (manual unless `escalationMode`
+is `deny`). Without
+`escalationReviewer`, low-confidence decisions follow `escalationMode` and the
+failure settings. Provider failures, timeouts, and invalid responses never
+invoke the second model. The built-in default reviewer remains Luna.
 
 `systemOneConfidenceThreshold` applies to Jev's outcome confidence, not the
 lowest confidence among all descriptive fields. Supporting classifications are
@@ -289,8 +328,9 @@ used as consistency signals: very weak support restricts an `allow`, incomplete
 evidence requires stronger outcome confidence, and material safety signals
 always route away from automatic approval. This calibration is separate from
 the chat-reviewer `confidenceThreshold`.
-`systemOneReasoningThreshold` controls secondary-review traffic for explicit
-Jev escalations. Raising it sends fewer cases to the reasoning reviewer; project
+`systemOneReasoningThreshold` controls secondary-review traffic for confident
+explicit Jev escalations. Raising it sends fewer confident escalations to the
+reasoning reviewer; low-confidence decisions are still routed. Project
 configuration may raise this value but cannot lower a trusted threshold.
 
 ### Reviewer models without structured-output support

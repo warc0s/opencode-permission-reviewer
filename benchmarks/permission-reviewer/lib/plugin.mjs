@@ -9,7 +9,7 @@ import { assert, sha256 } from "./util.mjs"
 export const PINNED_BLOBS = {
   "src/policy.ts": "72dc68cc8de6f536b196e3ffbe840f8b2236cd01",
   "src/context.ts": "5473abbe19ccce27163ceaaf87a63e63e6d5215a",
-  "src/config.ts": "5799271b0c8ea441f96e89ce5f1c085879ba72f6",
+  "src/config.ts": "d9134beaab8961fe387c478b6493863f033c00a5",
   "src/decision.ts": "ad3443f3bf2ca1b34b3b23e8115c79148e19238b",
   "src/policy/policy-engine.ts": "b4470dc188d956cc0ed25454c2d34465110fe1be",
   "src/escalation.ts": "947f5ed665600927e21be343995cdc4993a45f5a",
@@ -20,7 +20,7 @@ export const PINNED_BLOBS = {
   "src/capability/bash-analyzer.ts": "dcf60b95b18ffe3a0256a01075bd34634265bfec",
   "src/shell-lexer.ts": "eaf40e0f9a66f82e61ff4c38532c103c37f82759",
   "src/capability/heredoc-extractor.ts": "de3c1bb00f5d7e430c86845455ce6de6b1c94f6c",
-  "src/system-one/review.ts": "5ab2c36e4dd19634b9de7a02ffeb9937414112e2",
+  "src/system-one/review.ts": "8faa1cdc52d9855d8d0271de6f5ee9a028b45fbd",
 }
 const gitBlob = (bytes) =>
   createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex")

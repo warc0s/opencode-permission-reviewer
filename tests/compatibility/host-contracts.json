@@ -2,13 +2,18 @@
   "v1": {
     "package": "opencode-ai",
     "minimum": "1.18.29",
-    "reference": "1.19.0",
+    "reference": "1.19.4",
     "integrities": {
       "1.18.29": "sha512-syIDVwlrYTgTOXzZe9SkInJWethbq6l3SNC762UeXyO0a9V0wGfd+U4yACvppwNBnhIsl0j2QPYYCyLpNaSomg==",
+      "1.19.4": "sha512-O3rTc9OCd6CeeJohCAjFYD3MX5U0weKzKnySfsJ9sw9uAbNZZK4meIcjd+7k3inmZB5G2qONSen3yA45yECiFA=="
+    },
+    "optionalIntegrities": {
       "1.18.30": "sha512-oLcOLQE4XzDKy6T5L5d1RdVJvXHXwVlD4hRF5V317JbUQorrl2EyDdGZk5kbgv675J9FXp8usg92MZbEWhh6gQ==",
       "1.18.31": "sha512-J95feefeWwtIaw3irx76WjzWcgQXxmuHmDVphvs5ep9X30fBJ6T6bFhw50i9Kx50MG/xPn5w2pafXIfNtdry9w==",
       "1.18.32": "sha512-SCrZWdq44y/EoH2+fE4HLcXS+DzpVqHPzmXk3p2RrufYy8LWvpfhRhKtijb5ktvx8r94ScqToqwHxR0BwS65OQ==",
-      "1.19.0": "sha512-lddJhFwZI3GLlw8VyOo4yNwBVGeVN/mxH6ORh60h69zAXL7QhjSWY9orj10rwO2kxVnxH9dh45uDCWNuiqPb8A=="
+      "1.19.0": "sha512-lddJhFwZI3GLlw8VyOo4yNwBVGeVN/mxH6ORh60h69zAXL7QhjSWY9orj10rwO2kxVnxH9dh45uDCWNuiqPb8A==",
+      "1.19.2": "sha512-F1RNgSoHTplxXlkqsPB7e+UYph9D2fhMk5PwViM3+K4wFDFemBS5THRty8LxbZNkBvcATXwT7HFoBoCOldRSrg==",
+      "1.19.3": "sha512-wDRcUlMDibaLzecIGvVGUA9naghXVqzCWcUE7N3qagpGiLSUlU4VbixI+bpsErwJp+AAuSO2lhSr/XxJl7XbrQ=="
     },
     "minimumSdk": {
       "package": "@opencode-ai/plugin",
@@ -21,13 +26,11 @@
   "v2": {
     "package": "@opencode/cli",
     "minimum": "2.0.3",
-    "reference": "2.0.28",
+    "reference": "2.1.3",
     "integrities": {
       "2.0.3": "sha512-FC4+2a5kwdKS2o/pIcGCscpSQB7PuhBObwGMfqnx/2XtoaZBMtSq/99nuEdeDNAFvy1qyK6mp2hwvoiMWsiI4w==",
-      "2.0.11": "sha512-7hnjVw7+zlcjt34hXFQ+aWuLiG20iq/nKq3O9SRwq2Dahch5RNI+Q3mbj5X3db5l1Cn1U6WcvEF2u7kQFo7JLw==",
-      "2.0.15": "sha512-Ynxz9HRJiHQBotBrQeEt3T/3TyEpkwdZkMTE7HPxT2nB1IU3WAqFXBYiIpWTYLKifXga4L5UG0sXEDISe/rJxg==",
       "2.0.18": "sha512-EkIxIa2goJ2v8U3Os2gpRckOIjN9gpUBXy6fyVOFbPZl71rkGpoF3NFsm4nlDiF2BgnIqcgJU5NgdV1k6/OZuw==",
-      "2.0.28": "sha512-nKStJJVG6to58gSPv5AuzNQZhYtou6b1jfI5EIckshWT9w8teesSLgP3gH/iSA/madUhvkNqsFjUFuD3NRne9Q=="
+      "2.1.3": "sha512-9gS4ZV4w/DtUFwbYs9AK7P293+AoCx7ED/Sq5A8Mu1xRVYSXMRljXPdF3+Ikl60UyxjFf0JS/UkDZe4BhivKYw=="
     },
     "optionalIntegrities": {
       "2.0.4": "sha512-2b1WYZoKewgKxMmMG+Lv3V7f/aZVQCULYq35x0Q8JHp1fBLK3EZVvRvp30YxurM2PVIGYnqletf2Gezykq5izQ==",
@@ -37,8 +40,15 @@
       "2.0.8": "sha512-8Zm2aVylv44fXnUD9kqxzMmhowWAikTEOiIEwJiW0I87BeCbaj2f9zqy2WYQ5PatnbgGKLkluBFdFH2qoMWyNg==",
       "2.0.9": "sha512-1HcKFKpvKbz33PLR7BrLa7TxjXOYd+Pl6QidVaO9PFzLQrlTMnmCSQm9337lFgPwXPcmshK5U3QbKbhvs+EHaw==",
       "2.0.10": "sha512-WYHnl1o1hfXKvrr54TsXTKQUrONYbEr8c7m7E0jMFe1Z+LBnwaNu5JaTpgAEIaO03DEws2ifCUhjS7A+ge2q1Q==",
+      "2.0.11": "sha512-7hnjVw7+zlcjt34hXFQ+aWuLiG20iq/nKq3O9SRwq2Dahch5RNI+Q3mbj5X3db5l1Cn1U6WcvEF2u7kQFo7JLw==",
       "2.0.14": "sha512-bA/dHw2+ZKD+ghhh2qrYvMF15v2uHSLCwSpsIs5rbI8J2tx69bJxuLd2J/DEWu5yUkgbElOtsVik2Uco1G7Z/A==",
-      "2.0.20": "sha512-y2dtcv2UCIw+1/9xDmPZ3UNcdLX5TLQYNnqhdO1Vc+Tw7o7oajvIyEBX7Okrh1GqDhZk7PPhrQe7QIEPCCefXw=="
+      "2.0.15": "sha512-Ynxz9HRJiHQBotBrQeEt3T/3TyEpkwdZkMTE7HPxT2nB1IU3WAqFXBYiIpWTYLKifXga4L5UG0sXEDISe/rJxg==",
+      "2.0.20": "sha512-y2dtcv2UCIw+1/9xDmPZ3UNcdLX5TLQYNnqhdO1Vc+Tw7o7oajvIyEBX7Okrh1GqDhZk7PPhrQe7QIEPCCefXw==",
+      "2.0.28": "sha512-nKStJJVG6to58gSPv5AuzNQZhYtou6b1jfI5EIckshWT9w8teesSLgP3gH/iSA/madUhvkNqsFjUFuD3NRne9Q==",
+      "2.0.30": "sha512-axyg30edb3bDZekClFTxZSHbXpy+VizVx6fnm3uq06XsGV3N8p5xygr+FrMFvOeqGtNrbw/uTb0a7ijKA/cWNg==",
+      "2.0.32": "sha512-nhRlQGFLMoqx50VtIvUmCV/43W6dR8Y+OXzXq17zstSjzLIUdwfBZG6zP3Mpzo0cmLQ2hvXW4/PbhvlLyhwGGg==",
+      "2.1.1": "sha512-B+FFz2XceohsO2VIFFW5xY+fF+jba5vymPD7bsOzmcyOUw0nINsO+37+afcHxj04gAwP4koK3DSngc0/Q8gq7w==",
+      "2.1.2": "sha512-9mBVQTO3WkKzP300NtHuhmXkHTfR2JwFB0AKRGRw4Lt3SNEwo5V4pzXXrwlpRAHoQmINLPuFPGOmn1kxYZdmMQ=="
     },
     "sdk": {
       "package": "@opencode/plugin",

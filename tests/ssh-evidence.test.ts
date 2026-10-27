@@ -46,7 +46,10 @@ describe("command segments with directory tracking", () => {
     await writeFile(join(outside, "sentinel.txt"), "EXTERNAL-SENTINEL\n")
     const tempParent = await fixture()
     const tempPath = join(tempParent, "opencode")
+    // Pin the mode: a group-writable umask (002) would otherwise make the clean
+    // temp directory look foreign-writable and drop it as a root.
     await mkdir(tempPath)
+    await chmod(tempPath, 0o700)
     await symlink(tempPath, join(tempParent, "link-to-temp"))
     // A clean temp directory qualifies...
     expect(await approvedEvidenceRoots("/somewhere", undefined, tempPath)).toContain(tempPath)

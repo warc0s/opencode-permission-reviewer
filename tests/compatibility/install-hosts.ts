@@ -5,18 +5,19 @@ import contracts from "./host-contracts.json"
 
 const generation = process.env.HOST_GENERATION
 if (generation !== "v1" && generation !== "v2") throw new Error("Set HOST_GENERATION to v1 or v2")
-const releases =
-  generation === "v1"
-    ? Object.entries(contracts.v1.integrities).map(([version, integrity]) => ({
-        package: contracts.v1.package,
-        version,
-        integrity,
-      }))
-    : Object.entries(contracts.v2.integrities).map(([version, integrity]) => ({
-        package: contracts.v2.package,
-        version,
-        integrity,
-      }))
+const contract = contracts[generation]
+// HOST_RELEASE=latest installs the current registry release instead of the
+// pinned matrix. It is unpinned by design and only feeds the advisory canary.
+const latest = process.env.HOST_RELEASE === "latest"
+const releases: { version: string; integrity?: string }[] = latest
+  ? [{ version: "latest" }]
+  : Object.entries(contract.integrities).map(([version, integrity]) => ({ version, integrity }))
+
+async function emit(line: string) {
+  if (process.env.GITHUB_ENV) await appendFile(process.env.GITHUB_ENV, `${line}\n`)
+  else console.log(line)
+}
+
 for (const release of releases) {
   const directory = await mkdtemp(join(tmpdir(), "reviewer-host-"))
   const proc = Bun.spawn(
@@ -28,16 +29,20 @@ for (const release of releases) {
       "--ignore-scripts",
       "--no-audit",
       "--no-fund",
-      `${release.package}@${release.version}`,
+      `${contract.package}@${release.version}`,
     ],
     { stdout: "inherit", stderr: "inherit" },
   )
   if ((await proc.exited) !== 0) throw new Error("Host installation failed")
   const lock = JSON.parse(await readFile(join(directory, "package-lock.json"), "utf8")) as {
-    packages: Record<string, { integrity?: string }>
+    packages: Record<string, { version?: string; integrity?: string }>
   }
-  if (lock.packages[`node_modules/${release.package}`]?.integrity !== release.integrity)
+  const installed = lock.packages[`node_modules/${contract.package}`]
+  if (release.integrity !== undefined && installed?.integrity !== release.integrity)
     throw new Error("Pinned host integrity mismatch")
+  const version = installed?.version
+  if (!version || !/^\d+\.\d+\.\d+$/.test(version))
+    throw new Error(`Unexpected installed host version: ${version}`)
   const binary = join(
     directory,
     "node_modules",
@@ -45,7 +50,6 @@ for (const release of releases) {
     "bin",
     "opencode",
   )
-  const variable = `OPENCODE_${generation.toUpperCase()}_${release.version.replaceAll(".", "_")}`
-  if (process.env.GITHUB_ENV) await appendFile(process.env.GITHUB_ENV, `${variable}=${binary}\n`)
-  else console.log(`${variable}=${binary}`)
+  await emit(`OPENCODE_${generation.toUpperCase()}_${version.replaceAll(".", "_")}=${binary}`)
+  if (latest) await emit(`${generation.toUpperCase()}_HOST_VERSION=${version}`)
 }

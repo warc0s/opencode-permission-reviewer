@@ -247,3 +247,79 @@ Meta models. This benchmark uses only synthetic data. For day-to-day use, this
 is a strong option for public repositories and other non-sensitive work. It is
 not recommended for confidential source code or private data. See the official
 [OpenCode Go privacy table](https://opencode.ai/docs/go/).
+
+## Decision models (System One)
+
+Evaluated on 2026-10-21 through each provider's System One API directly:
+TypeSafe AI for `jev-1.14.0`, Liquid AI for `d1` and `d1-ultra`, and Baseten for
+mammoth-1 (`decision-models/baseten-mammoth-27b-latest`) and elephant-1
+(`decision-models/baseten-elephant-9b-latest`). Every run returned 600 valid
+typed decisions with no transport failures. The typed answers are reconciled by
+the plugin's own System One code, so `Core/100` is the effective result after
+the plugin's confidence, consistency, and core gates.
+
+Each model has two rows: alone, where unresolved decisions go to a human, and
+with GPT-6 Luna medium as the reasoning reviewer for difficult cases. Each row
+uses the thresholds (confidence / reasoning) that scored best on the dev and
+validation splits among profiles with no dangerous, unsupported, or critical
+approvals on the full corpus; `Holdout` checks that choice on the 138 held-out
+cases. Latency is the mean API time per case, plus the Luna call on routed
+cases. Cost is the API list price for the 600 cases; output tokens are free.
+
+| Model             | Profile (thresholds)             | Core/100 | Holdout | Luna calls | Dangerous | Unsupported | Critical | False denials | Unnecessary escalations | Benign auto-approval | Latency |          Cost |
+| ----------------- | -------------------------------- | -------: | ------: | ---------: | --------: | ----------: | -------: | ------------: | ----------------------: | -------------------: | ------: | ------------: |
+| mammoth-1         | + GPT-6 Luna medium (0.3 / 0.5)  |    97.71 |   95.63 |     9 (2%) |         0 |           0 |        0 |             4 |                      11 |                93.0% |  1.55 s | free (launch) |
+| mammoth-1         | alone (0.3)                      |    97.43 |   95.63 |          0 |         0 |           0 |        0 |             2 |                      15 |                92.1% |  1.50 s | free (launch) |
+| elephant-1        | + GPT-6 Luna medium (0.6 / 0.26) |    96.95 |   96.05 |   95 (16%) |         0 |           0 |        0 |             5 |                      17 |                89.7% |  1.28 s | free (launch) |
+| Jev 1.14.0        | + GPT-6 Luna medium (0.3 / 0.3)  |    96.93 |   95.56 |    51 (9%) |         0 |           0 |        0 |             5 |                      15 |                90.7% |  0.60 s |        $0.141 |
+| d1-ultra          | + GPT-6 Luna medium (0.3 / 0.6)  |    95.36 |   93.14 |    14 (2%) |         0 |           0 |        0 |             0 |                      14 |                93.5% |  0.48 s |        $0.129 |
+| Jev 1.14.0        | alone (0.3)                      |    94.77 |   94.63 |          0 |         0 |           0 |        0 |             4 |                      28 |                85.0% |  0.28 s |        $0.141 |
+| d1-ultra          | alone (0.3)                      |    94.72 |   92.30 |          0 |         0 |           0 |        0 |             0 |                      20 |                90.7% |  0.40 s |        $0.129 |
+| GPT-6 Luna medium | alone (reference)                |    94.33 |       - |          - |         0 |           0 |        0 |             4 |                      22 |                      |  3.44 s |  subscription |
+| d1                | + GPT-6 Luna medium (0.4 / 0.38) |    91.56 |   88.29 |    46 (8%) |         0 |           5 |        0 |             7 |                      13 |                90.7% |  0.66 s |        $0.061 |
+| elephant-1        | alone (0.6)                      |    91.17 |   91.90 |          0 |         0 |           0 |        0 |             2 |                      56 |                72.9% |  0.74 s | free (launch) |
+| d1                | alone (0.4), no safe profile     |    89.99 |   87.03 |          0 |         0 |           5 |        0 |             6 |                      24 |                86.0% |  0.39 s |        $0.061 |
+
+mammoth-1 is the strongest decision model here: alone it beat every other
+profile, including the reasoning-reviewer combinations, with no unsafe
+approvals and two false denials. Its 95% family-bootstrap interval is
+95.73-98.53, against 92.53-96.31 for Jev 1.14.0 and 92.65-96.41 for d1-ultra;
+the model decisions scored 98.21. It is also the slowest System One model (1.50
+s mean, 1.63 s p95). The default thresholds give 97.34 alone and 97.62 with
+Luna, so the tuned values change little.
+
+elephant-1 decided well (95.94 for the model decisions) but approved seven
+requests without sufficient support at the default confidence threshold; the
+core gates removed six. Only a 0.6 confidence threshold removes the last one,
+and that sends many benign requests to a human. With Luna, it reaches 96.95 at
+the cost of routing 16% of requests. Jev 1.14.0 and d1-ultra alone are not
+separated (94.77 and 94.72); d1-ultra makes no false denials, while Jev gains
+more from a reasoning reviewer. No d1 threshold removed its five unsupported
+approvals, so its rows use the defaults.
+
+For Jev, d1-ultra, and mammoth-1, lowering the confidence threshold from the
+default 0.4 to its 0.3 minimum adds at most 0.2 points, and the default is a
+reasonable choice. The reasoning thresholds that matter are 0.6 for d1-ultra,
+where the default 0.38 sends three times as many cases to Luna for a lower
+score, and 0.26 with confidence 0.6 for elephant-1. Thresholds were swept
+offline from the stored responses: confidence from 0.3 to 0.7 and reasoning
+from 0.2 to 1.
+
+The Luna rows reuse one complete GPT-6 Luna medium run on the same prompts
+(OpenCode V1 1.19.3, OpenAI OAuth, text profile, two workers), re-gated by the
+current core, instead of calling Luna again. A routed Luna `allow` without
+sufficient evidence stays an escalation, as at runtime. These rows estimate the
+routing policy; they are not live two-model runs. Luna ran through a
+subscription, so the cost column counts only the System One API. Jev, d1, and
+d1-ultra ran with two workers; the Baseten runs used one worker with a 1-1.5 s
+pause between requests because of launch-week rate limits, which affects wall
+time but not the per-request latency shown. Baseten's models were free during
+their launch week; the `-latest` IDs are aliases and may change.
+
+Luna medium scored 97.17 on the September source. Resending the September
+prompts to the same Luna on the 42 cases whose verdict changed reproduced the
+September decision in 29, against 28 of 30 unchanged control cases, so most of
+the difference comes from the prompt rather than the model. The largest change
+is the Git remote rule: the corpus has no Git repository, so `git push` cases
+never receive the remote evidence the rule asks for and escalate more often than
+they would at runtime. This applies equally to every model in this section.

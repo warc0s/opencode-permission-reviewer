@@ -15,28 +15,28 @@ import time
 
 import pytest
 
-V2_VERSIONS = (
-    [os.environ["V2_HOST_VERSION"]]
-    if os.environ.get("V2_HOST_VERSION")
-    else ["2.0.3", "2.0.11", "2.0.15", "2.0.18", "2.0.28"]
-)
+import hosts
+
+V2_VERSIONS = hosts.pinned("v2")
+MINIMUM = hosts.CONTRACTS["v2"]["minimum"]
+REFERENCE = hosts.CONTRACTS["v2"]["reference"]
 V2_CASES = [
     (version, "json_schema", outcome)
     for version in V2_VERSIONS
     for outcome in ("allow", "deny", "service")
 ] + (
     [
-        ("2.0.3", "text", "allow"),
-        ("2.0.3", "json_schema", "ambiguous"),
-        ("2.0.3", "json_schema", "low-confidence-deny"),
-        ("2.0.3", "json_schema", "prior-deny"),
-        ("2.0.3", "json_schema", "later-deny"),
-        ("2.0.3", "json_schema", "interrupted"),
-        ("2.0.3", "json_schema", "retained"),
-        ("2.0.3", "json_schema", "brake"),
-        ("2.0.3", "json_schema", "schema-retry"),
-        ("2.0.15", "json_schema", "interrupted"),
-        ("2.0.15", "json_schema", "brake"),
+        (MINIMUM, "text", "allow"),
+        (MINIMUM, "json_schema", "ambiguous"),
+        (MINIMUM, "json_schema", "low-confidence-deny"),
+        (MINIMUM, "json_schema", "prior-deny"),
+        (MINIMUM, "json_schema", "later-deny"),
+        (MINIMUM, "json_schema", "interrupted"),
+        (MINIMUM, "json_schema", "retained"),
+        (MINIMUM, "json_schema", "brake"),
+        (MINIMUM, "json_schema", "schema-retry"),
+        (REFERENCE, "json_schema", "interrupted"),
+        (REFERENCE, "json_schema", "brake"),
     ]
     if not os.environ.get("V2_HOST_VERSION")
     else []

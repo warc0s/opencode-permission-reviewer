@@ -10,6 +10,7 @@ import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createOpencodeClient } from "@opencode-ai/sdk"
+import contracts from "./compatibility/host-contracts.json"
 import { ApprovalReviewerRuntime, resolveConfig, loadResolvedConfig } from "../dist/index.js"
 import { probeCapabilities } from "../src/opencode/capability-detection.ts"
 import { decision, request } from "./helpers.ts"
@@ -101,10 +102,11 @@ await writeFile(
 const portReservation = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() })
 const port = portReservation.port
 portReservation.stop(true)
-// Resolve the host the same way the compatibility matrix does: a pinned
-// opencode-ai binary, falling back to PATH. The
-// desktop runtime on PATH serves only the web SPA and cannot run this file.
-const hostBinary = process.env.OPENCODE_V1_1_18_32 ?? "opencode"
+// Resolve the host the same way the compatibility matrix does: the pinned V1
+// reference binary, falling back to PATH. The desktop runtime on PATH serves
+// only the web SPA and cannot run this file.
+const hostBinary =
+  process.env[`OPENCODE_V1_${contracts.v1.reference.replaceAll(".", "_")}`] ?? "opencode"
 // The pinned host honors a known server password; the client sends it back as
 // Basic auth on every request, including the readiness poll below.
 const hostPassword = process.env.REVIEWER_LIVE_PASSWORD ?? "synthetic-local-host-password"

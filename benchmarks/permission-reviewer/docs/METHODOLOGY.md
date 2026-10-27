@@ -199,7 +199,7 @@ but does not call the optional runtime reasoning reviewer. Follow-up Luna runs
 must therefore use a separately selected difficult-case subset and retain the
 parent Jev run as provenance.
 
-Use `--difficult-from runs/jev-private` for those follow-up runs. The selector
+Use `--difficult-from runs/jev` for those follow-up runs. The selector
 requires one complete System One model with one repeat, rejects transport-failed
 rows, verifies the corpus and plugin source, and records the parent fingerprint
 plus a hash of the selected case IDs. Run medium and high as separate immutable

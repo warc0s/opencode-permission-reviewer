@@ -245,7 +245,9 @@ export function parseSystemOneReview(
     typeof raw.model !== "string" ||
     (config.model === "commandcode/typesafe/jev"
       ? raw.model !== "typesafe/jev"
-      : !/^jev(?:-|$)/.test(raw.model))
+      : config.model.startsWith("liquid-ai/") || config.model.startsWith("baseten/")
+        ? raw.model !== config.model.slice(config.model.indexOf("/") + 1)
+        : !/^jev(?:-|$)/.test(raw.model))
   )
     return
   if (typeof raw.answers !== "object" || raw.answers === null || Array.isArray(raw.answers)) return

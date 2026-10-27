@@ -6,15 +6,12 @@ from pathlib import Path
 import shutil
 import subprocess
 
+import hosts
 from test_v2_reviewer import model_server  # noqa: F401
 
 import pytest
 
-V2_VERSIONS = (
-    [os.environ["V2_HOST_VERSION"]]
-    if os.environ.get("V2_HOST_VERSION")
-    else ["2.0.3", "2.0.11", "2.0.15", "2.0.18", "2.0.28"]
-)
+V2_VERSIONS = hosts.pinned("v2")
 
 
 @pytest.mark.parametrize("host_version", V2_VERSIONS)

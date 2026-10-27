@@ -80,7 +80,7 @@ test("public export is an allowlist, not a redacted copy of raw records", () => 
   assert(!("attempts" in report.results[0]))
 })
 
-test("public export rejects private, incomplete, and drifted runs", () => {
+test("public export rejects non-synthetic, incomplete, and drifted runs", () => {
   const privateRun = document()
   privateRun.results[0].origin = "non-synthetic"
   assert.throws(() => publicReport(privateRun), /synthetic/)
@@ -90,13 +90,22 @@ test("public export rejects private, incomplete, and drifted runs", () => {
   const drifted = document()
   drifted.run.source.match = false
   assert.throws(() => publicReport(drifted), /pinned/)
-  const systemOne = document()
-  systemOne.run.models[0].transport = "system-one"
-  systemOne.run.models[0].format = "system_one"
-  assert.throws(() => publicReport(systemOne), /private/)
-  const derived = document()
-  derived.run.options.difficultSubset = { kind: "system-one-difficult" }
-  assert.throws(() => publicReport(derived), /private/)
+})
+
+test("public export accepts System One decision-model runs", () => {
+  for (const [model, endpoint] of [
+    ["jev-1.14.0", "https://api.typesafe.ai"],
+    ["d1-ultra", "https://api.liquid.ai/decisions"],
+  ]) {
+    const systemOne = document()
+    Object.assign(systemOne.run.models[0], {
+      model,
+      endpoint,
+      transport: "system-one",
+      format: "system_one",
+    })
+    assert.equal(publicReport(systemOne).models[0].model, model)
+  }
 })
 
 test("private output handling does not chmod an existing public directory", async () => {

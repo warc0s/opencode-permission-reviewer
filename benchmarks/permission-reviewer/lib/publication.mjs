@@ -30,16 +30,6 @@ const pick = (value, fields) => Object.fromEntries(fields.map((key) => [key, val
 export function publicReport(document) {
   const { run, summary, results } = document
   assert(
-    !(run?.models ?? []).some(
-      (model) => model.transport === "system-one" || model.format === "system_one",
-    ),
-    "System One evaluation runs are private and cannot be exported by this harness.",
-  )
-  assert(
-    run?.options?.difficultSubset === undefined,
-    "Runs derived from a private System One evaluation cannot be exported by this harness.",
-  )
-  assert(
     run?.fingerprint && run?.datasetHash && run?.source?.sourceSha256,
     "Missing run provenance.",
   )
@@ -80,6 +70,7 @@ export function publicReport(document) {
               "attemptsWithMissingUsage",
               "complete",
             ]),
+            estimatedCost: pick(scored.operational?.estimatedCost, ["amount", "currency"]),
           },
         },
       ]

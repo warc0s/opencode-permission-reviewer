@@ -9,15 +9,12 @@ from pathlib import Path
 import urllib.request
 import urllib.parse
 
+import hosts
 from test_v2_reviewer import model_server  # noqa: F401, shared synthetic HTTP provider
 
 import pytest
 
-V1_VERSIONS = (
-    [os.environ["V1_HOST_VERSION"]]
-    if os.environ.get("V1_HOST_VERSION")
-    else ["1.18.29", "1.18.30", "1.18.31", "1.18.32", "1.19.0"]
-)
+V1_VERSIONS = hosts.pinned("v1")
 
 @pytest.mark.parametrize("version", V1_VERSIONS)
 def test_v1_isolated_server(launch_host, activate_host, probe_package, version):
@@ -71,7 +68,20 @@ def test_v1_reviewer_applies_decision(launch_host, version, model_server, outcom
                    and "COMPATIBILITY_EXECUTED" in part.get("state", {}).get("output", "")
                    for message in messages for part in message.get("parts", []))
     assert executed == (outcome == "allow"), result
-    records = [json.loads(line) for line in (host["root"] / "reviewer-audit.jsonl").read_text().splitlines()]
+    # The audit record is appended after the host accepts the reply, so a fast
+    # brake denial can finish the turn before the record lands.
+    audit_path = host["root"] / "reviewer-audit.jsonl"
+    records = []
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and not any(record.get("sessionID") == session["id"] for record in records):
+        try:
+            records = [json.loads(line) for line in audit_path.read_text().splitlines()]
+        except (OSError, json.JSONDecodeError):
+            time.sleep(0.05)
+            continue
+        time.sleep(0.05)
+    records = [record for record in records if record.get("sessionID") == session["id"]]
+    assert records, "no audit record for the session"
     assert records[-1]["outcome"] == ("deny" if outcome == "brake" else outcome)
     assert records[-1]["decisionSource"] == ("emergency-brake" if outcome == "brake" else "llm-reviewer")
     if outcome == "brake":

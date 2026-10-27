@@ -1,0 +1,12 @@
+{
+  "models": [
+    {
+      "id": "baseten-mammoth-1",
+      "model": "decision-models/baseten-mammoth-27b-latest",
+      "endpoint": "https://inference.baseten.co",
+      "apiKeyEnv": "BASETEN_API_KEY",
+      "transport": "system-one",
+      "format": "system_one"
+    }
+  ]
+}

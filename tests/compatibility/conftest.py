@@ -50,8 +50,91 @@ def activate_host():
     return activate
 
 
+def isolated_env(root, home):
+    return {
+        "PATH": os.defpath,
+        "HOME": str(home),
+        "XDG_CONFIG_HOME": str(root / "config"),
+        "XDG_DATA_HOME": str(root / "data"),
+        "XDG_CACHE_HOME": str(root / "cache"),
+        "XDG_STATE_HOME": str(root / "state"),
+        "TERM": "xterm-256color",
+    }
+
+
+def link_or_copy(source, target):
+    # Hard-link installed packages only; manifests may be rewritten in place.
+    if f"{os.sep}node_modules{os.sep}" in source:
+        try:
+            os.link(source, target)
+            return target
+        except OSError:
+            pass
+    return shutil.copy2(source, target)
+
+
+@pytest.fixture(scope="session")
+def v1_config_seed(tmp_path_factory):
+    """V1 installs its plugin SDK from npm into a cold config directory on every
+    start, with no timeout, and an instance waits on it. Install once per host
+    binary so each test starts without registry access."""
+    seeds = {}
+
+    def seed(executable):
+        if executable in seeds:
+            return seeds[executable]
+        root = tmp_path_factory.mktemp("v1-config-seed")
+        project = root / "project"
+        project.mkdir()
+        # V1 installs synchronously only when a plugin is configured.
+        (root / "noop-plugin.js").write_text("export const Noop = async () => ({})\n", encoding="utf-8")
+        (project / "opencode.json").write_text(json.dumps({"plugin": [(root / "noop-plugin.js").as_uri()]}),
+            encoding="utf-8")
+        home = root / "home"
+        home.mkdir()
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            port = listener.getsockname()[1]
+        env = {**isolated_env(root, home), "OPENCODE_DISABLE_MODELS_FETCH": "1"}
+        with (root / "server.log").open("w+", encoding="utf-8") as log:
+            process = subprocess.Popen(
+                [executable, "serve", "--hostname", "127.0.0.1", "--port", str(port)],
+                cwd=project, env=env, stdout=log, stderr=subprocess.STDOUT,
+            )
+            try:
+                url = f"http://127.0.0.1:{port}"
+                deadline = time.monotonic() + 45
+                while True:
+                    if process.poll() is not None or time.monotonic() > deadline:
+                        log.seek(0)
+                        pytest.fail(f"V1 seed host did not become ready:\n{log.read()}")
+                    try:
+                        with urllib.request.urlopen(url + "/global/health", timeout=1):
+                            break
+                    except OSError:
+                        time.sleep(0.1)
+                # The first instance request returns once the install finishes.
+                query = urllib.parse.urlencode({"directory": str(project)})
+                with urllib.request.urlopen(url + "/path?" + query, timeout=300):
+                    pass
+            finally:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=5)
+        directory = root / "config" / "opencode"
+        if not (directory / "package-lock.json").exists() or not (directory / "node_modules" / "@opencode-ai" / "plugin").is_dir():
+            pytest.fail("V1 seed host did not install its plugin SDK")
+        seeds[executable] = directory
+        return directory
+
+    return seed
+
+
 @pytest.fixture
-def launch_host(tmp_path):
+def launch_host(tmp_path, v1_config_seed):
     processes = []
 
     def launch(generation, binary, config, reviewer=None, global_config=None, profile=None, service=False, extra_env=None):
@@ -66,16 +149,15 @@ def launch_host(tmp_path):
         project.mkdir(exist_ok=profile is not None)
         home = root / "home"
         home.mkdir(exist_ok=profile is not None)
-        env = {
-            "PATH": os.defpath,
-            "HOME": str(home),
-            "XDG_CONFIG_HOME": str(root / "config"),
-            "XDG_DATA_HOME": str(root / "data"),
-            "XDG_CACHE_HOME": str(root / "cache"),
-            "XDG_STATE_HOME": str(root / "state"),
-            "TERM": "xterm-256color",
-            **(extra_env or {}),
-        }
+        env = isolated_env(root, home)
+        if generation == "v1":
+            # Keep host startup independent of registry and models.dev latency.
+            env["OPENCODE_DISABLE_MODELS_FETCH"] = "1"
+            config_dir = root / "config" / "opencode"
+            if not (config_dir / "node_modules").exists():
+                shutil.copytree(v1_config_seed(executable), config_dir, symlinks=True,
+                    copy_function=link_or_copy, dirs_exist_ok=True)
+        env.update(extra_env or {})
         if config is not None:
             (project / "opencode.json").write_text(json.dumps(config), encoding="utf-8")
         if global_config is not None:

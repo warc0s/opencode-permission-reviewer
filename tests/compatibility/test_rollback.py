@@ -6,13 +6,14 @@ from pathlib import Path
 import urllib.parse
 import urllib.request
 
+import hosts
 from test_v2_reviewer import model_server  # noqa: F401
 
 
 def test_profile_rollback_preserves_config_sessions_and_audit(launch_host, activate_host, model_server):
     package = os.environ.get("PLUGIN_PACKAGE_PATH", str(Path(__file__).resolve().parents[2]))
-    v1 = os.environ["OPENCODE_V1_1_18_32"]
-    v2 = os.environ["OPENCODE_V2_2_0_3"]
+    v1 = os.environ["OPENCODE_V1_" + hosts.CONTRACTS["v1"]["reference"].replace(".", "_")]
+    v2 = os.environ["OPENCODE_V2_" + hosts.CONTRACTS["v2"]["reference"].replace(".", "_")]
     config_v1 = {"plugin": [[package, {"model": "fixture/reviewer"}]], "permission": {"bash": "ask"}}
     provider_v1 = {"provider": {"fixture": {
         "npm": "@ai-sdk/openai-compatible", "name": "Fixture",

@@ -53,6 +53,11 @@ updates:
       - dependency-name: "@opentui/core"
       - dependency-name: "@opentui/solid"
       - dependency-name: solid-js
+      # 0.7.0 reads each response body twice, which Bun (the OpenCode plugin
+      # runtime) rejects with "Body already used".
+      - dependency-name: "@typesafe-ai/sdk"
+        versions:
+          - "0.7.0"
     commit-message:
       prefix: chore
       include: scope

@@ -22,6 +22,7 @@ const SLACK = "xox" + "b-synthetic-slack-token-1234567890"
 const JWT = "ey" + "JhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.signatureabcdefg"
 const GLPAT = "gl" + "pat-syntheticgitlabtoken1234"
 const NVAPI = "nv" + "api-syntheticnvidiatoken1234abcd"
+const LIQUID = "liq" + "uid_SyntheticLiquidToken1234567890abcdef"
 const AWS_SECRET_VAL = "wJalrXUt" + "nFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 const AWS_SECRET_LINE = "AWS_SECRET_ACCESS_KEY=" + AWS_SECRET_VAL
 const TELEGRAM = "123456789:" + "AAH-synthetic-telegram-bot-token-12345"
@@ -204,9 +205,17 @@ describe("redactSecrets — credential formats", () => {
     expect(out).toContain("[REDACTED:pem]")
   })
 
-  test("redacts GitLab / NVIDIA / Telegram tokens", () => {
+  test("redacts GitLab / NVIDIA / Liquid / Telegram tokens", () => {
     expect(redactSecrets(GLPAT)).toContain("[REDACTED:gitlab]")
     expect(redactSecrets(NVAPI)).toContain("[REDACTED:nvidia]")
+    expect(redactSecrets(`Bearer ${LIQUID}`)).toBe("Bearer [REDACTED:liquid]")
+    // Liquid template identifiers are not keys.
+    for (const text of [
+      "liquid_ui and liquid_layout",
+      "liquid_template_rendering_engine_configuration",
+      "{% liquid_layout_engine_config %}",
+    ])
+      expect(redactSecrets(text)).toBe(text)
     expect(redactSecrets(TELEGRAM)).toContain("[REDACTED:telegram]")
   })
 
@@ -214,6 +223,23 @@ describe("redactSecrets — credential formats", () => {
     expect(redactSecrets("session=abcdefgh1234567890")).not.toContain("abcdefgh")
     expect(redactSecrets('{"sid": "abcdefgh1234567890"}')).not.toContain("abcdefgh")
     expect(redactSecrets("csrf_token=abcdef1234567890abcd")).not.toContain("abcdef1234567890")
+  })
+
+  test("keeps OpenCode session IDs but not lookalike secrets", () => {
+    const id = "ses_" + "0a1b2c3d4e5f" + "AbCdEfGhIjKlMn"
+    const longId = id + "OpQrSt"
+    for (const text of [
+      `INTENT actor=user session=${id} message=msg_01`,
+      `{"sessionID": "${longId}"}`,
+      `sid=${id}`,
+    ])
+      expect(redactSecrets(text)).toBe(text)
+    // Only a whole value with the exact ID shape, and only under a session key.
+    expect(redactSecrets(`session=${id}x`)).toContain("[REDACTED:credential]")
+    expect(redactSecrets(`session=${id}/secretvalue`)).not.toContain("secretvalue")
+    expect(redactSecrets(`session=ses_${"Z".repeat(26)}`)).toContain("[REDACTED:credential]")
+    expect(redactSecrets(`password=${id}`)).not.toContain(id)
+    expect(redactSecrets(`token=${id}`)).not.toContain(id)
   })
 
   test("redacts private_key / passphrase / credential assignments", () => {

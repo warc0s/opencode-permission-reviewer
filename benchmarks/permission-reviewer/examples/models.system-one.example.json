@@ -1,13 +1,16 @@
 {
   "models": [
     {
-      "id": "jev-113-free-private",
-      "model": "jev-1.13-free",
-      "endpoint": "https://opencode.ai/zen",
-      "apiKeyEnv": "OPENCODE_API_KEY",
+      "id": "jev-1140-typesafe",
+      "model": "jev-1.14.0",
+      "endpoint": "https://api.typesafe.ai",
+      "apiKeyEnv": "TYPESAFE_API_KEY",
       "transport": "system-one",
       "format": "system_one",
-      "notes": "Private evaluation only. Do not publish or export results."
+      "pricesPerMillion": {
+        "input": 0.042,
+        "output": 0
+      }
     }
   ]
 }

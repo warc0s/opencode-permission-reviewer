@@ -1,43 +1,66 @@
 # Real-host compatibility matrix
 
 Build with `bun run build`, install pytest (`python -m pip install pytest==9.1.1`)
-in a disposable Python environment, and set these executable paths:
+in a disposable Python environment, install the pinned hosts and run the suite:
 
 ```bash
-export OPENCODE_V1_1_18_29=/absolute/path/to/opencode-1.18.29
-export OPENCODE_V1_1_18_30=/absolute/path/to/opencode-1.18.30
-export OPENCODE_V1_1_18_31=/absolute/path/to/opencode-1.18.31
-export OPENCODE_V1_1_18_32=/absolute/path/to/opencode-1.18.32
-export OPENCODE_V1_1_19_0=/absolute/path/to/opencode-1.19.0
-export OPENCODE_V2_2_0_3=/absolute/path/to/opencode-2.0.3
-export OPENCODE_V2_2_0_11=/absolute/path/to/opencode-2.0.11
-export OPENCODE_V2_2_0_15=/absolute/path/to/opencode-2.0.15
-export OPENCODE_V2_2_0_18=/absolute/path/to/opencode-2.0.18
-export OPENCODE_V2_2_0_28=/absolute/path/to/opencode-2.0.28
+HOST_GENERATION=v1 bun tests/compatibility/install-hosts.ts
+HOST_GENERATION=v2 bun tests/compatibility/install-hosts.ts
+export OPENCODE_V1_1_18_29=/absolute/path/to/opencode-1.18.29  # one per printed line
 python -m pytest tests/compatibility -q
 ```
 
-`HOST_GENERATION=v1 bun tests/compatibility/install-hosts.ts` and the equivalent
-`v2` command install pinned Linux binaries in new temporary directories and
-print the required variables. They never replace an existing installation or
-edit shell aliases. CI receives these paths through `GITHUB_ENV`.
+`install-hosts.ts` installs each pinned Linux binary in a new temporary
+directory, checks its registry integrity and prints the `OPENCODE_V*_*`
+variable the tests read. It never replaces an existing installation or edits
+shell aliases. CI receives these paths through `GITHUB_ENV`.
 
-The V2 server and TUI compile against the minimum supported plugin SDK while
-the real-host matrix exercises the minimum, reference, and recently verified
-host binaries.
+## Which hosts are verified
 
-To verify every pinned stable V2 release locally without making CI install the
-full compatibility window, run the sequential window harness. It installs one
-host at a time, verifies its integrity, runs the real-host tests, and removes
-the disposable installation before continuing:
+`host-contracts.json` is the single source of host versions; the pytest
+modules read it through `hosts.py`, so adding or retiring a host is a data
+change. Each generation lists:
+
+- `minimum`: the oldest supported host. It stays pinned until the supported
+  range itself changes.
+- `reference`: the newest verified host, quoted as "tested with" in the main
+  README.
+- `integrities`: the hosts CI runs on every push. That is the minimum, the
+  reference, and one host for each range between contract boundaries, i.e.
+  versions where a test branches on the host version (V2: `2.0.18` stands for
+  `>=2.0.18 <2.0.28`).
+- `optionalIntegrities`: previously verified releases outside the CI set,
+  kept for the on-demand window below.
+
+When a newer host is verified it replaces the previous reference in
+`integrities`, and the previous reference moves to `optionalIntegrities`
+unless it is the only host for a contract range. Extended V2 reviewer
+scenarios and the evidence suites run on the minimum and the reference.
+
+To verify every pinned and optional release of one generation, run the
+sequential window harness. It installs one host at a time, verifies its
+integrity, runs the real-host tests, and removes the disposable installation
+before continuing:
 
 ```bash
-PYTHON=/path/to/python-with-pytest \
-  bun tests/compatibility/verify-v2-window.ts
+HOST_GENERATION=v2 PYTHON=/path/to/python-with-pytest \
+  bun tests/compatibility/verify-host-window.ts
 ```
 
-The default command and CI cover the minimum, reference, and recently verified
-V2 hosts. The optional window verifies the intermediate releases on demand.
+`V1_HOST_VERSION` or `V2_HOST_VERSION` selects one release for the functional
+tests, alongside its matching executable variable. For example,
+`V1_HOST_VERSION=1.18.34` uses `OPENCODE_V1_1_18_34` without changing the
+pinned matrix.
+
+The `host compatibility advisory` workflow runs daily. It reports registry
+releases newer than the reference and runs the functional suites against the
+current `latest` host of each generation (`HOST_RELEASE=latest
+bun tests/compatibility/install-hosts.ts`). That host is unpinned, so the
+workflow is advisory and never gates merges; a failure means the next host
+bump needs work before it is pinned.
+
+The V2 server and TUI compile against the minimum supported plugin SDK while
+the real-host matrix exercises the pinned host binaries.
 
 `tests/live-v2-smoke.ts` is the paid-provider smoke for a fresh V2 host. Its
 fixture uses a placeholder plugin path that must point at the checkout before
@@ -65,11 +88,6 @@ servers connected. V1 also exercises two project backends sharing the same
 isolation files.
 The TUI module opens real PTYs and verifies visible reviewing and terminal
 states. No provider account, key, or paid inference is required.
-
-Set `V1_HOST_VERSION` or `V2_HOST_VERSION` to select one host release for the
-functional reviewer tests, alongside its matching executable variable. For
-example, `V1_HOST_VERSION=1.18.34` uses `OPENCODE_V1_1_18_34` without changing
-the pinned CI matrix.
 
 Without `PLUGIN_PACKAGE_PATH`, the functional tests load this checkout's built
 package. To validate installation, run `PACKAGE_MANAGER=npm bun

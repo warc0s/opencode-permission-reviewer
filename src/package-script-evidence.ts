@@ -1,5 +1,5 @@
-import { basename, dirname, join } from "node:path"
-import { lstat } from "node:fs/promises"
+import { basename, dirname, join, resolve } from "node:path"
+import { lstat, realpath, stat } from "node:fs/promises"
 import type { PermissionRequest } from "./types.ts"
 import { sourceCommand } from "./evidence/source-command.ts"
 import { includeEvidenceFile, shellCommandSegmentsWithDirectory } from "./ssh-evidence.ts"
@@ -77,6 +77,31 @@ function invocation(tokens: string[]): ScriptInvocation | undefined {
     ...(ambiguous
       ? { unresolved: "runtime directory or workspace selection is not resolved" }
       : {}),
+  }
+}
+
+/** The directory the host runs the shell command in. A relative workdir resolves
+ *  against the session directory, as the host does. Another workdir is followed to
+ *  its real path, because package managers search parent manifests physically. A
+ *  workdir that is not an existing directory is undefined, so another directory's
+ *  manifest is never reported as the target. */
+async function shellWorkdir(
+  request: PermissionRequest,
+  directory: string,
+): Promise<string | undefined> {
+  const input = request.metadata.toolInput
+  if (typeof input !== "object" || input === null || Array.isArray(input)) return directory
+  const workdir = (input as Record<string, unknown>).workdir
+  if (workdir === undefined || (typeof workdir === "string" && workdir.trim() === ""))
+    return directory
+  if (typeof workdir !== "string" || workdir.includes("\0")) return
+  const resolved = resolve(directory, workdir)
+  if (resolved === resolve(directory)) return directory
+  try {
+    const real = await realpath(resolved)
+    return (await stat(real)).isDirectory() ? real : undefined
+  } catch {
+    return
   }
 }
 
@@ -266,8 +291,14 @@ export async function enrichPackageScriptEvidence(
     }
     active.delete(key)
   }
-  for (const segment of shellCommandSegmentsWithDirectory(sourceCommand(request), directory)) {
-    for (const call of calls(segment.tokens)) await visit(call, segment.directory, 0)
+  // The workdir only selects the starting manifest; reads stay within the approved roots.
+  const workdir = await shellWorkdir(request, directory)
+  for (const segment of shellCommandSegmentsWithDirectory(
+    sourceCommand(request),
+    workdir ?? directory,
+  )) {
+    for (const call of calls(segment.tokens))
+      await visit(call, workdir === undefined ? undefined : segment.directory, 0)
   }
   if (records.length === 0) return { text: "" }
   const serialize = () =>

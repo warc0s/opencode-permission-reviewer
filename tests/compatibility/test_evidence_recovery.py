@@ -10,14 +10,14 @@ import urllib.request
 import uuid
 
 import pytest
+import hosts
 from test_v2_reviewer import model_server  # noqa: F401
 
 
-CASES = [(generation, version) for generation, version in
-         [("v1", "1.18.29"), ("v1", "1.19.0"), ("v2", "2.0.3"), ("v2", "2.0.28")]
+CASES = [(generation, version)
+         for generation in ("v1", "v2")
          if os.environ.get("HOST_GENERATION", generation) == generation
-         and (generation != "v2" or not os.environ.get("V2_HOST_VERSION")
-              or os.environ["V2_HOST_VERSION"] == version)]
+         for version in hosts.anchors(generation)]
 
 
 @pytest.mark.parametrize("generation,version", CASES)

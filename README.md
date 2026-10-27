@@ -48,7 +48,7 @@ the host and configuration.
 ### Requirements
 
 - [Bun](https://bun.sh) ≥ 1.3.0 (CI runs 1.3.0 and 1.3.5)
-- [OpenCode](https://opencode.ai) V1 `>=1.18.29 <2` (**tested with 1.19.0**), or V2 `>=2.0.3 <3` (**tested with 2.0.28**)
+- [OpenCode](https://opencode.ai) V1 `>=1.18.29 <2` (**tested with 1.19.4**), or V2 `>=2.0.3 <3` (**tested with 2.1.3**)
 - `git` on `PATH` (only used for read-only Git-state enrichment; missing git
   degrades gracefully)
 - A model provider configured in OpenCode, exposing a model that follows JSON
@@ -230,11 +230,13 @@ starting OpenCode. The Jev call uses the provider's System One endpoint directly
 OpenCode's `/connect` credentials and the Command Code CLI login are not read by
 this call. The supported routes are:
 
-| Reviewer `model`                                       | Required environment variable | System One API                                                                                |
-| ------------------------------------------------------ | ----------------------------- | --------------------------------------------------------------------------------------------- |
-| `opencode/jev-1.13` (or `opencode/jev-1.13-free`)      | `OPENCODE_API_KEY`            | [OpenCode Zen](https://opencode.ai/docs/en/zen/#jev)                                          |
-| `typesafe-ai/jev-1.13.0` (or `typesafe-ai/jev-latest`) | `TYPESAFE_API_KEY`            | [TypeSafe AI](https://docs.typesafe.ai/sdk/javascript)                                        |
-| `commandcode/typesafe/jev`                             | `CMD_API_KEY`                 | [Command Code Provider API](https://commandcode.ai/docs/provider#decision-models-typesafejev) |
+| Reviewer `model`                                                                                               | Required environment variable | System One API                                                                                |
+| -------------------------------------------------------------------------------------------------------------- | ----------------------------- | --------------------------------------------------------------------------------------------- |
+| `opencode/jev-1.13` (or `opencode/jev-1.13-free`)                                                              | `OPENCODE_API_KEY`            | [OpenCode Zen](https://opencode.ai/docs/en/zen/#jev)                                          |
+| `typesafe-ai/jev-1.14.0` (or `typesafe-ai/jev-latest`)                                                         | `TYPESAFE_API_KEY`            | [TypeSafe AI](https://docs.typesafe.ai/sdk/javascript)                                        |
+| `commandcode/typesafe/jev`                                                                                     | `CMD_API_KEY`                 | [Command Code Provider API](https://commandcode.ai/docs/provider#decision-models-typesafejev) |
+| `liquid-ai/d1` (or `liquid-ai/d1-ultra`)                                                                       | `LIQUID_API_KEY`              | [Liquid AI](https://docs.liquid.ai/lfm/models/d1)                                             |
+| `baseten/decision-models/baseten-mammoth-27b-latest` (or `baseten/decision-models/baseten-elephant-9b-latest`) | `BASETEN_API_KEY`             | [Baseten](https://docs.baseten.co/inference/model-apis/decision-models)                       |
 
 For **Jev only**, omit `escalationReviewer`:
 
@@ -251,6 +253,22 @@ provider. Command Code requires an API-enabled plan such as GOAT, Pro, Max,
 Team, or Provider; the Go plan has no Provider API access. Use a Command Code
 API key from Studio in `CMD_API_KEY`. Jev is a headless decision model there,
 so it cannot be selected as an interactive Command Code chat model.
+
+Liquid AI's d1 and Baseten's mammoth-1 and elephant-1 decision models use the
+same typed System One questions and the same thresholds as Jev. On the synthetic
+PRB-600 corpus, `baseten/decision-models/baseten-mammoth-27b-latest` scored
+highest, alone or with a reasoning reviewer, with the default thresholds. Jev
+1.14 gains the most from an `escalationReviewer`. `liquid-ai/d1-ultra` alone
+made no false denials; with an `escalationReviewer`, set
+`systemOneReasoningThreshold` to `0.6` for it. elephant-1 needs
+`systemOneConfidenceThreshold: 0.6` to avoid unsupported approvals, and the
+smaller `liquid-ai/d1` made unsupported approvals at every threshold and is not
+recommended. See the
+[benchmark results](./benchmarks/permission-reviewer/RESULTS.md#decision-models-system-one). For Liquid AI, create a key in
+the Liquid Console; its keys start with `liquid_`. Other providers, such as the
+`liquid` inference router in OpenCode's model catalog, also read
+`LIQUID_API_KEY`, so the plugin refuses to send a key that is not shaped like a
+Liquid AI key and the review follows the failure settings instead.
 
 For **Jev with selective reasoning escalation**, add a chat model already
 configured in OpenCode:
@@ -733,8 +751,8 @@ binary, blocked, or truncated evidence) remains a reviewer decision.
 
 | Component             | Supported          | Notes                                                      |
 | --------------------- | ------------------ | ---------------------------------------------------------- |
-| OpenCode V1           | `>=1.18.29 <2`     | Dual object entrypoint; verified with **1.19.0**           |
-| OpenCode V2           | `>=2.0.3 <3`       | Compatibility layer; verified with **2.0.28**              |
+| OpenCode V1           | `>=1.18.29 <2`     | Dual object entrypoint; verified with **1.19.4**           |
+| OpenCode V2           | `>=2.0.3 <3`       | Compatibility layer; verified with **2.1.3**               |
 | `@opencode-ai/plugin` | `>=1.18.29 <2`     | Optional V1 peer dependency                                |
 | Bun                   | `>=1.3.0`          | Declared in `engines.bun`; CI runs **1.3.0** and **1.3.5** |
 | TUI overlay           | OpenCode V1 and V2 | Separate host adapters, shared raw TSX presentation        |

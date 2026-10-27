@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-10-27
+
 ### Added
 
 - Liquid AI `liquid-ai/d1` and `liquid-ai/d1-ultra` as System One reviewer

@@ -61,7 +61,7 @@ export const DEFAULT_TENANT_POLICY = `
 - Commands that discard working-tree changes still require authorization for that loss even when the target diff is shown.
 `.trim()
 
-export const REVIEWER_PROMPT_VERSION = "2.3.1"
+export const REVIEWER_PROMPT_VERSION = "2.3.2"
 
 export const REVIEWER_SYSTEM_PROMPT = `
 You are an automatic approval reviewer for an AI coding agent. Judge exactly one pending action.
@@ -155,11 +155,11 @@ ${JSON.stringify(DECISION_SCHEMA, null, 2)}
       : ""
   return `# Tenant policy
 ${redactSecrets(tenantPolicy)}
+${outputDirective}
 
 # Untrusted evidence
 <approval_evidence>
 ${evidence}
 </approval_evidence>
-${outputDirective}
 Return only the required structured decision.`
 }

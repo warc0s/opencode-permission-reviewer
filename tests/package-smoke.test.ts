@@ -2,6 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test"
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { tmpdir } from "node:os"
+import { satisfies } from "semver"
 
 const CWD = import.meta.dir + "/.."
 
@@ -252,7 +253,7 @@ describe("supply-chain surface", () => {
 // silently renders nothing while the server side keeps working. These guards
 // keep the shipped dependency pins compatible with that install shape.
 describe("npm install dedupe shape", () => {
-  test("shipped solid-js and @opentui pins match @opentui/solid's exact requirements", async () => {
+  test("shipped solid-js and @opentui pins match @opentui/solid's requirements", async () => {
     const pkg = JSON.parse(await readFromTarball(packOnce(), "package.json")) as {
       dependencies: Record<string, string>
     }
@@ -264,9 +265,13 @@ describe("npm install dedupe shape", () => {
       dependencies: Record<string, string>
     }
 
-    // Exact string equality: a "compatible" range is not enough. Arborist only
-    // dedupes to a single copy when the pins resolve to the same version.
-    expect(pkg.dependencies["solid-js"]).toBe(opentui.peerDependencies["solid-js"])
+    // We pin solid-js exactly; it must satisfy @opentui/solid's peer range so
+    // Arborist resolves that peer to our copy instead of nesting a second
+    // runtime (the install test below checks the resulting tree).
+    expect(pkg.dependencies["solid-js"]).toMatch(/^\d+\.\d+\.\d+$/)
+    expect(satisfies(pkg.dependencies["solid-js"]!, opentui.peerDependencies["solid-js"]!)).toBe(
+      true,
+    )
     expect(pkg.dependencies["@opentui/core"]).toBe(opentui.dependencies["@opentui/core"])
     expect(pkg.dependencies["@opentui/solid"]).toBe(opentui.version)
   }, 120_000)
@@ -362,19 +367,16 @@ describe("npm install dedupe shape", () => {
     }
 
     // @babel/core reaches the consumer tree through @opentui/solid, which
-    // pins it EXACTLY (7.28.0 at every published 0.5.x). GHSA-4x5r-pxfx-6jf8
-    // (arbitrary file read via a crafted sourceMappingURL comment) affects
-    // <= 7.29.0. The exposure is residual and DOCUMENTED, not fixed: in this
-    // package babel only compiles the TUI sources we ship, never
-    // attacker-influenced input. When @opentui/solid publishes a fixed pin,
-    // this assertion forces the conscious version bump and doc update.
+    // pins it EXACTLY (7.29.7 at 0.8.1, past GHSA-4x5r-pxfx-6jf8, which
+    // affects <= 7.29.0). Pinning the installed version here makes any move
+    // of that pin a conscious bump.
     const babelDir = existsSync(join(installDir, "node_modules", "@babel", "core"))
       ? join(installDir, "node_modules", "@babel", "core")
       : join(installDir, "node_modules", "@opentui", "solid", "node_modules", "@babel", "core")
     const babelPkg = JSON.parse(readFileSync(join(babelDir, "package.json"), "utf8")) as {
       version: string
     }
-    expect(babelPkg.version).toBe("7.28.0")
+    expect(babelPkg.version).toBe("7.29.7")
 
     // The build toolchain must not follow the tarball: esbuild (and the
     // advisory it carries) is dev-only by design.
@@ -429,17 +431,15 @@ describe("npm install dedupe shape", () => {
     if (unexpected.length > 0) console.log("consumer native set:", natives)
     expect(unexpected).toEqual([])
 
-    // seroval reaches the consumer tree through solid-js, which
-    // @opentui/solid peer-pins EXACTLY (1.9.12 at every published 0.5.x).
-    // GHSA-p6vx-979v-rg4c and GHSA-jp82-f5mq-hwhp (seroval fromJSON
-    // deserialization) are residual and DOCUMENTED, not fixed: seroval is only
+    // seroval reaches the consumer tree through solid-js, which this package
+    // pins exactly. solid-js 1.9.18 requires seroval ~1.6.11, past the
+    // fromJSON deserialization advisories (fixed in 1.6.8). seroval is only
     // imported by the SSR renderer solid-js/web, which neither our TUI nor
-    // OpenTUI loads. When @opentui/solid moves its pin, this assertion forces
-    // the conscious version bump and doc update.
+    // OpenTUI loads; the import scan below keeps it that way.
     const solidPkg = JSON.parse(
       readFileSync(join(installDir, "node_modules", "solid-js", "package.json"), "utf8"),
     ) as { version: string }
-    expect(solidPkg.version).toBe("1.9.12")
+    expect(solidPkg.version).toBe("1.9.18")
     const ssrImporters: string[] = []
     const findSsrImports = (dir: string) => {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -457,12 +457,10 @@ describe("npm install dedupe shape", () => {
     findSsrImports(join(installDir, "node_modules", "opencode-permission-reviewer", "dist"))
     findSsrImports(join(installDir, "node_modules", "@opentui"))
     expect(ssrImporters).toEqual([])
-    const residualAdvisories = new Set(["GHSA-p6vx-979v-rg4c", "GHSA-jp82-f5mq-hwhp"])
 
     // npm audit over the CONSUMER tree (registry reachability required; the
     // repository's own overrides never apply here). No high or critical
-    // advisories beyond the documented seroval residuals; low ones are the
-    // documented residuals above.
+    // advisories are admitted.
     const audit = Bun.spawnSync({
       cmd: ["npm", "audit", "--prefix", installDir, "--audit-level=high", "--json"],
       cwd: installDir,
@@ -492,7 +490,7 @@ describe("npm install dedupe shape", () => {
           severe.add(via.url?.split("/").pop() ?? JSON.stringify(via))
         }
       }
-      expect([...severe].filter((id) => !residualAdvisories.has(id))).toEqual([])
+      expect([...severe]).toEqual([])
     }
   }, 240_000)
 })

@@ -1,10 +1,10 @@
+import { satisfies } from "semver"
 import pkg from "../../package.json"
 
-// Read registry metadata only. @opentui/solid peer-pins solid-js exactly and
-// Dependabot ignores the @opentui/* + solid-js set, so nothing else reports
-// when upstream moves that pin. Failing here turns the scheduled run red, which
-// is the signal to move the three packages together and revisit the seroval
-// residual admitted by the consumer audit in tests/package-smoke.test.ts.
+// Read registry metadata only. Dependabot ignores the @opentui/* + solid-js
+// set, so nothing else reports when upstream @opentui/solid stops accepting the
+// solid-js we pin. Failing here turns the scheduled run red, which is the
+// signal to move the three packages together.
 const pinned = pkg.dependencies["solid-js"]
 const lookup = Bun.spawn(
   ["npm", "view", "@opentui/solid@latest", "version", "peerDependencies", "--json"],
@@ -24,11 +24,11 @@ const version = latest.version
 const peer = latest.peerDependencies?.["solid-js"]
 if (typeof version !== "string" || typeof peer !== "string")
   throw new Error("Invalid registry metadata for @opentui/solid")
-if (peer !== pinned) {
+if (!satisfies(pinned, peer)) {
   console.log(
-    `::error::@opentui/solid ${version} peers solid-js ${peer}; this package pins solid-js ${pinned}. Move @opentui/core, @opentui/solid and solid-js together, then drop the seroval residual from tests/package-smoke.test.ts and the README if the new solid-js no longer carries it.`,
+    `::error::@opentui/solid ${version} peers solid-js ${peer}; this package pins solid-js ${pinned}. Move @opentui/core, @opentui/solid and solid-js together.`,
   )
   process.exitCode = 1
 } else {
-  console.log(`@opentui/solid ${version}: solid-js peer pin ${peer} unchanged`)
+  console.log(`@opentui/solid ${version}: solid-js peer ${peer} accepts the pinned ${pinned}`)
 }

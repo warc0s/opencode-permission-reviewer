@@ -18,7 +18,7 @@ export const PINNED_BLOBS = {
   "src/emergency-brake.ts": "f583b97b7d917b785c39ab208faa80b45fb6b6e8",
   "src/redact.ts": "27f14d86cee160ca4d759b13bc681212ddc649c5",
   "src/capability/command-parser.ts": "926def261a0f1af1eec4a5991a89eb24da32af59",
-  "src/capability/bash-analyzer.ts": "dcf60b95b18ffe3a0256a01075bd34634265bfec",
+  "src/capability/bash-analyzer.ts": "86e5b6eabba376a087a99fed4cfa13185c9819ca",
   "src/shell-lexer.ts": "eaf40e0f9a66f82e61ff4c38532c103c37f82759",
   "src/capability/heredoc-extractor.ts": "de3c1bb00f5d7e430c86845455ce6de6b1c94f6c",
   "src/system-one/review.ts": "af86e3e95bcb19d7ef892612982ce8515a07f52a",

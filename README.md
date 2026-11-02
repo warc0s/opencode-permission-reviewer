@@ -10,7 +10,7 @@
 > and genuinely risky ones still get blocked or surfaced.
 
 [![OpenCode](https://img.shields.io/badge/OpenCode-%E2%89%A51.18.29-6E56CF)](https://opencode.ai)
-[![Bun](https://img.shields.io/badge/Bun-%E2%89%A51.3.0-000000)](https://bun.sh)
+[![Bun](https://img.shields.io/badge/Bun-%E2%89%A51.3.14-000000)](https://bun.sh)
 [![npm](https://img.shields.io/npm/v/opencode-permission-reviewer?color=CB3837)](https://www.npmjs.com/package/opencode-permission-reviewer)
 [![Downloads](https://img.shields.io/npm/dw/opencode-permission-reviewer)](https://www.npmjs.org/package/opencode-permission-reviewer)
 [![License](https://img.shields.io/github/license/Warc0s/opencode-permission-reviewer?color=blue)](./LICENSE)
@@ -47,8 +47,8 @@ the host and configuration.
 
 ### Requirements
 
-- [Bun](https://bun.sh) ≥ 1.3.0 (CI runs 1.3.0 and 1.3.5)
-- [OpenCode](https://opencode.ai) V1 `>=1.18.29 <2` (**tested with 1.19.4**), or V2 `>=2.0.3 <3` (**tested with 2.1.3**)
+- [Bun](https://bun.sh) ≥ 1.3.14 (CI runs 1.3.14 and 1.4.4)
+- [OpenCode](https://opencode.ai) V1 `>=1.18.29 <2` (**tested with 1.19.5**), or V2 `>=2.0.3 <3` (**tested with 2.1.3**)
 - `git` on `PATH` (only used for read-only Git-state enrichment; missing git
   degrades gracefully)
 - A model provider configured in OpenCode, exposing a model that follows JSON
@@ -712,31 +712,19 @@ binary, blocked, or truncated evidence) remains a reviewer decision.
   consumer actually gets: the platform-specific packages under `@opentui`
   (rendering only), the optional `@msgpackr-extract` accelerators, the exact
   `@babel/core` and `solid-js` versions documented below, and an `npm audit`
-  gate that fails on any high or critical advisory other than the documented
-  `seroval` residuals. Root
+  gate that fails on any high or critical advisory. Root
   `overrides` in this repository protect the development tree only; npm never
   applies a dependency's overrides to the installing application, which is
   why consumer-side guarantees live in tests against the installed tree
   itself.
-- **Known residual exposure, documented, not fixed.** `@opentui/solid` pins
-  `@babel/core@7.28.0` exactly (every published 0.5.x does), and
-  GHSA-4x5r-pxfx-6jf8 (arbitrary file read via a crafted `sourceMappingURL`
-  comment, low severity) affects `@babel/core <= 7.29.0`. In this package
-  that copy of babel only compiles the TUI sources we ship in the tarball,
-  never repository- or attacker-influenced input, so the advisory's
-  conditions are not met by our usage; it is still reachable in the consumer
-  tree and therefore tracked: the consumer surveillance test pins the
-  installed version, and moving off 7.28.0 is a conscious bump (an
-  `@opentui/solid` release with a fixed pin, or dropping the exact-pin
-  constraint) together with this note. The development tree overrides Babel to
-  7.29.7, but that override cannot reach an npm consumer. Likewise,
-  `@opentui/solid` peer-pins `solid-js@1.9.12` exactly, whose `seroval`
-  dependency carries GHSA-p6vx-979v-rg4c and GHSA-jp82-f5mq-hwhp (unsafe
-  `fromJSON` deserialization, fixed in `solid-js` 1.9.16). `seroval` is only
-  imported by the SSR renderer `solid-js/web`, which neither this package nor
-  OpenTUI loads, so the vulnerable code is not reachable at runtime; the
-  consumer surveillance test pins `solid-js`, asserts that nothing imports
-  `solid-js/web`, and admits only those two advisories. Separately, `esbuild`
+- **Pinned TUI runtime.** `@opentui/solid` 0.8.1 pins `@babel/core@7.29.7`
+  exactly (past GHSA-4x5r-pxfx-6jf8), and this package pins `solid-js@1.9.18`,
+  which accepts only `seroval` ~1.6.11 (past the `fromJSON` deserialization
+  advisories fixed in 1.6.8). That copy of babel only compiles the TUI sources
+  we ship, and `seroval` is only imported by the SSR renderer `solid-js/web`,
+  which neither this package nor OpenTUI loads. The consumer surveillance test
+  pins both installed versions and asserts that nothing imports
+  `solid-js/web`, so moving either is a conscious bump. Separately, `esbuild`
   (a build-time dependency here, never shipped) is root-overridden past
   GHSA-g7r4-m6w7-qqqr; that override intentionally does not reach consumers
   because consumers never install `esbuild` from this package at all.
@@ -749,14 +737,14 @@ binary, blocked, or truncated evidence) remains a reviewer decision.
 
 ## Supported versions
 
-| Component             | Supported          | Notes                                                      |
-| --------------------- | ------------------ | ---------------------------------------------------------- |
-| OpenCode V1           | `>=1.18.29 <2`     | Dual object entrypoint; verified with **1.19.4**           |
-| OpenCode V2           | `>=2.0.3 <3`       | Compatibility layer; verified with **2.1.3**               |
-| `@opencode-ai/plugin` | `>=1.18.29 <2`     | Optional V1 peer dependency                                |
-| Bun                   | `>=1.3.0`          | Declared in `engines.bun`; CI runs **1.3.0** and **1.3.5** |
-| TUI overlay           | OpenCode V1 and V2 | Separate host adapters, shared raw TSX presentation        |
-| OS                    | Linux (verified)   | Other operating systems require equivalent live validation |
+| Component             | Supported          | Notes                                                       |
+| --------------------- | ------------------ | ----------------------------------------------------------- |
+| OpenCode V1           | `>=1.18.29 <2`     | Dual object entrypoint; verified with **1.19.5**            |
+| OpenCode V2           | `>=2.0.3 <3`       | Compatibility layer; verified with **2.1.3**                |
+| `@opencode-ai/plugin` | `>=1.18.29 <2`     | Optional V1 peer dependency                                 |
+| Bun                   | `>=1.3.14`         | Declared in `engines.bun`; CI runs **1.3.14** and **1.4.4** |
+| TUI overlay           | OpenCode V1 and V2 | Separate host adapters, shared raw TSX presentation         |
+| OS                    | Linux (verified)   | Other operating systems require equivalent live validation  |
 
 - **TUI overlay** ships as **raw TSX** (`dist/tui/tui.tsx`). The host compiles
   it against its embedded Solid/OpenTUI runtime. A prebundled TUI entry loads

@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.1] - 2026-11-02
+
+### Security
+
+- Bumped `@opentui/core` and `@opentui/solid` to 0.8.1 and `solid-js` to
+  1.9.18. A consumer install now gets `seroval` 1.6.12, past
+  GHSA-97r2-qh9m-474h, GHSA-wp97-x4hv-qvhp, GHSA-7rv5-mrxv-xcr9,
+  GHSA-p6vx-979v-rg4c and GHSA-jp82-f5mq-hwhp, and `@babel/core` 7.29.7, past
+  GHSA-4x5r-pxfx-6jf8. The consumer `npm audit` gate no longer admits any
+  residual advisory.
+
+### Fixed
+
+- Commands that usually only read are no longer labeled read-only when they
+  write or run something. `sort` now recognizes `-o` inside a short-option
+  cluster (`sort -uo FILE`), attached (`-nruoFILE`), and as an abbreviated
+  long option (`--out=FILE`), and `--compress-program` as code execution.
+  `uniq` and `xxd` now report their second operand as a write, `tree` reports
+  `-o FILE` and `-R`, and `yq` reports `-i` inside a cluster (`-iP`) and
+  `--inplace=true`. Before, enforced policy rules on writes or code execution
+  did not match these forms, and the reviewer was told the command was
+  read-only.
+- On OpenCode V2, the TUI's fallback theme is a fresh copy on every call, so a
+  caller that mutates the returned theme no longer changes it for later
+  renders.
+
+### Changed
+
+- The minimum Bun is now 1.3.14 (`engines.bun`), the floor declared by
+  `@opentui/core` 0.8. Every supported OpenCode host already embeds Bun 1.3.14
+  or later, so plugin installs inside OpenCode are unaffected. CI now runs
+  1.3.14 and 1.4.4.
+- Verified with OpenCode V1 1.19.5.
+
 ## [2.5.0] - 2026-10-27
 
 ### Added

@@ -67,4 +67,24 @@ describe("cacheable review context", () => {
     input.actionEvidenceComplete = false
     expect(buildEvidenceResult(input, DEFAULT_CONFIG).actionEvidenceComplete).toBe(false)
   })
+
+  test("long context preserves script semantics or blocks automatic approval", () => {
+    const config = { ...DEFAULT_CONFIG, maxContextChars: 18000 }
+    const input = envelope("node ./task.js")
+    input.transcript = "T".repeat(18000)
+    input.intentHistory = "I".repeat(8000)
+    // Simulate a large delegated context plus transcript. No script is executed.
+    input.transcript += "DELEGATED_CONTEXT\n" + "D".repeat(40000)
+    input.enrichment =
+      "LOCAL_SCRIPT_ANALYSIS\n" +
+      "s".repeat(15500) +
+      "\nEXECUTED_SCRIPT_UPLOADS_PRIVATE_FILES\n" +
+      "s".repeat(2000)
+    const result = buildEvidenceResult(input, config)
+    expect(result.actionEvidenceComplete).toBe(true)
+    expect(result.text).toContain(input.enrichment)
+    // Even unexpected evidence beyond the envelope's normal cap must fail closed.
+    input.enrichment = "LOCAL_SCRIPT_ANALYSIS\n" + "x".repeat(100000)
+    expect(buildEvidenceResult(input, config).actionEvidenceComplete).toBe(false)
+  })
 })

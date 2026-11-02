@@ -317,6 +317,9 @@ export function buildEvidenceResult(
   // Reserve the exact action independently of its position. Changing action
   // bytes belong after reusable context, but context may never crowd them out.
   const action = [
+    renderPolicySummary(envelope.policyTrace, config.maxPartChars * 2),
+    renderActionPurpose(envelope.actionPurpose, config.maxPartChars * 2, canonicalIntent),
+    envelope.enrichment || "ACTION_ENRICHMENT\n<none />",
     `PENDING_PERMISSION\n${pending.text}`,
     ...(envelope.verifiedScript === undefined ? [] : [envelope.verifiedScript.text]),
   ].join("\n\n")
@@ -331,9 +334,6 @@ export function buildEvidenceResult(
     ...(askDecisions === undefined ? [] : [`USER_ASK_DECISIONS\n${askDecisions}`]),
     ...actorEvidenceSections(envelope, config),
     `RECENT_TRANSCRIPT\n${envelope.transcript || "<no transcript available />"}`,
-    renderPolicySummary(envelope.policyTrace, config.maxPartChars * 2),
-    renderActionPurpose(envelope.actionPurpose, config.maxPartChars * 2, canonicalIntent),
-    envelope.enrichment || "ACTION_ENRICHMENT\n<none />",
   ].join("\n\n")
   const limit =
     config.maxContextChars +

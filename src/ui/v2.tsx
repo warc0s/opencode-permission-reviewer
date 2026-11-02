@@ -26,7 +26,9 @@ const FALLBACK_THEME = {
 
 export function resolveReviewTheme(value: unknown): ReviewTheme {
   const host = object(value)
-  if (!host) return FALLBACK_THEME
+  // A copy, never the shared constant: a caller that mutates the returned theme
+  // must not change the fallback for every later render.
+  if (!host) return { ...FALLBACK_THEME }
   const background = object(host.background)
   const surface = object(background?.surface)
   const raised = object(background?.raised)

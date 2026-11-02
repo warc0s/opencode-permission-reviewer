@@ -12,9 +12,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Minimum supported Bun (matches engines.bun >=1.3.0) and the pinned
-        # current version. A drift in either direction surfaces before main.
-        bun: ["1.3.0", "1.3.5"]
+        # Minimum supported Bun (matches engines.bun >=1.3.14, the floor of
+        # @opentui/core 0.8) and the latest release. The other jobs pin the
+        # minimum: Bun 1.4 instruments coverage differently and misses gates.
+        bun: ["1.3.14", "1.4.4"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
@@ -31,7 +32,7 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           # Coverage numbers are reported against the pinned current version.
-          bun-version: "1.3.5"
+          bun-version: "1.3.14"
       - run: bun install --frozen-lockfile
       - run: bun run test:coverage
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -51,7 +52,7 @@ jobs:
           node-version: "22"
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: "1.3.5"
+          bun-version: "1.3.14"
       - run: bun install --frozen-lockfile
       - working-directory: benchmarks/permission-reviewer
         run: |
@@ -72,7 +73,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: "1.3.5"
+          bun-version: "1.3.14"
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: "3.13"

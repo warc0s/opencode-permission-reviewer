@@ -24,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The minimum Bun is now 1.3.14 (`engines.bun`), the floor declared by
+  `@opentui/core` 0.8. Every supported OpenCode host already embeds Bun 1.3.14
+  or later, so plugin installs inside OpenCode are unaffected. CI now runs
+  1.3.14 and 1.4.4.
 - Verified with OpenCode V1 1.19.5.
 
 ## [2.5.0] - 2026-10-27

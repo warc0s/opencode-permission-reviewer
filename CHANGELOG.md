@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.1] - 2026-11-02
+
 ### Security
 
 - Bumped `@opentui/core` and `@opentui/solid` to 0.8.1 and `solid-js` to

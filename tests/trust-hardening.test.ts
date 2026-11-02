@@ -1315,9 +1315,109 @@ describe("trust hardening — read-only tools in mutating forms", () => {
     expect(cap.actionClass.value).not.toBe("read-only")
   })
 
-  test("plain find and sort remain read-only", () => {
-    expect(assess("find . -name '*.tmp'").actionClass.value).toBe("read-only")
-    expect(assess("sort input.txt").actionClass.value).toBe("read-only")
+  test("sort output inside a short-option cluster or an abbreviated long option writes the file", () => {
+    for (const command of [
+      "sort -uo output.txt input.txt",
+      "sort -nruooutput.txt input.txt",
+      "sort -o output.txt input.txt",
+      "sort --out=output.txt input.txt",
+      "sort --o output.txt input.txt",
+    ]) {
+      const cap = assess(command)
+      expect(cap.writeEffects.workspaceWrite.value).toBe(true)
+      expect(cap.actionClass.value).toBe("workspace-write")
+    }
+    expect(assess("sort -uo/etc/reviewer-output input.txt").actionClass.value).toBe(
+      "external-write",
+    )
+  })
+
+  test("sort --compress-program runs a program", () => {
+    for (const command of [
+      "sort --compress-program=./payload input.txt",
+      "sort --co ./payload input.txt",
+    ]) {
+      const cap = assess(command)
+      expect(cap.executesCode.value).toBe(true)
+      expect(cap.actionClass.value).toBe("code-execution")
+    }
+  })
+
+  test("uniq and xxd write their second operand", () => {
+    for (const command of [
+      "uniq input.txt output.txt",
+      "uniq -c -f 1 input.txt output.txt",
+      "xxd input.bin output.hex",
+      "xxd -cols 8 input.bin output.hex",
+      // xxd stops reading options at its first operand: "-x" is the output file.
+      "xxd input.bin -x",
+    ]) {
+      const cap = assess(command)
+      expect(cap.writeEffects.workspaceWrite.value).toBe(true)
+      expect(cap.actionClass.value).toBe("workspace-write")
+    }
+    expect(assess("xxd -r input.hex /etc/reviewer-output").actionClass.value).toBe("external-write")
+  })
+
+  test("tree -o writes the named file and -R writes listings into the tree", () => {
+    for (const command of [
+      "tree -o output.txt",
+      "tree -ao output.txt",
+      "tree -L 2 -o out.txt src",
+    ]) {
+      expect(assess(command).actionClass.value).toBe("workspace-write")
+    }
+    expect(assess("tree -R -L 1 -H . docs").writeEffects.workspaceWrite.value).toBe(true)
+  })
+
+  test("yq in-place edit inside a boolean cluster or with an explicit value", () => {
+    for (const command of ["yq -iP '.a = 1' config.yaml", "yq --inplace=true '.a' config.yaml"]) {
+      expect(assess(command).actionClass.value).toBe("workspace-write")
+    }
+    // -o takes a value, so `-oi` selects output format "i" rather than -i.
+    expect(assess("yq -oi '.a' config.yaml").actionClass.value).toBe("read-only")
+    expect(assess("yq --inplace=false '.a' config.yaml").actionClass.value).toBe("read-only")
+  })
+
+  test("an enforced workspace-write deny rule matches clustered sort output", async () => {
+    const client = new MockClient()
+    client.nextStructured = decision("allow")
+    const harness = runtime(client, {
+      enforcementMode: "enforce",
+      policyRules: [
+        {
+          id: "deny-workspace-writes",
+          source: "global",
+          when: { writesWorkspace: true },
+          effect: "deny",
+          reason: "workspace writes are denied",
+        },
+      ],
+    })
+    const result = await harness.runtime.process(bashRequest("sort -uo sorted.txt input.txt"))
+    expect(result.kind).toBe("deny")
+    expect(client.prompts).toHaveLength(0)
+  })
+
+  test("plain find, sort, uniq, xxd, tree and yq remain read-only", () => {
+    for (const command of [
+      "find . -name '*.tmp'",
+      "sort input.txt",
+      "sort -u -k2 -t, input.txt",
+      "sort -t o input.txt",
+      "sort -T /tmp input.txt",
+      "uniq -c input.txt",
+      "uniq -f 1 input.txt",
+      "uniq input.txt -",
+      "xxd input.bin",
+      "xxd -c 8 input.bin",
+      "xxd --cols 8 input.bin",
+      "uniq --skip-f 2 input.txt",
+      "tree -L 2 src",
+      "yq '.a' config.yaml",
+    ]) {
+      expect(assess(command).actionClass.value).toBe("read-only")
+    }
   })
 
   test("absolute paths with .. are normalized before classification", () => {

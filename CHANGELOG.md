@@ -20,6 +20,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Commands that usually only read are no longer labeled read-only when they
+  write or run something. `sort` now recognizes `-o` inside a short-option
+  cluster (`sort -uo FILE`), attached (`-nruoFILE`), and as an abbreviated
+  long option (`--out=FILE`), and `--compress-program` as code execution.
+  `uniq` and `xxd` now report their second operand as a write, `tree` reports
+  `-o FILE` and `-R`, and `yq` reports `-i` inside a cluster (`-iP`) and
+  `--inplace=true`. Before, enforced policy rules on writes or code execution
+  did not match these forms, and the reviewer was told the command was
+  read-only.
 - On OpenCode V2, the TUI's fallback theme is a fresh copy on every call, so a
   caller that mutates the returned theme no longer changes it for later
   renders.

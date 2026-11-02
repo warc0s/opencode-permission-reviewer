@@ -546,24 +546,13 @@ function readOnlyToolMutation(cmd: ShellToken[], base: string): ReadOnlyToolMuta
       ? result
       : undefined
   }
-  if (base === "sort") {
-    const result: ReadOnlyToolMutation = { writeTargets: [] }
-    for (let index = 1; index < cmd.length; index += 1) {
-      const value = cmd[index]!.value
-      if (value === "-o" || value === "--output") {
-        const target = cmd[index + 1]?.value
-        if (target !== undefined && !target.startsWith("-")) result.writeTargets.push(target)
-      } else if (value.startsWith("--output=")) {
-        result.writeTargets.push(value.slice("--output=".length))
-      } else if (value.startsWith("-o") && value.length > 2) {
-        result.writeTargets.push(value.slice(2))
-      }
-    }
-    return result.writeTargets.length > 0 ? result : undefined
-  }
+  if (base === "sort") return sortMutation(cmd)
+  if (base === "uniq") return outputOperandMutation(cmd, UNIQ_OPTIONS)
+  if (base === "xxd") return outputOperandMutation(cmd, XXD_OPTIONS)
+  if (base === "tree") return treeMutation(cmd)
   if (base === "yq") {
     // In-place edit: the file operand(s) after the expression are rewritten.
-    if (!cmd.some((token) => token.value === "-i" || token.value === "--inplace")) return undefined
+    if (!yqInPlace(cmd)) return undefined
     const targets = cmd
       .slice(1)
       .map((token) => token.value)
@@ -571,6 +560,182 @@ function readOnlyToolMutation(cmd: ShellToken[], base: string): ReadOnlyToolMuta
     return targets.length > 0 ? { writeTargets: targets } : { writeTargets: [directoryFallback] }
   }
   return undefined
+}
+
+/** A getopt_long option word: `--name` or `--name=value`, where `name` may be
+ *  any unambiguous prefix of the full option name (`minimum` characters long,
+ *  `--` included, so shorter prefixes that collide with another option of the
+ *  same tool never match). */
+function longOption(value: string, name: string, minimum: number): { inline?: string } | undefined {
+  if (!value.startsWith("--")) return undefined
+  const equals = value.indexOf("=")
+  const word = equals === -1 ? value : value.slice(0, equals)
+  if (word.length < minimum || !name.startsWith(word)) return undefined
+  return equals === -1 ? {} : { inline: value.slice(equals + 1) }
+}
+
+/** GNU sort: `-o FILE` writes FILE and `--compress-program=PROG` runs PROG.
+ *  Short options cluster getopt-style (`-uo FILE`, `-nruoFILE`): a letter that
+ *  takes a value consumes the rest of the cluster, or the next word. */
+function sortMutation(cmd: ShellToken[]): ReadOnlyToolMutation | undefined {
+  const result: ReadOnlyToolMutation = { writeTargets: [] }
+  for (let index = 1; index < cmd.length; index += 1) {
+    const value = cmd[index]!.value
+    if (value === "--") break
+    if (value.startsWith("--")) {
+      // "--o" is the shortest unambiguous prefix of --output, "--co" of
+      // --compress-program (--check also starts with "c").
+      const output = longOption(value, "--output", 3)
+      if (output !== undefined) {
+        const target = output.inline ?? cmd[index + 1]?.value
+        if (output.inline === undefined) index += 1
+        if (target !== undefined) result.writeTargets.push(target)
+        continue
+      }
+      if (longOption(value, "--compress-program", 4) !== undefined) result.executesCode = true
+      continue
+    }
+    if (!value.startsWith("-") || value === "-") continue
+    for (let at = 1; at < value.length; at += 1) {
+      const letter = value[at]!
+      if (letter === "o" || "kStT".includes(letter)) {
+        const attached = value.slice(at + 1)
+        const argument = attached !== "" ? attached : cmd[index + 1]?.value
+        if (attached === "") index += 1
+        if (letter === "o" && argument !== undefined) result.writeTargets.push(argument)
+        break
+      }
+    }
+  }
+  return result.writeTargets.length > 0 || result.executesCode === true ? result : undefined
+}
+
+/** How a `TOOL [OPTION]... [INPUT [OUTPUT]]` command spells its options. */
+interface OperandToolOptions {
+  /** Whether an option word takes the next word as its value. */
+  valued(value: string): boolean
+  /** getopt_long tools accept options after operands; xxd stops at the first. */
+  permute: boolean
+}
+
+const UNIQ_OPTIONS: OperandToolOptions = {
+  valued(value) {
+    if (value.startsWith("--")) {
+      // Long options with a separate value, by their shortest unambiguous
+      // prefixes; an inline `=value` consumes nothing more.
+      return (
+        !value.includes("=") &&
+        (longOption(value, "--skip-fields", 8) !== undefined ||
+          longOption(value, "--skip-chars", 8) !== undefined ||
+          longOption(value, "--check-chars", 4) !== undefined)
+      )
+    }
+    // `-f N`, `-s N`, `-w N`: the letter ends the cluster, its value attached
+    // or in the next word.
+    for (let at = 1; at < value.length; at += 1) {
+      if ("fsw".includes(value[at]!)) return at + 1 === value.length
+    }
+    return false
+  },
+  permute: true,
+}
+
+const XXD_OPTIONS: OperandToolOptions = {
+  // xxd spells options as words with one or two dashes (`-cols 8`, `--cols 8`)
+  // and also accepts attached values (`-c8`).
+  valued(value) {
+    const word = value.startsWith("--") ? value.slice(1) : value
+    if (!"cglosnR".includes(word[1] ?? "")) return false
+    return word.length === 2 || /^-[a-zA-Z]+$/.test(word)
+  },
+  permute: false,
+}
+
+/** `TOOL [OPTION]... [INPUT [OUTPUT]]` (uniq, xxd): a second operand is a file
+ *  the command writes ("-" is standard output). */
+function outputOperandMutation(
+  cmd: ShellToken[],
+  tool: OperandToolOptions,
+): ReadOnlyToolMutation | undefined {
+  const operands: string[] = []
+  let options = true
+  for (let index = 1; index < cmd.length; index += 1) {
+    const value = cmd[index]!.value
+    if (options && value === "--") {
+      options = false
+      continue
+    }
+    if (options && value.startsWith("-") && value !== "-") {
+      if (tool.valued(value)) index += 1
+      continue
+    }
+    operands.push(value)
+    if (!tool.permute) options = false
+  }
+  const output = operands[1]
+  return output !== undefined && output !== "-" ? { writeTargets: [output] } : undefined
+}
+
+/** tree: `-o FILE` writes FILE, and `-R` writes an `00Tree.html` listing into
+ *  each directory it visits. Letters in a cluster that take a value consume the
+ *  following words in order (`-Lo 2 out.txt`). */
+function treeMutation(cmd: ShellToken[]): ReadOnlyToolMutation | undefined {
+  const result: ReadOnlyToolMutation = { writeTargets: [] }
+  const roots: string[] = []
+  let recursiveOutput = false
+  for (let index = 1; index < cmd.length; index += 1) {
+    const value = cmd[index]!.value
+    if (value === "--") {
+      roots.push(...cmd.slice(index + 1).map((token) => token.value))
+      break
+    }
+    if (value.startsWith("--")) {
+      // tree's long options that take a separate value.
+      if (
+        !value.includes("=") &&
+        /^--(?:charset|filelimit|timefmt|sort|hintro|houtro|infile|gitfile)$/.test(value)
+      )
+        index += 1
+      continue
+    }
+    if (!value.startsWith("-") || value === "-") {
+      roots.push(value)
+      continue
+    }
+    let consumed = 0
+    for (const letter of value.slice(1)) {
+      if (letter === "R") recursiveOutput = true
+      if ("LPIHTo".includes(letter)) {
+        consumed += 1
+        const argument = cmd[index + consumed]?.value
+        if (letter === "o" && argument !== undefined) result.writeTargets.push(argument)
+      }
+    }
+    index += consumed
+  }
+  if (recursiveOutput) result.writeTargets.push(...(roots.length > 0 ? roots : [directoryFallback]))
+  return result.writeTargets.length > 0 ? result : undefined
+}
+
+/** yq (pflag): `-i`/`--inplace`, also inside a boolean cluster (`-iP`). A
+ *  letter that takes a value ends the cluster (`-oi` is output format "i"). */
+function yqInPlace(cmd: ShellToken[]): boolean {
+  for (const token of cmd.slice(1)) {
+    const value = token.value
+    if (value === "--") return false
+    if (value.startsWith("--")) {
+      // pflag takes no abbreviations; a boolean may carry `=true`/`=false`.
+      if (value === "--inplace" || (value.startsWith("--inplace=") && value !== "--inplace=false"))
+        return true
+      continue
+    }
+    if (!value.startsWith("-")) continue
+    for (const letter of value.slice(1)) {
+      if (letter === "i") return true
+      if ("poIsf".includes(letter)) break
+    }
+  }
+  return false
 }
 
 /** Command substitution (`$(...)` or backticks) makes analysis opaque. */

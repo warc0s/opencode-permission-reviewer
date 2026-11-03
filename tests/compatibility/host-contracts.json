@@ -27,11 +27,11 @@
   "v2": {
     "package": "@opencode/cli",
     "minimum": "2.0.3",
-    "reference": "2.1.3",
+    "reference": "2.2.5",
     "integrities": {
       "2.0.3": "sha512-FC4+2a5kwdKS2o/pIcGCscpSQB7PuhBObwGMfqnx/2XtoaZBMtSq/99nuEdeDNAFvy1qyK6mp2hwvoiMWsiI4w==",
       "2.0.18": "sha512-EkIxIa2goJ2v8U3Os2gpRckOIjN9gpUBXy6fyVOFbPZl71rkGpoF3NFsm4nlDiF2BgnIqcgJU5NgdV1k6/OZuw==",
-      "2.1.3": "sha512-9gS4ZV4w/DtUFwbYs9AK7P293+AoCx7ED/Sq5A8Mu1xRVYSXMRljXPdF3+Ikl60UyxjFf0JS/UkDZe4BhivKYw=="
+      "2.2.5": "sha512-sJAwrwuVa5b+pA3O1UOiSDcC9DgdPVmtkWv6aF6q3+rOiOTCqrE41tkz1kyyE2O8BYPs4eOvBuzkQ6oEm8w5Mw=="
     },
     "optionalIntegrities": {
       "2.0.4": "sha512-2b1WYZoKewgKxMmMG+Lv3V7f/aZVQCULYq35x0Q8JHp1fBLK3EZVvRvp30YxurM2PVIGYnqletf2Gezykq5izQ==",
@@ -49,7 +49,8 @@
       "2.0.30": "sha512-axyg30edb3bDZekClFTxZSHbXpy+VizVx6fnm3uq06XsGV3N8p5xygr+FrMFvOeqGtNrbw/uTb0a7ijKA/cWNg==",
       "2.0.32": "sha512-nhRlQGFLMoqx50VtIvUmCV/43W6dR8Y+OXzXq17zstSjzLIUdwfBZG6zP3Mpzo0cmLQ2hvXW4/PbhvlLyhwGGg==",
       "2.1.1": "sha512-B+FFz2XceohsO2VIFFW5xY+fF+jba5vymPD7bsOzmcyOUw0nINsO+37+afcHxj04gAwP4koK3DSngc0/Q8gq7w==",
-      "2.1.2": "sha512-9mBVQTO3WkKzP300NtHuhmXkHTfR2JwFB0AKRGRw4Lt3SNEwo5V4pzXXrwlpRAHoQmINLPuFPGOmn1kxYZdmMQ=="
+      "2.1.2": "sha512-9mBVQTO3WkKzP300NtHuhmXkHTfR2JwFB0AKRGRw4Lt3SNEwo5V4pzXXrwlpRAHoQmINLPuFPGOmn1kxYZdmMQ==",
+      "2.1.3": "sha512-9gS4ZV4w/DtUFwbYs9AK7P293+AoCx7ED/Sq5A8Mu1xRVYSXMRljXPdF3+Ikl60UyxjFf0JS/UkDZe4BhivKYw=="
     },
     "sdk": {
       "package": "@opencode/plugin",

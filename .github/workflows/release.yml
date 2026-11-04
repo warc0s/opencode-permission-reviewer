@@ -11,9 +11,12 @@ name: release
 # publishes and creates the release.
 #
 # Prerequisites (configure once in repo settings):
-#   - Secret `NPM_TOKEN` with publish rights for `opencode-permission-reviewer`.
-#   - Actions → General → "Workflow permissions" allows id-token writes
-#     (required for npm --provenance).
+#   - npm Trusted Publisher for `opencode-permission-reviewer` (npmjs.com →
+#     package Settings → Trusted publishing → GitHub Actions): user `warc0s`,
+#     repo `opencode-permission-reviewer`, workflow `release.yml`, no
+#     environment, allowed action `npm publish`. Auth is OIDC (`id-token:
+#     write` below); no long-lived NPM_TOKEN is used. Requires npm >= 11.5.1
+#     and Node >= 22.14, hence Node 24 in the publish job.
 #
 # PENDING ADMINISTRATIVE STEP (not satisfiable by any change to this file):
 #   protect the `v*` tags with a repository ruleset restricting tag
@@ -157,18 +160,20 @@ jobs:
           set -euo pipefail
           sha256sum --check checksums-sha256.txt
 
-      # Install Node/npm for publishing. setup-node configures the npm
-      # registry auth from NODE_AUTH_TOKEN via .npmrc automatically.
+      # Install Node/npm for publishing. Trusted publishing (OIDC) needs
+      # npm >= 11.5.1, which ships with Node 24.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: "20"
+          node-version: "24"
           registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
 
-      # Publish the exact verified artifact.
+      # Publish the exact verified artifact. npm exchanges the GitHub OIDC
+      # token for a short-lived publish credential (trusted publishing).
       - name: Publish to npm
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
+          set -euo pipefail
+          npm --version
           set -- artifacts/*.tgz
           [ "$#" -eq 1 ]
           npm publish "./$1" \

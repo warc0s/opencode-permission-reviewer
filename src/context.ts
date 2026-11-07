@@ -314,38 +314,42 @@ export function buildEvidenceResult(
   const askDecisions = renderAskDecisions(envelope.askDecisions)
   const pending = pendingPermissionSection(request, config)
   const canonicalIntent = envelope.intent !== undefined && envelope.lineage !== undefined
-  const evidence = [
-    `PENDING_PERMISSION\n${pending.text}`,
-    ...(envelope.verifiedScript === undefined ? [] : [envelope.verifiedScript.text]),
+  // Reserve the exact action independently of its position. Changing action
+  // bytes belong after reusable context, but context may never crowd them out.
+  const action = [
     renderPolicySummary(envelope.policyTrace, config.maxPartChars * 2),
-    `WORKING_DIRECTORY\n${envelope.directory}`,
-    `WORKTREE\n${envelope.worktree}`,
-    // Reserve the leading budget for the exact action before contextual sections.
-    ...actorEvidenceSections(envelope, config),
     renderActionPurpose(envelope.actionPurpose, config.maxPartChars * 2, canonicalIntent),
     envelope.enrichment || "ACTION_ENRICHMENT\n<none />",
+    `PENDING_PERMISSION\n${pending.text}`,
+    ...(envelope.verifiedScript === undefined ? [] : [envelope.verifiedScript.text]),
+  ].join("\n\n")
+  const context = [
+    `WORKING_DIRECTORY\n${envelope.directory}`,
+    `WORKTREE\n${envelope.worktree}`,
     `REPOSITORY_CONTEXT\n${stableJson(
       { trust: config.repositoryTrust, directory: envelope.directory, worktree: envelope.worktree },
       config.maxPartChars * 2,
     )}`,
     `USER_INTENT_HISTORY\n${canonicalIntent ? "<see DIRECT_USER_INTENT />" : envelope.intentHistory || "<no user intent history available />"}`,
     ...(askDecisions === undefined ? [] : [`USER_ASK_DECISIONS\n${askDecisions}`]),
+    ...actorEvidenceSections(envelope, config),
     `RECENT_TRANSCRIPT\n${envelope.transcript || "<no transcript available />"}`,
   ].join("\n\n")
-  const text = truncate(
-    evidence,
+  const limit =
     config.maxContextChars +
-      config.maxPartChars * 2 +
-      config.maxEnrichmentChars +
-      config.maxIntentChars +
-      (envelope.verifiedScript?.status === "full" ? envelope.verifiedScript.text.length : 0),
-  )
+    config.maxPartChars * 2 +
+    config.maxEnrichmentChars +
+    config.maxIntentChars +
+    (envelope.verifiedScript?.status === "full" ? envelope.verifiedScript.text.length : 0)
+  const suffix = truncate(action, limit)
+  const prefix = truncate(context, Math.max(0, limit - suffix.length - 2))
+  const text = prefix ? `${prefix}\n\n${suffix}` : suffix
   return {
     text,
     actionEvidenceComplete:
       envelope.actionEvidenceComplete !== false &&
       pending.actionEvidenceComplete &&
-      text.startsWith(`PENDING_PERMISSION\n${pending.text}\n\n`) &&
+      text.endsWith(action) &&
       (envelope.verifiedScript === undefined || text.includes(envelope.verifiedScript.text)),
   }
 }

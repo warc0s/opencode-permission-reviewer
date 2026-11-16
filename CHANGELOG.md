@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Bumped `@opencode/client` to 2.2.6 and `semver` to 7.8.6.
 - Verified with OpenCode V2 2.2.6; 2.3.0 also passes the real-host suite.
+- Answers to agent ask dialogs now reach the reviewer with a full UTC
+  timestamp instead of the time of day only, so answers from different days
+  in a long session are no longer ambiguous.
 
 ## [2.5.2] - 2026-11-04
 

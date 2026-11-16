@@ -375,15 +375,16 @@ function renderActionPurpose(
   )}`
 }
 
-/** Compact rendering of ask decisions, one line each (UTC time, question,
- *  answer). `undefined` when there is nothing to show so the whole section is
- *  omitted rather than padded with a placeholder. */
+/** Compact rendering of ask decisions, one line each (full UTC timestamp,
+ *  question, answer). The date keeps answers apart in sessions that span
+ *  several days. `undefined` when there is nothing to show so the whole
+ *  section is omitted rather than padded with a placeholder. */
 export function renderAskDecisions(decisions: AskDecision[] | undefined): string | undefined {
   if (decisions === undefined || decisions.length === 0) return
   const lines = []
   for (const decision of decisions) {
-    const time = new Date(decision.at).toISOString().slice(11, 19)
-    lines.push(`[${time}Z] Q: ${decision.question} A: ${decision.answer}`)
+    const time = new Date(decision.at).toISOString().replace(/\.\d{3}Z$/, "Z")
+    lines.push(`[${time}] Q: ${decision.question} A: ${decision.answer}`)
   }
   // Keep the most recent lines when the block would exceed the budget.
   const maxChars = 1_500

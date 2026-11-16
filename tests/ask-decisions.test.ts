@@ -255,12 +255,12 @@ describe("renderAskDecisions", () => {
   test("renders one compact line per decision", () => {
     const decisions: AskDecision[] = [
       { at: Date.UTC(2026, 8, 1, 12, 1, 3), question: "Run tests?", answer: "Yes" },
-      { at: Date.UTC(2026, 8, 1, 12, 2, 41), question: "Push?", answer: "No" },
+      { at: Date.UTC(2026, 8, 2, 12, 2, 41), question: "Push?", answer: "No" },
     ]
     const text = renderAskDecisions(decisions)!
     expect(text.split("\n")).toHaveLength(2)
-    expect(text).toContain("[12:01:03Z] Q: Run tests? A: Yes")
-    expect(text).toContain("[12:02:41Z] Q: Push? A: No")
+    expect(text).toContain("[2026-09-01T12:01:03Z] Q: Run tests? A: Yes")
+    expect(text).toContain("[2026-09-02T12:02:41Z] Q: Push? A: No")
   })
 
   test("returns undefined when there is nothing to show", () => {

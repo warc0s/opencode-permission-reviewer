@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.3] - 2026-11-16
+
+### Changed
+
+- Bumped `@opencode/client` to 2.2.6 and `semver` to 7.8.6.
+- Verified with OpenCode V2 2.2.6; 2.3.0 also passes the real-host suite.
+- Answers to agent ask dialogs now reach the reviewer with a full UTC
+  timestamp instead of the time of day only, so answers from different days
+  in a long session are no longer ambiguous.
+
+### Fixed
+
+- OpenCode V2 hosts that register their local service on the wildcard address
+  (`http://0.0.0.0:<port>` or `http://[::]:<port>`) are reached through the
+  matching loopback address instead of failing every review into manual
+  approval. Explicit host URLs keep the strict loopback-or-HTTPS check, and the
+  authentication, live-process and identity checks are unchanged (#126).
+- The V1 entrypoint now refuses to load on a host that reports an OpenCode V2
+  version, with a message pointing at the V2 configuration. Its reviewer
+  isolation does not load on V2, so every review would otherwise fail closed
+  without a visible cause (#127).
+
 ## [2.5.2] - 2026-11-04
 
 ### Changed

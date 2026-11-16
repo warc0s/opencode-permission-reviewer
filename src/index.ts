@@ -8,6 +8,7 @@ import type { RuntimeContext } from "./opencode/types.ts"
 import { createAuditWriter } from "./audit.ts"
 import { setup } from "./opencode/v2/server.ts"
 import { withTimeout } from "./opencode/transport.ts"
+import { assertV1HostVersion } from "./opencode/host-guard.ts"
 
 export const server: Plugin = async (input, options) => {
   // V1 does not report whether plugin options came from global or project
@@ -37,6 +38,13 @@ export const server: Plugin = async (input, options) => {
         .then((response) => response.data?.version)
         .catch(() => undefined)
     : undefined
+  try {
+    assertV1HostVersion(hostVersion)
+  } catch (error) {
+    // Log even without debug: the host may only record a generic load failure.
+    debugLogger((error as Error).message)
+    throw error
+  }
   const ctx: RuntimeContext = {
     ...(hostVersion ? { hostVersion } : {}),
     ...createV1Adapter(

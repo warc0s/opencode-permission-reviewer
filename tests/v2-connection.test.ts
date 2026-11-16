@@ -166,6 +166,61 @@ test("V2 host connection falls back to a compatible registered service", async (
   }
 })
 
+test("registered V2 services bound to every interface connect through loopback", async () => {
+  delete process.env[hostUrl]
+  const root = await mkdtemp(join(tmpdir(), "reviewer-v2-service-"))
+  process.env[stateHome] = root
+  await mkdir(join(root, "opencode"))
+  const registration = join(root, "opencode", "service.json")
+  const { make, restore } = stubMake(() => fakeClient("expected"))
+  try {
+    for (const [registered, connected] of [
+      ["http://0.0.0.0:4096/", "http://127.0.0.1:4096/"],
+      ["http://0.0.0.0:4096", "http://127.0.0.1:4096/"],
+      ["http://[::]:4096/", "http://[::1]:4096/"],
+    ]) {
+      make.mockClear()
+      await writeFile(
+        registration,
+        JSON.stringify({
+          version: "2.0.3",
+          url: registered,
+          pid: process.pid,
+          password: "synthetic-service-password",
+        }),
+      )
+      await connectV2Host("/workspace", "expected", "2.0.3", AbortSignal.timeout(1000))
+      const options = (
+        make.mock.calls as unknown as Array<[Parameters<typeof OpenCode.make>[0]]>
+      )[0]?.[0]
+      expect(options?.baseUrl).toBe(connected)
+    }
+    // The identity check still guards the normalized endpoint.
+    await expect(
+      connectV2Host("/workspace", "other", "2.0.3", AbortSignal.timeout(1000)),
+    ).rejects.toThrow("does not belong to this host generation")
+    // Paths, queries and credentials are still refused after normalization.
+    for (const url of ["http://0.0.0.0:4096/api?x=1", "http://user:pass@0.0.0.0:4096/"]) {
+      await writeFile(
+        registration,
+        JSON.stringify({ version: "2.0.3", url, pid: process.pid, password: "p" }),
+      )
+      await expect(
+        connectV2Host("/workspace", "expected", "2.0.3", AbortSignal.timeout(1000)),
+      ).rejects.toThrow(/loopback origin|embedded credentials/)
+    }
+  } finally {
+    restore()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test("explicit V2 host URLs keep refusing the wildcard address over HTTP", () => {
+  expect(() => validateHostEndpoint("http://0.0.0.0:4096/")).toThrow(
+    "outside loopback require HTTPS",
+  )
+})
+
 test("registered V2 services must be local and belong to a live process", async () => {
   delete process.env[hostUrl]
   const root = await mkdtemp(join(tmpdir(), "reviewer-v2-service-"))

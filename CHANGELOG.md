@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Bumped `@opencode/client` to 2.2.6 and `semver` to 7.8.6.
+- Verified with OpenCode V2 2.2.6; 2.3.0 also passes the real-host suite.
+
 ## [2.5.2] - 2026-11-04
 
 ### Changed

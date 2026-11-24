@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Bumped `@opencode/client` to 2.4.1.
+- Verified with OpenCode V1 1.19.6 and V2 2.4.1, the current `latest` of each
+  generation, so the daily host advisory is green again.
+
 ## [2.5.3] - 2026-11-16
 
 ### Changed
